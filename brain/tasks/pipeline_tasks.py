@@ -1,12 +1,12 @@
 import asyncio
 import logging
-from typing import Optional, Mapping, Any
-
+from typing import Optional, Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
-
+from sqlalchemy.exc import SQLAlchemyError
 from app.backend.core.celery_app import celery_app
 from app.backend.core.config import settings
+from app.backend.services.llm_service import generate_news
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +44,7 @@ async def _set_status(
     )
 
 
-async def _fetch_raw_news(session: AsyncSession, raw_news_id: int) -> Optional[Mapping[str, Any]]:
+async def _fetch_raw_news(session: AsyncSession, raw_news_id: int) -> Optional[dict[str, Any]]:
     query = """
     SELECT
         id,
@@ -64,26 +64,26 @@ async def _fetch_raw_news(session: AsyncSession, raw_news_id: int) -> Optional[M
     return dict(row)
 
 
-async def _insert_ai_news(session: AsyncSession, raw_row: Mapping[str, Any]) -> int:
-    final_title = f"[AI] {raw_row['title']}"
-    final_text = (raw_row.get("raw_text") or "")[:1200]
-    target_persona = "general"
-    ai_score = 8.5
-    vector_status = "pending"
+async def _upsert_ai_news(session: AsyncSession, raw_row: dict[str, Any]) -> int:
+    generated = await generate_news(
+        raw_text=raw_row.get("raw_text") or "",
+        title=raw_row.get("title") or "",
+        category=raw_row.get("category"),
+    )
 
     params = {
         "raw_news_id": raw_row["id"],
-        "target_persona": target_persona,
-        "final_title": final_title,
-        "final_text": final_text,
+        "target_persona": generated["target_persona"],
+        "final_title": generated["final_title"],
+        "final_text": generated["final_text"],
         "image_urls": [],
-        "category": raw_row.get("category"),
-        "ai_score": ai_score,
+        "category": generated["category"],
+        "ai_score": generated["ai_score"],
         "embedding_id": None,
-        "vector_status": vector_status,
+        "vector_status": "pending",
     }
 
-    select_existing_query = """
+    existing_query = """
     SELECT id
     FROM ai_news
     WHERE raw_news_id = :raw_news_id
@@ -91,7 +91,7 @@ async def _insert_ai_news(session: AsyncSession, raw_row: Mapping[str, Any]) -> 
     ORDER BY id
     LIMIT 1
     """
-    existing_result = await session.execute(text(select_existing_query), params)
+    existing_result = await session.execute(text(existing_query), params)
     existing_id = existing_result.scalar_one_or_none()
 
     if existing_id is not None:
@@ -137,41 +137,59 @@ async def _insert_ai_news(session: AsyncSession, raw_row: Mapping[str, Any]) -> 
     """
     insert_result = await session.execute(text(insert_query), params)
     return insert_result.scalar_one()
+
+
 async def _process_raw_news_async(raw_news_id: int, attempt: int) -> dict:
     async with SessionLocal() as session:
-        await _set_status(
-            session=session,
-            raw_news_id=raw_news_id,
-            status="classified",
-            error_message=None,
-            attempt_count=attempt,
-        )
-        await session.commit()
-
-        raw_row = await _fetch_raw_news(session, raw_news_id)
-        if not raw_row:
+        try:
             await _set_status(
                 session=session,
                 raw_news_id=raw_news_id,
-                status="failed",
-                error_message=f"raw_news id={raw_news_id} not found",
+                status="classified",
+                error_message=None,
                 attempt_count=attempt,
             )
             await session.commit()
-            return {"status": "failed", "reason": "raw_news_not_found", "raw_news_id": raw_news_id}
 
-        ai_news_id = await _insert_ai_news(session, raw_row)
+            raw_row = await _fetch_raw_news(session, raw_news_id)
+            if not raw_row:
+                await _set_status(
+                    session=session,
+                    raw_news_id=raw_news_id,
+                    status="failed",
+                    error_message=f"raw_news id={raw_news_id} not found",
+                    attempt_count=attempt,
+                )
+                await session.commit()
+                return {"status": "failed", "reason": "raw_news_not_found", "raw_news_id": raw_news_id}
 
-        await _set_status(
-            session=session,
-            raw_news_id=raw_news_id,
-            status="generated",
-            error_message=None,
-            attempt_count=attempt,
-        )
-        await session.commit()
+            ai_news_id = await _upsert_ai_news(session, raw_row)
 
-        return {"status": "generated", "raw_news_id": raw_news_id, "ai_news_id": ai_news_id}
+            await _set_status(
+                session=session,
+                raw_news_id=raw_news_id,
+                status="generated",
+                error_message=None,
+                attempt_count=attempt,
+            )
+            await session.commit()
+
+            return {"status": "generated", "raw_news_id": raw_news_id, "ai_news_id": ai_news_id}
+
+        except Exception as e:
+            await session.rollback()
+            try:
+                await _set_status(
+                    session=session,
+                    raw_news_id=raw_news_id,
+                    status="failed",
+                    error_message=str(e)[:2000],
+                    attempt_count=attempt,
+                )
+                await session.commit()
+            except Exception:
+                logger.exception("failed to persist failed status raw_news_id=%s", raw_news_id)
+            raise
 
 
 @celery_app.task(
@@ -191,25 +209,9 @@ def process_raw_news(self, raw_news_id: int) -> dict:
         result = asyncio.run(_process_raw_news_async(raw_news_id, attempt))
         logger.info("process_raw_news finished raw_news_id=%s result=%s", raw_news_id, result)
         return result
-
+    except SQLAlchemyError as e:
+        logger.exception("db error raw_news_id=%s attempt=%s error=%s", raw_news_id, attempt, e)
+        raise
     except Exception as e:
-        logger.exception("process_raw_news failed raw_news_id=%s attempt=%s error=%s", raw_news_id, attempt, e)
-
-        # фиксируем failed в БД даже при неожиданных ошибках
-        async def _mark_failed():
-            async with SessionLocal() as session:
-                await _set_status(
-                    session=session,
-                    raw_news_id=raw_news_id,
-                    status="failed",
-                    error_message=str(e)[:2000],
-                    attempt_count=attempt,
-                )
-                await session.commit()
-
-        try:
-            asyncio.run(_mark_failed())
-        except Exception:
-            logger.exception("failed to persist failed status for raw_news_id=%s", raw_news_id)
-
+        logger.exception("unexpected error raw_news_id=%s attempt=%s error=%s", raw_news_id, attempt, e)
         raise
