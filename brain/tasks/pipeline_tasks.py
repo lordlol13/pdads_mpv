@@ -10,11 +10,39 @@ from app.backend.core.celery_app import celery_app
 from app.backend.core.config import settings
 from app.backend.services.ingestion_service import create_raw_news
 from app.backend.services.llm_service import generate_news
-from app.backend.services.media_service import fetch_media_urls
+from app.backend.services.media_service import fetch_media_urls, fetch_video_urls
 from app.backend.services.news_api_service import fetch_articles_for_topics
 from app.backend.db.session import SessionLocal
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_topics(interests: Any) -> list[str]:
+    if not interests:
+        return []
+    if isinstance(interests, dict):
+        if isinstance(interests.get("topics"), list):
+            return [str(t).strip().lower() for t in interests["topics"] if str(t).strip()]
+        return [str(k).strip().lower() for k, v in interests.items() if v]
+    if isinstance(interests, list):
+        return [str(t).strip().lower() for t in interests if str(t).strip()]
+    return []
+
+
+def _extract_profession(interests: Any) -> str | None:
+    if isinstance(interests, dict):
+        profession = str(interests.get("profession") or "").strip().lower()
+        return profession or None
+    return None
+
+
+def _build_target_persona_label(topic: str, profession: str | None, geo: str | None) -> str:
+    parts = [topic.strip().lower() or "general"]
+    if profession:
+        parts.append(profession.strip().lower())
+    if geo:
+        parts.append(geo.strip().lower())
+    return "|".join(parts)
 
 async def _set_status(
     session: AsyncSession,
@@ -62,48 +90,65 @@ async def _fetch_raw_news(session: AsyncSession, raw_news_id: int) -> Optional[d
 
 
 async def _upsert_ai_news(session: AsyncSession, raw_row: dict[str, Any]) -> int:
-    return await _upsert_ai_news_for_persona(session, raw_row, "general")
+    return await _upsert_ai_news_for_persona(
+        session,
+        raw_row,
+        {"topic": "general", "profession": None, "geo": None, "label": "general"},
+    )
 
 
-def _extract_topics(interests: Any) -> list[str]:
-    if not interests:
-        return []
-    if isinstance(interests, dict):
-        if isinstance(interests.get("topics"), list):
-            return [str(t).strip().lower() for t in interests["topics"] if str(t).strip()]
-        return [str(k).strip().lower() for k, v in interests.items() if v]
-    if isinstance(interests, list):
-        return [str(t).strip().lower() for t in interests if str(t).strip()]
-    return []
-
-
-async def _load_cohort_personas(session: AsyncSession) -> list[str]:
+async def _load_cohort_personas(session: AsyncSession) -> list[dict[str, str | None]]:
     query = """
-    SELECT interests
+    SELECT interests, location
     FROM users
     WHERE is_active = TRUE
     """
     result = await session.execute(text(query))
-    interests_rows = [dict(row).get("interests") for row in result.mappings().all()]
+    rows = [dict(row) for row in result.mappings().all()]
 
-    personas: list[str] = []
-    for interests in interests_rows:
-        for topic in _extract_topics(interests):
-            if topic not in personas:
-                personas.append(topic)
+    persona_contexts: list[dict[str, str | None]] = []
+    seen_labels: set[str] = set()
+    for row in rows:
+        interests = row.get("interests")
+        geo = str(row.get("location") or "").strip().lower() or None
+        profession = _extract_profession(interests)
+        topics = _extract_topics(interests) or ["general"]
 
-    return personas[:6] if personas else ["general"]
+        for topic in topics:
+            label = _build_target_persona_label(topic, profession, geo)
+            if label in seen_labels:
+                continue
+            seen_labels.add(label)
+            persona_contexts.append(
+                {
+                    "topic": topic,
+                    "profession": profession,
+                    "geo": geo,
+                    "label": label,
+                }
+            )
+
+    if not persona_contexts:
+        return [{"topic": "general", "profession": None, "geo": None, "label": "general"}]
+    return persona_contexts[:6]
 
 
-async def _generate_with_quality_loop(raw_row: dict[str, Any], target_persona: str) -> dict[str, Any]:
+async def _generate_with_quality_loop(
+    raw_row: dict[str, Any],
+    topic: str,
+    profession: str | None,
+    geo: str | None,
+) -> dict[str, Any]:
     best_result: dict[str, Any] | None = None
     for rewrite_round in range(1, settings.PIPELINE_MAX_REWRITE_ROUNDS + 1):
         generated = await generate_news(
             raw_text=raw_row.get("raw_text") or "",
             title=raw_row.get("title") or "",
             category=raw_row.get("category"),
-            target_persona=target_persona,
+            target_persona=topic,
             region=raw_row.get("region"),
+            profession=profession,
+            user_geo=geo,
             rewrite_round=rewrite_round,
         )
 
@@ -128,10 +173,16 @@ async def _generate_with_quality_loop(raw_row: dict[str, Any], target_persona: s
 async def _upsert_ai_news_for_persona(
     session: AsyncSession,
     raw_row: dict[str, Any],
-    target_persona: str,
+    persona_context: dict[str, str | None],
 ) -> int:
-    generated = await _generate_with_quality_loop(raw_row, target_persona)
-    media_urls = await fetch_media_urls(f"{raw_row.get('title') or ''} {target_persona}", limit=5)
+    topic = str(persona_context.get("topic") or "general").strip().lower()
+    profession = str(persona_context.get("profession") or "").strip().lower() or None
+    geo = str(persona_context.get("geo") or "").strip().lower() or None
+    target_persona = str(persona_context.get("label") or _build_target_persona_label(topic, profession, geo)).strip().lower()
+
+    generated = await _generate_with_quality_loop(raw_row, topic, profession, geo)
+    media_urls = await fetch_media_urls(f"{raw_row.get('title') or ''} {topic} {profession or ''}", limit=5)
+    video_urls = await fetch_video_urls(raw_row.get("title") or topic, profession=profession, geo=geo, limit=3)
 
     params = {
         "raw_news_id": raw_row["id"],
@@ -139,6 +190,7 @@ async def _upsert_ai_news_for_persona(
         "final_title": generated["final_title"],
         "final_text": generated["final_text"],
         "image_urls": media_urls,
+        "video_urls": video_urls,
         "category": generated["category"],
         "ai_score": generated["combined_score"],
         "embedding_id": None,
@@ -162,6 +214,7 @@ async def _upsert_ai_news_for_persona(
         SET final_title = :final_title,
             final_text = :final_text,
             image_urls = :image_urls,
+            video_urls = :video_urls,
             category = :category,
             ai_score = :ai_score,
             embedding_id = :embedding_id,
@@ -179,6 +232,7 @@ async def _upsert_ai_news_for_persona(
         final_title,
         final_text,
         image_urls,
+        video_urls,
         category,
         ai_score,
         embedding_id,
@@ -190,6 +244,7 @@ async def _upsert_ai_news_for_persona(
         :final_title,
         :final_text,
         :image_urls,
+        :video_urls,
         :category,
         :ai_score,
         :embedding_id,
@@ -202,59 +257,75 @@ async def _upsert_ai_news_for_persona(
 
 
 async def _populate_user_feed_for_ai_news(
-        session: AsyncSession,
-        *,
-        ai_news_id: int,
-        ai_score: float,
-        target_persona: str,
+    session: AsyncSession,
+    *,
+    ai_news_id: int,
+    ai_score: float,
+    target_topic: str,
+    target_profession: str | None,
+    target_geo: str | None,
 ) -> int:
-        query = """
-        INSERT INTO user_feed (user_id, ai_news_id, ai_score, created_at)
-        SELECT
-                u.id,
-                :ai_news_id,
-                :ai_score,
-                NOW()
-        FROM users u
-        WHERE u.is_active = TRUE
-            AND (
-                :target_persona = 'general'
-                OR (u.interests -> 'topics') ? :target_persona
-            )
-            AND NOT EXISTS (
-                SELECT 1
-                FROM user_feed uf
-                WHERE uf.user_id = u.id
-                    AND uf.ai_news_id = :ai_news_id
-            )
-        """
-        result = await session.execute(
-                text(query),
-                {
-                        "ai_news_id": ai_news_id,
-                        "ai_score": ai_score,
-                        "target_persona": target_persona,
-                },
+    normalized_profession = (target_profession or "").strip().lower()
+    normalized_geo = (target_geo or "").strip().lower()
+
+    query = """
+    INSERT INTO user_feed (user_id, ai_news_id, ai_score, created_at)
+    SELECT
+            u.id,
+            :ai_news_id,
+            :ai_score,
+            NOW()
+    FROM users u
+    WHERE u.is_active = TRUE
+        AND (
+            :target_topic = 'general'
+            OR (u.interests -> 'topics') ? :target_topic
         )
-        return int(result.rowcount or 0)
+        AND (
+            :target_profession = ''
+            OR LOWER(COALESCE(u.interests ->> 'profession', '')) = :target_profession
+        )
+        AND (
+            :target_geo = ''
+            OR LOWER(COALESCE(u.location, '')) LIKE ('%' || :target_geo || '%')
+        )
+        AND NOT EXISTS (
+            SELECT 1
+            FROM user_feed uf
+            WHERE uf.user_id = u.id
+                AND uf.ai_news_id = :ai_news_id
+        )
+    """
+    result = await session.execute(
+        text(query),
+        {
+            "ai_news_id": ai_news_id,
+            "ai_score": ai_score,
+            "target_topic": target_topic,
+            "target_profession": normalized_profession,
+            "target_geo": normalized_geo,
+        },
+    )
+    return int(result.rowcount or 0)
 
 
 async def _schedule_ingestion_batch_async() -> dict[str, Any]:
     async with SessionLocal() as session:
-        personas = await _load_cohort_personas(session)
-        articles = await fetch_articles_for_topics(personas, settings.NEWS_FETCH_BATCH_SIZE)
+        persona_contexts = await _load_cohort_personas(session)
+        topics = [str(p.get("topic") or "general") for p in persona_contexts]
+        articles = await fetch_articles_for_topics(topics, settings.NEWS_FETCH_BATCH_SIZE)
 
         queued = 0
         for article in articles:
             raw_news = await create_raw_news(session, article)
             if raw_news.get("process_status") in {"pending", "failed", None}:
-                process_raw_news.delay(raw_news["id"], personas)
+                process_raw_news.delay(raw_news["id"], persona_contexts)
                 queued += 1
 
         return {
             "fetched": len(articles),
             "queued": queued,
-            "personas": personas,
+            "personas": [str(p.get("label") or p.get("topic") or "general") for p in persona_contexts],
         }
 
 
@@ -276,7 +347,11 @@ async def _cleanup_ai_products_async() -> dict[str, Any]:
         }
 
 
-async def _process_raw_news_async(raw_news_id: int, attempt: int, personas: list[str] | None = None) -> dict:
+async def _process_raw_news_async(
+    raw_news_id: int,
+    attempt: int,
+    personas: list[dict[str, str | None]] | None = None,
+) -> dict:
     async with SessionLocal() as session:
         try:
             await _set_status(
@@ -302,8 +377,8 @@ async def _process_raw_news_async(raw_news_id: int, attempt: int, personas: list
 
             cohort_personas = personas or await _load_cohort_personas(session)
             ai_news_ids: list[int] = []
-            for persona in cohort_personas:
-                ai_news_id = await _upsert_ai_news_for_persona(session, raw_row, persona)
+            for persona_context in cohort_personas:
+                ai_news_id = await _upsert_ai_news_for_persona(session, raw_row, persona_context)
                 ai_news_ids.append(ai_news_id)
                 score_result = await session.execute(
                     text("SELECT ai_score FROM ai_news WHERE id = :id"),
@@ -314,7 +389,9 @@ async def _process_raw_news_async(raw_news_id: int, attempt: int, personas: list
                     session,
                     ai_news_id=ai_news_id,
                     ai_score=ai_score,
-                    target_persona=persona,
+                    target_topic=str(persona_context.get("topic") or "general"),
+                    target_profession=str(persona_context.get("profession") or "").strip().lower() or None,
+                    target_geo=str(persona_context.get("geo") or "").strip().lower() or None,
                 )
 
             await _set_status(
@@ -330,7 +407,7 @@ async def _process_raw_news_async(raw_news_id: int, attempt: int, personas: list
                 "status": "generated",
                 "raw_news_id": raw_news_id,
                 "ai_news_ids": ai_news_ids,
-                "personas": cohort_personas,
+                "personas": [str(item.get("label") or item.get("topic") or "general") for item in cohort_personas],
             }
 
         except Exception as e:
@@ -358,7 +435,7 @@ async def _process_raw_news_async(raw_news_id: int, attempt: int, personas: list
     retry_jitter=True,
     retry_kwargs={"max_retries": 5},
 )
-def process_raw_news(self, raw_news_id: int, personas: list[str] | None = None) -> dict:
+def process_raw_news(self, raw_news_id: int, personas: list[dict[str, str | None]] | None = None) -> dict:
     attempt = self.request.retries + 1
     logger.info("process_raw_news started raw_news_id=%s attempt=%s", raw_news_id, attempt)
 

@@ -49,6 +49,7 @@ async def list_ai_news(limit: int = Query(default=50, ge=1, le=200)):
     query = """
     SELECT
         id, raw_news_id, target_persona, final_title, final_text,
+        image_urls, video_urls,
         category, ai_score, vector_status, created_at
     FROM ai_news
     ORDER BY id DESC

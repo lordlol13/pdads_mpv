@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-import requests
+import httpx
 
 from app.backend.core.config import settings
 from app.backend.services.orchestrator_service import build_cache_key, get_or_set_json
@@ -66,19 +66,19 @@ async def fetch_articles_for_topics(topics: list[str], page_size: int) -> list[d
         query = " OR ".join(unique_topics[:5])
         now_utc = datetime.now(timezone.utc)
         max_age_border = now_utc - timedelta(days=settings.NEWS_MAX_AGE_DAYS)
-        response = requests.get(
-            NEWS_API_URL,
-            params={
-                "q": query,
-                "pageSize": page_size,
-                "sortBy": "publishedAt",
-                "language": "en",
-                "from": max_age_border.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                "to": now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                "apiKey": settings.NEWS_API_KEY,
-            },
-            timeout=30,
-        )
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(
+                NEWS_API_URL,
+                params={
+                    "q": query,
+                    "pageSize": page_size,
+                    "sortBy": "publishedAt",
+                    "language": "en",
+                    "from": max_age_border.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "to": now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "apiKey": settings.NEWS_API_KEY,
+                },
+            )
         response.raise_for_status()
         return response.json()
 

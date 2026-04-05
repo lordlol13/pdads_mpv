@@ -34,6 +34,8 @@ class AiNewsItem(BaseModel):
     target_persona: str
     final_title: str
     final_text: str
+    image_urls: list[str] | None = None
+    video_urls: list[str] | None = None
     category: str | None
     ai_score: float | None
     vector_status: str | None

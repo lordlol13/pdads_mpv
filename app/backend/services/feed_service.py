@@ -16,6 +16,8 @@ async def get_user_feed(session: AsyncSession, user_id: int, limit: int = 50) ->
         an.target_persona,
         an.final_title,
         an.final_text,
+        an.image_urls,
+        an.video_urls,
         an.category,
         an.vector_status
     FROM user_feed uf

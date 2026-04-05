@@ -21,6 +21,66 @@ class GeneratedNews(TypedDict):
     combined_score: float
 
 
+def _word_count(text: str) -> int:
+    return len([w for w in text.split() if w.strip()])
+
+
+def _normalize_spaces(text: str) -> str:
+    return " ".join((text or "").split())
+
+
+def _fit_word_bounds(text: str, min_words: int, max_words: int) -> str:
+    words = [w for w in (text or "").split() if w.strip()]
+    if len(words) > max_words:
+        words = words[:max_words]
+    return " ".join(words)
+
+
+def _ensure_structured_personal_text(
+    text: str,
+    *,
+    title: str,
+    target_persona: str,
+    profession: str | None,
+    geo: str | None,
+    raw_text: str,
+) -> str:
+    clean_text = _normalize_spaces(text)
+    min_words = settings.PIPELINE_TEXT_MIN_WORDS
+    max_words = settings.PIPELINE_TEXT_MAX_WORDS
+
+    if _word_count(clean_text) >= min_words:
+        fitted = _fit_word_bounds(clean_text, min_words, max_words)
+        return fitted[: settings.PIPELINE_TEXT_MAX_CHARS]
+
+    sections = [
+        f"Lid: {title}. Ushbu yangilik {geo or 'sizning hududingiz'} kontekstida muhim bo'lib, {target_persona} yo'nalishidagi foydalanuvchi uchun amaliy qiymat beradi.",
+        f"Yangilik: {clean_text or raw_text}",
+        (
+            "Foydalanuvchiga ta'siri: Bu vaziyat qisqa muddatda qaror tezligini oshiradi, "
+            "xarajat va xavf nisbatini qayta baholashni talab qiladi, hamda ustuvor vazifalarni yangilaydi."
+        ),
+        (
+            f"Kasbiy nuqtai nazar: {profession or 'mutaxassis'} uchun eng muhim jihat — "
+            "jarayon barqarorligi, natija o'lchovi va keyingi 1-2 haftalik reja." 
+        ),
+        (
+            "Amaliy qadamlar: 1) holat monitoringini kuchaytirish, 2) joriy rejalarda ta'sir nuqtalarini belgilash, "
+            "3) ehtimoliy risk va imkoniyatlar bo'yicha tezkor checklist yuritish."
+        ),
+    ]
+    expanded = " ".join(_normalize_spaces(section) for section in sections if section)
+
+    while _word_count(expanded) < min_words:
+        expanded += (
+            " Qo'shimcha tahlil: qarorlarni faktlar asosida qabul qilish, hududiy sharoitni inobatga olish "
+            "va maqsadli auditoriya uchun kommunikatsiyani aniqlashtirish zarur."
+        )
+
+    fitted = _fit_word_bounds(expanded, min_words, max_words)
+    return fitted[: settings.PIPELINE_TEXT_MAX_CHARS]
+
+
 def _normalize_score(raw_score: float, fallback_score: float) -> float:
     score = float(raw_score or fallback_score)
     # Some providers return scores in 0..1 range; normalize to 0..10.
@@ -58,11 +118,20 @@ async def generate_news(
     *,
     target_persona: str = "general",
     region: str | None = None,
+    profession: str | None = None,
+    user_geo: str | None = None,
     rewrite_round: int = 1,
 ) -> GeneratedNews:
     fallback = {
         "final_title": f"[AI] {title}",
-        "final_text": (raw_text or "")[:1200],
+        "final_text": _ensure_structured_personal_text(
+            (raw_text or "")[:1200],
+            title=title,
+            target_persona=target_persona,
+            profession=profession,
+            geo=user_geo or region,
+            raw_text=raw_text,
+        ),
         "ai_score": 8.5,
         "category": category or "general",
         "target_persona": target_persona or "general",
@@ -76,12 +145,14 @@ async def generate_news(
         return fallback
 
     prompt = (
-        "Siz yangiliklarni qisqa va aniq formatga o'tkazuvchi AI yozuvchisiz. "
+        "Siz analitik yangilik yozuvchisisiz. "
         "FAqat O'ZBEK tilida yozing. Inglizcha yoki ruscha so'zlarni minimallashtiring. "
         "Natija faqat JSON bo'lsin va quyidagi kalitlarga ega bo'lsin: "
         "final_title, final_text, ai_score, category, target_persona. "
-        "Matn faktlarga asoslangan, lo'nda va o'qilishi oson bo'lsin. "
-        "Agar rewrite_round > 1 bo'lsa, uslubni yanada tiniqroq va qiziqroq qiling."
+        "Matn analitik formatda bo'lsin: sarlavha, lid, asosiy yangilik, foydalanuvchiga ta'siri va amaliy qadamlar. "
+        f"Matn {settings.PIPELINE_TEXT_MIN_WORDS} dan {settings.PIPELINE_TEXT_MAX_WORDS} so'zgacha bo'lsin. "
+        "Matn foydalanuvchi qiziqishi, kasbi va geosiga bog'lab yozilsin. "
+        "Agar rewrite_round > 1 bo'lsa, personalizatsiya va aniqlikni kuchaytiring."
     )
 
     try:
@@ -100,6 +171,8 @@ async def generate_news(
                             "category": category,
                             "target_persona": target_persona,
                             "region": region,
+                            "profession": profession,
+                            "user_geo": user_geo,
                             "rewrite_round": rewrite_round,
                         },
                         ensure_ascii=False,
@@ -112,7 +185,14 @@ async def generate_news(
         ai_score = _normalize_score(float(data.get("ai_score") or fallback["ai_score"]), float(fallback["ai_score"]))
         primary_output = {
             "final_title": str(data.get("final_title") or fallback["final_title"]),
-            "final_text": str(data.get("final_text") or fallback["final_text"]),
+            "final_text": _ensure_structured_personal_text(
+                str(data.get("final_text") or fallback["final_text"]),
+                title=title,
+                target_persona=target_persona,
+                profession=profession,
+                geo=user_geo or region,
+                raw_text=raw_text,
+            ),
             "ai_score": ai_score,
             "category": str(data.get("category") or fallback["category"]),
             "target_persona": str(data.get("target_persona") or fallback["target_persona"]),
@@ -156,7 +236,14 @@ async def generate_news(
 
             return {
                 "final_title": str(gemini_data.get("final_title") or primary_output["final_title"]),
-                "final_text": str(gemini_data.get("final_text") or primary_output["final_text"]),
+                "final_text": _ensure_structured_personal_text(
+                    str(gemini_data.get("final_text") or primary_output["final_text"]),
+                    title=title,
+                    target_persona=target_persona,
+                    profession=profession,
+                    geo=user_geo or region,
+                    raw_text=raw_text,
+                ),
                 "ai_score": combined_score,
                 "category": str(gemini_data.get("category") or primary_output["category"]),
                 "target_persona": str(gemini_data.get("target_persona") or primary_output["target_persona"]),

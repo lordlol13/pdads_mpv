@@ -10,6 +10,8 @@ class FeedItem(BaseModel):
     target_persona: str | None = None
     final_title: str | None = None
     final_text: str | None = None
+    image_urls: list[str] | None = None
+    video_urls: list[str] | None = None
     category: str | None = None
     ai_score: float | None = None
     vector_status: str | None = None

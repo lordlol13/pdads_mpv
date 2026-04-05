@@ -58,6 +58,7 @@
 ## 🚀 MVP Startup
 1. Create and activate the virtual environment.
 2. Set `.env` values at minimum for `DATABASE_URL`, `REDIS_URL`, `CELERY_BROKER_URL`, `CELERY_RESULT_BACKEND`, and `DEEPSEEK_API_KEY` if you want real generation.
+	Optional for video search: `YOUTUBE_API_KEY`.
 3. Apply the database schema:
 	```bash
 	alembic upgrade head
@@ -97,8 +98,11 @@
 * `raw_news.content_hash` prevents duplicate ingestion.
 * `ai_news` is unique by `(raw_news_id, target_persona)`.
 * If `DEEPSEEK_API_KEY` is empty, the pipeline falls back to a safe mock generator.
-* DeepSeek generates text in Uzbek, Gemini improves it and provides a second score.
+* DeepSeek/Groq generates structured long-form text in Uzbek. Gemini review is optional (`GEMINI_REVIEW_ENABLED`).
 * Combined score is used for quality loop: target score is 8.0, hard minimum is 7.0.
 * If score is below target, the pipeline runs a second rewrite round before final decision.
 * NewsAPI ingestion now pulls only the last 7 days, while items from the last 24 hours are prioritized first.
 * AI-generated products (`ai_news` with text/image links) are automatically deleted after 7 days by Celery Beat cleanup.
+* Personalization context is built from user `interests.topics`, `interests.profession`, and `location`.
+* Text policy defaults: minimum 170 words, maximum 320 words, and analytical structure (lead + news + user impact + practical actions).
+* Media policy: each generated item includes image URLs and may include YouTube video URLs (or template fallback URLs when YouTube API key is missing).
