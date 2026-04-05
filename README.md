@@ -62,6 +62,7 @@
 	```bash
 	alembic upgrade head
 	```
+   Note: `sql/db_init.sql` is legacy and kept only as a compatibility placeholder.
 4. Seed demo data if needed:
 	```bash
 	psql -d news_mvp -f sql/seed_test_data.sql
@@ -78,6 +79,16 @@
 	```bash
 	python -m celery -A app.backend.core.celery_app:celery_app beat --loglevel=info
 	```
+
+## ✅ Readiness and Smoke Test
+* Basic health: `GET /health`
+* Dependency health (PostgreSQL, Redis, Celery worker): `GET /health/dependencies`
+* Full smoke test from command line:
+	```bash
+	python scripts/smoke_test.py --base-url http://127.0.0.1:8000
+	```
+	Before running smoke test, make sure API and Celery worker are started.
+
 ## 🔐 Demo Access
 * Email: `demo@example.com`
 * Password: `Demo12345!`

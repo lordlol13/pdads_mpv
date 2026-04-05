@@ -14,6 +14,10 @@ class Settings(BaseSettings):
 
     # AI / external APIs
     GEMINI_API_KEY: str = ""
+    GEMINI_MODEL: str = "gemini-2.5-flash"
+    GEMINI_REVIEW_ENABLED: bool = False
+    GROQ_API_KEY: str = ""
+    GROQ_MODEL: str = "llama-3.3-70b-versatile"
     DEEPSEEK_API_KEY: str = ""
     NEWS_API_KEY: str = ""   # <-- add this
 
