@@ -22,6 +22,15 @@ class Settings(BaseSettings):
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
 
     PIPELINE_MAX_ATTEMPTS: int = 1
+    PIPELINE_TARGET_SCORE: float = 8.0
+    PIPELINE_MIN_SCORE: float = 7.0
+    PIPELINE_MAX_REWRITE_ROUNDS: int = 2
+    SCHEDULER_INTERVAL_MINUTES: int = 15
+    SCHEDULER_CLEANUP_INTERVAL_HOURS: int = 24
+    NEWS_FETCH_BATCH_SIZE: int = 20
+    NEWS_MAX_AGE_DAYS: int = 7
+    NEWS_PRIORITY_MAX_AGE_HOURS: int = 24
+    AI_PRODUCT_RETENTION_DAYS: int = 7
 
     model_config = SettingsConfigDict(
         env_file=".env",

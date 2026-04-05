@@ -1,9 +1,9 @@
 from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.backend.core.config import settings
 from app.backend.core.celery_app import celery_app
+from app.backend.db.session import SessionLocal
 from app.backend.schemas.pipeline import (
     EnqueueResponse,
     TaskStatusResponse,
@@ -12,9 +12,6 @@ from app.backend.schemas.pipeline import (
 )
 
 router = APIRouter(prefix="/pipeline", tags=["pipeline"])
-
-engine = create_async_engine(settings.DATABASE_URL, echo=False, pool_pre_ping=True, future=True)
-SessionLocal = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
 
 
 @router.post("/process/{raw_news_id}", response_model=EnqueueResponse)

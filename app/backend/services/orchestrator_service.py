@@ -1,0 +1,35 @@
+from __future__ import annotations
+
+import hashlib
+import json
+from collections.abc import Awaitable, Callable
+from typing import Any
+
+import redis.asyncio as redis
+
+from app.backend.core.config import settings
+
+
+def _redis_client() -> redis.Redis:
+    return redis.from_url(settings.REDIS_URL, decode_responses=True)
+
+
+def build_cache_key(prefix: str, payload: dict[str, Any]) -> str:
+    serialized = json.dumps(payload, sort_keys=True, ensure_ascii=False)
+    digest = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+    return f"{prefix}:{digest}"
+
+
+async def get_or_set_json(
+    key: str,
+    ttl_seconds: int,
+    fetcher: Callable[[], Awaitable[dict[str, Any]]],
+) -> dict[str, Any]:
+    client = _redis_client()
+    cached = await client.get(key)
+    if cached:
+        return json.loads(cached)
+
+    value = await fetcher()
+    await client.set(key, json.dumps(value, ensure_ascii=False), ex=ttl_seconds)
+    return value
