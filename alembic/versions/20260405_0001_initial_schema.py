@@ -28,22 +28,34 @@ def _index_exists(bind, table_name: str, index_name: str) -> bool:
 
 def upgrade() -> None:
     bind = op.get_bind()
+    is_sqlite = bind.dialect.name == 'sqlite'
+    now_func = "CURRENT_TIMESTAMP" if is_sqlite else "NOW()"
+    true_val = "1" if is_sqlite else "TRUE"
+    false_val = "0" if is_sqlite else "FALSE"
 
     if not _table_exists(bind, "users"):
+        # Use TEXT for SQLite, JSONB for PostgreSQL
+        interests_column = sa.Column(
+            "interests", 
+            sa.Text() if is_sqlite else postgresql.JSONB(astext_type=sa.Text()), 
+            server_default=sa.text("'{}'" if is_sqlite else "'{}'::jsonb"), 
+            nullable=True
+        )
+        
         op.create_table(
             "users",
             sa.Column("id", sa.Integer(), primary_key=True),
             sa.Column("username", sa.String(length=100), nullable=False),
             sa.Column("location", sa.String(length=255), nullable=True),
-            sa.Column("interests", postgresql.JSONB(astext_type=sa.Text()), server_default=sa.text("'{}'::jsonb"), nullable=True),
-            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("NOW()"), nullable=True),
+            interests_column,
+            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP" if is_sqlite else "NOW()"), nullable=True),
             sa.Column("email", sa.Text(), nullable=False),
             sa.Column("password_hash", sa.Text(), nullable=False),
-            sa.Column("is_active", sa.Boolean(), server_default=sa.text("TRUE"), nullable=True),
-            sa.Column("is_verified", sa.Boolean(), server_default=sa.text("FALSE"), nullable=True),
+            sa.Column("is_active", sa.Boolean(), server_default=sa.text("1" if is_sqlite else "TRUE"), nullable=True),
+            sa.Column("is_verified", sa.Boolean(), server_default=sa.text("0" if is_sqlite else "FALSE"), nullable=True),
             sa.Column("country_code", sa.String(length=8), nullable=True),
             sa.Column("region_code", sa.String(length=32), nullable=True),
-            sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("NOW()"), nullable=True),
+            sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP" if is_sqlite else "NOW()"), nullable=True),
             sa.UniqueConstraint("email", name="uq_users_email"),
         )
 
@@ -56,8 +68,8 @@ def upgrade() -> None:
             sa.Column("raw_text", sa.Text(), nullable=True),
             sa.Column("category", sa.String(length=100), nullable=True),
             sa.Column("region", sa.String(length=100), nullable=True),
-            sa.Column("is_urgent", sa.Boolean(), server_default=sa.text("FALSE"), nullable=True),
-            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("NOW()"), nullable=True),
+            sa.Column("is_urgent", sa.Boolean(), server_default=sa.text(false_val), nullable=True),
+            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text(now_func), nullable=True),
             sa.Column("process_status", sa.String(length=32), server_default=sa.text("'pending'"), nullable=True),
             sa.Column("error_message", sa.Text(), nullable=True),
             sa.Column("attempt_count", sa.Integer(), server_default=sa.text("0"), nullable=True),
@@ -76,10 +88,10 @@ def upgrade() -> None:
             sa.Column("target_persona", sa.String(length=100), nullable=False),
             sa.Column("final_title", sa.String(length=500), nullable=False),
             sa.Column("final_text", sa.Text(), nullable=False),
-            sa.Column("image_urls", postgresql.ARRAY(sa.Text()), server_default=sa.text("ARRAY[]::TEXT[]"), nullable=True),
+            sa.Column("image_urls", sa.Text(), server_default=sa.text("'[]'"), nullable=True),
             sa.Column("category", sa.String(length=100), nullable=True),
             sa.Column("ai_score", sa.Numeric(), nullable=True),
-            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("NOW()"), nullable=True),
+            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text(now_func), nullable=True),
             sa.Column("embedding_id", sa.String(length=255), nullable=True),
             sa.Column("vector_status", sa.String(length=32), server_default=sa.text("'pending'"), nullable=True),
             sa.UniqueConstraint("raw_news_id", "target_persona", name="uq_ai_news_raw_persona"),
@@ -95,7 +107,7 @@ def upgrade() -> None:
             sa.Column("user_id", sa.Integer(), sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
             sa.Column("ai_news_id", sa.Integer(), sa.ForeignKey("ai_news.id", ondelete="CASCADE"), nullable=False),
             sa.Column("ai_score", sa.Numeric(), nullable=True),
-            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("NOW()"), nullable=True),
+            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text(now_func), nullable=True),
         )
 
     if _table_exists(bind, "user_feed") and not _index_exists(bind, "user_feed", "idx_user_feed_user_score"):
@@ -110,7 +122,7 @@ def upgrade() -> None:
             sa.Column("liked", sa.Boolean(), nullable=True),
             sa.Column("viewed", sa.Boolean(), nullable=True),
             sa.Column("watch_time", sa.Integer(), nullable=True),
-            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("NOW()"), nullable=True),
+            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text(now_func), nullable=True),
         )
 
     if _table_exists(bind, "interactions") and not _index_exists(bind, "interactions", "idx_interactions_user_news_created"):
@@ -125,7 +137,7 @@ def upgrade() -> None:
             sa.Column("reason", sa.String(length=255), nullable=True),
             sa.Column("feature_value", sa.Numeric(), nullable=True),
             sa.Column("rank_position", sa.Integer(), nullable=True),
-            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("NOW()"), nullable=True),
+            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text(now_func), nullable=True),
         )
 
     if _table_exists(bind, "feed_feature_log") and not _index_exists(bind, "feed_feature_log", "idx_feed_feature_log_user_created"):

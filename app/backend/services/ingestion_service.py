@@ -5,6 +5,8 @@ from fastapi import HTTPException, status
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.backend.db.sql_helpers import sql_timestamp_now
+
 
 def build_content_hash(title: str, raw_text: str | None, source_url: str | None) -> str:
     payload = "|".join([title.strip(), (raw_text or "").strip(), (source_url or "").strip()])
@@ -32,14 +34,15 @@ async def create_raw_news(session: AsyncSession, payload: dict[str, Any]) -> dic
     if existing_row is not None:
         return dict(existing_row)
 
-    insert_query = """
+    now_sql = sql_timestamp_now(session)
+    insert_query = f"""
     INSERT INTO raw_news (
         title, source_url, raw_text, category, region, is_urgent,
         created_at, process_status, error_message, attempt_count, content_hash
     )
     VALUES (
         :title, :source_url, :raw_text, :category, :region, :is_urgent,
-        NOW(), 'pending', NULL, 0, :content_hash
+        {now_sql}, 'pending', NULL, 0, :content_hash
     )
     RETURNING
         id, title, source_url, raw_text, category, region, is_urgent,

@@ -6,6 +6,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 import redis.asyncio as redis
+from redis.exceptions import RedisError
 
 from app.backend.core.config import settings
 
@@ -26,10 +27,16 @@ async def get_or_set_json(
     fetcher: Callable[[], Awaitable[dict[str, Any]]],
 ) -> dict[str, Any]:
     client = _redis_client()
-    cached = await client.get(key)
-    if cached:
-        return json.loads(cached)
+    try:
+        cached = await client.get(key)
+        if cached:
+            return json.loads(cached)
 
-    value = await fetcher()
-    await client.set(key, json.dumps(value, ensure_ascii=False), ex=ttl_seconds)
-    return value
+        value = await fetcher()
+        await client.set(key, json.dumps(value, ensure_ascii=False), ex=ttl_seconds)
+        return value
+    except RedisError:
+        # Redis is optional for local MVP. Fall back to direct fetch without caching.
+        return await fetcher()
+    finally:
+        await client.aclose()

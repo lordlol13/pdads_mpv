@@ -1,0 +1,8 @@
+{
+  "name": "pdads-mpv",
+  "private": true,
+  "scripts": {
+    "dev:frontend": "npm run dev --prefix app/frontend",
+    "build:frontend": "npm run build --prefix app/frontend"
+  }
+}

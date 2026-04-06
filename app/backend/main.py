@@ -1,5 +1,8 @@
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from app.backend.api.routes.auth import router as auth_router
 from app.backend.api.routes.feed import router as feed_router
@@ -26,3 +29,7 @@ app.include_router(auth_router)
 app.include_router(ingestion_router)
 app.include_router(feed_router)
 app.include_router(pipeline_router)
+
+_frontend_dist = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+if _frontend_dist.is_dir():
+	app.mount("/", StaticFiles(directory=str(_frontend_dist), html=True), name="frontend")

@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import re
 from typing import TypedDict
 
 from openai import AsyncOpenAI
@@ -29,6 +30,103 @@ def _normalize_spaces(text: str) -> str:
     return " ".join((text or "").split())
 
 
+def _clean_text_artifacts(text: str) -> str:
+    value = (text or "")
+
+    replacements = {
+        "â€™": "'",
+        "â€\x9c": '"',
+        "â€\x9d": '"',
+        "â€“": "-",
+        "â€”": "-",
+        "â€¦": "...",
+        "Ã": "",
+        "Â": "",
+    }
+    for old, new in replacements.items():
+        value = value.replace(old, new)
+
+    value = re.sub(r"\[\+\d+\s+chars\]", "", value, flags=re.IGNORECASE)
+    value = re.sub(
+        r"(^|\n)\s*(lid|yanglik|новость|news|asosiy\s+yangilik|foydalanuvchiga\s+ta'siri|kasbiy\s+nuqtai\s+nazar|amaliy\s+qadamlar)\s*:\s*",
+        "\\1",
+        value,
+        flags=re.IGNORECASE,
+    )
+
+    lines = [re.sub(r"\s+", " ", line).strip() for line in value.replace("\r", "\n").split("\n")]
+    compact = "\n".join(line for line in lines if line)
+    compact = re.sub(r"\n{3,}", "\n\n", compact)
+    return compact.strip()
+
+
+def _split_into_paragraphs(text: str) -> list[str]:
+    cleaned = _clean_text_artifacts(text)
+    if not cleaned:
+        return []
+    paragraphs = [part.strip() for part in re.split(r"\n\s*\n", cleaned) if part.strip()]
+    if paragraphs:
+        return paragraphs
+    return [cleaned]
+
+
+def _sentences_to_paragraphs(text: str, target_paragraphs: int = 3) -> list[str]:
+    cleaned = _clean_text_artifacts(text)
+    if not cleaned:
+        return []
+
+    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", cleaned) if s.strip()]
+    if len(sentences) <= 1:
+        return [cleaned]
+
+    chunk_size = max(1, len(sentences) // max(1, target_paragraphs))
+    result: list[str] = []
+    for idx in range(0, len(sentences), chunk_size):
+        result.append(" ".join(sentences[idx : idx + chunk_size]).strip())
+
+    return [p for p in result if p]
+
+
+def _fit_word_bounds_with_paragraphs(text: str, min_words: int, max_words: int) -> str:
+    paragraphs = _split_into_paragraphs(text)
+    if not paragraphs:
+        return ""
+
+    kept: list[str] = []
+    used = 0
+    for paragraph in paragraphs:
+        words = [w for w in paragraph.split() if w.strip()]
+        if not words:
+            continue
+
+        remaining = max_words - used
+        if remaining <= 0:
+            break
+
+        take = words[:remaining]
+        kept.append(" ".join(take))
+        used += len(take)
+
+    combined = "\n\n".join(kept).strip()
+    if _word_count(combined) >= min_words:
+        return combined
+
+    filler_paragraphs = [
+        "Ключевой фокус для читателя: отделить факты от шума, понять, что меняется прямо сейчас, и какие последствия это даст в ближайшие дни.",
+        "Практический вывод: полезно проверить источник, сопоставить новость с локальным контекстом и выбрать один конкретный следующий шаг вместо перегрузки деталями.",
+    ]
+    for filler in filler_paragraphs:
+        if _word_count(combined) >= min_words:
+            break
+        combined = (combined + "\n\n" + filler).strip() if combined else filler
+
+    if _word_count(combined) > max_words:
+        words = [w for w in combined.split() if w.strip()][:max_words]
+        combined = " ".join(words)
+
+    return combined.strip()
+
+
 def _fit_word_bounds(text: str, min_words: int, max_words: int) -> str:
     words = [w for w in (text or "").split() if w.strip()]
     if len(words) > max_words:
@@ -45,39 +143,43 @@ def _ensure_structured_personal_text(
     geo: str | None,
     raw_text: str,
 ) -> str:
-    clean_text = _normalize_spaces(text)
+    clean_text = _clean_text_artifacts(text)
+    clean_raw_text = _clean_text_artifacts(raw_text)
     min_words = settings.PIPELINE_TEXT_MIN_WORDS
     max_words = settings.PIPELINE_TEXT_MAX_WORDS
 
     if _word_count(clean_text) >= min_words:
-        fitted = _fit_word_bounds(clean_text, min_words, max_words)
+        paragraphs = _split_into_paragraphs(clean_text)
+        if len(paragraphs) < 3:
+            paragraphs = _sentences_to_paragraphs(" ".join(paragraphs), target_paragraphs=3)
+        fitted = _fit_word_bounds_with_paragraphs("\n\n".join(paragraphs), min_words, max_words)
         return fitted[: settings.PIPELINE_TEXT_MAX_CHARS]
 
     sections = [
-        f"Lid: {title}. Ushbu yangilik {geo or 'sizning hududingiz'} kontekstida muhim bo'lib, {target_persona} yo'nalishidagi foydalanuvchi uchun amaliy qiymat beradi.",
-        f"Yangilik: {clean_text or raw_text}",
+        f"{title}. Эта новость важна в контексте {geo or 'текущей повестки'} и напрямую связана с интересом пользователя: {target_persona}.",
+        f"По сути, речь идет о следующем: {clean_text or clean_raw_text}",
         (
-            "Foydalanuvchiga ta'siri: Bu vaziyat qisqa muddatda qaror tezligini oshiradi, "
-            "xarajat va xavf nisbatini qayta baholashni talab qiladi, hamda ustuvor vazifalarni yangilaydi."
+            "Практическая значимость в том, что событие меняет приоритеты и влияет на решения в краткосрочном горизонте: "
+            "нужно быстро отделить подтвержденные факты от интерпретаций и оценить влияние на ближайшие задачи."
         ),
         (
-            f"Kasbiy nuqtai nazar: {profession or 'mutaxassis'} uchun eng muhim jihat — "
-            "jarayon barqarorligi, natija o'lchovi va keyingi 1-2 haftalik reja." 
+            f"С профессиональной точки зрения для роли {profession or 'специалиста'} ключевыми остаются устойчивость процесса, "
+            "измеримый результат и понятный план действий на 1-2 недели вперед."
         ),
         (
-            "Amaliy qadamlar: 1) holat monitoringini kuchaytirish, 2) joriy rejalarda ta'sir nuqtalarini belgilash, "
-            "3) ehtimoliy risk va imkoniyatlar bo'yicha tezkor checklist yuritish."
+            "Оптимальная тактика: усилить мониторинг, зафиксировать точки влияния на текущие планы и подготовить "
+            "короткий список рисков и возможностей, который можно быстро обновлять по мере появления новых фактов."
         ),
     ]
-    expanded = " ".join(_normalize_spaces(section) for section in sections if section)
+    expanded = "\n\n".join(_clean_text_artifacts(section) for section in sections if section)
 
     while _word_count(expanded) < min_words:
         expanded += (
-            " Qo'shimcha tahlil: qarorlarni faktlar asosida qabul qilish, hududiy sharoitni inobatga olish "
-            "va maqsadli auditoriya uchun kommunikatsiyani aniqlashtirish zarur."
+            "\n\nДополнительный акцент: решения стоит принимать на основе проверяемых данных, учитывая региональный контекст "
+            "и понятную коммуникацию для целевой аудитории."
         )
 
-    fitted = _fit_word_bounds(expanded, min_words, max_words)
+    fitted = _fit_word_bounds_with_paragraphs(expanded, min_words, max_words)
     return fitted[: settings.PIPELINE_TEXT_MAX_CHARS]
 
 
@@ -145,14 +247,13 @@ async def generate_news(
         return fallback
 
     prompt = (
-        "Siz analitik yangilik yozuvchisisiz. "
-        "FAqat O'ZBEK tilida yozing. Inglizcha yoki ruscha so'zlarni minimallashtiring. "
-        "Natija faqat JSON bo'lsin va quyidagi kalitlarga ega bo'lsin: "
-        "final_title, final_text, ai_score, category, target_persona. "
-        "Matn analitik formatda bo'lsin: sarlavha, lid, asosiy yangilik, foydalanuvchiga ta'siri va amaliy qadamlar. "
-        f"Matn {settings.PIPELINE_TEXT_MIN_WORDS} dan {settings.PIPELINE_TEXT_MAX_WORDS} so'zgacha bo'lsin. "
-        "Matn foydalanuvchi qiziqishi, kasbi va geosiga bog'lab yozilsin. "
-        "Agar rewrite_round > 1 bo'lsa, personalizatsiya va aniqlikni kuchaytiring."
+        "Ты аналитический редактор новостей. "
+        "Верни строго JSON с ключами: final_title, final_text, ai_score, category, target_persona. "
+        "final_text должен быть красивым связным материалом из 3-5 абзацев, без маркеров и заголовков вида 'Lid:', 'Yanglik:', 'Новость:'. "
+        "Не используй мусорные артефакты кодировки и обрывки вида '[+123 chars]'. "
+        f"Объем текста: {settings.PIPELINE_TEXT_MIN_WORDS}-{settings.PIPELINE_TEXT_MAX_WORDS} слов. "
+        "Пиши на языке исходного материала; если язык неоднозначен — пиши на русском. "
+        "Сделай текст персонализированным под интерес, профессию и геоконтекст пользователя."
     )
 
     try:
@@ -214,10 +315,10 @@ async def generate_news(
                     "task": "review_and_improve_news_rewrite",
                     "input": primary_output,
                     "instructions": [
-                        "Matnni faqat O'zbek tilida saqlang.",
-                        "Aniqlik, ravonlik va auditoriyaga moslikni yaxshilang.",
-                        "Qisqa va faktlarga asoslangan shaklni saqlang.",
-                        "0 dan 10 gacha gemini_score bering.",
+                        "Сохрани язык исходного текста (или русский при неоднозначности).",
+                        "Убери все служебные метки вроде Lid/Yanglik/Новость и любые артефакты кодировки.",
+                        "Сделай 3-5 читабельных абзацев с плавной логикой и ясными переходами.",
+                        "Оцени качество и верни gemini_score от 0 до 10.",
                         "Return only JSON with final_title, final_text, ai_score, category, target_persona, gemini_score.",
                     ],
                 },

@@ -199,3 +199,10 @@ __pycache__/
 # IDE
 .vscode/
 .idea/
+
+# Node / frontend
+node_modules/
+dist/
+**/node_modules/
+**/dist/
+.vite/

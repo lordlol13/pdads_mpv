@@ -28,7 +28,23 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
 
-    CORS_ALLOW_ORIGINS: str = "http://127.0.0.1:3000,http://localhost:3000,http://127.0.0.1:8000,http://localhost:8000"
+    AUTH_VERIFICATION_CODE_TTL_MINUTES: int = 10
+    AUTH_VERIFICATION_MAX_ATTEMPTS: int = 5
+    AUTH_DEBUG_RETURN_CODE: bool = True
+
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587
+    SMTP_USERNAME: str = ""
+    SMTP_PASSWORD: str = ""
+    SMTP_FROM_EMAIL: str = "noreply@pdads.local"
+    SMTP_USE_TLS: bool = True
+
+    CORS_ALLOW_ORIGINS: str = (
+        "http://127.0.0.1:3000,http://localhost:3000,"
+        "http://127.0.0.1:3001,http://localhost:3001,"
+        "http://127.0.0.1:5173,http://localhost:5173,"
+        "http://127.0.0.1:8000,http://localhost:8000"
+    )
 
     PIPELINE_MAX_ATTEMPTS: int = 1
     PIPELINE_TARGET_SCORE: float = 8.0
@@ -46,7 +62,7 @@ class Settings(BaseSettings):
 
     YOUTUBE_API_KEY: str = ""
     YOUTUBE_REGION_CODE: str = "UZ"
-    VIDEO_TEMPLATE_URLS: str = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+    VIDEO_TEMPLATE_URLS: str = ""
 
     model_config = SettingsConfigDict(
         env_file=".env",

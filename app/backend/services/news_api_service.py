@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any
+from xml.etree import ElementTree as ET
 
 import httpx
 
@@ -9,6 +11,29 @@ from app.backend.core.config import settings
 from app.backend.services.orchestrator_service import build_cache_key, get_or_set_json
 
 NEWS_API_URL = "https://newsapi.org/v2/everything"
+
+RSS_SOURCE_WHITELIST: dict[str, list[dict[str, Any]]] = {
+    "global": [
+        {"name": "BBC World", "url": "http://feeds.bbci.co.uk/news/world/rss.xml", "priority": 120},
+        {"name": "BBC Technology", "url": "http://feeds.bbci.co.uk/news/technology/rss.xml", "priority": 118},
+        {"name": "CNN World", "url": "http://rss.cnn.com/rss/edition_world.rss", "priority": 116},
+        {"name": "CNN Top", "url": "http://rss.cnn.com/rss/edition.rss", "priority": 114},
+        {"name": "Reuters World", "url": "https://feeds.reuters.com/Reuters/worldNews", "priority": 112},
+        {"name": "DW World", "url": "https://rss.dw.com/rdf/rss-en-world", "priority": 110},
+    ],
+    "uz": [
+        {"name": "Kun.uz", "url": "https://kun.uz/news/rss", "priority": 106},
+        {"name": "Gazeta.uz", "url": "https://www.gazeta.uz/rss/", "priority": 104},
+        {"name": "Daryo", "url": "https://daryo.uz/feed", "priority": 102},
+    ],
+}
+
+COUNTRY_NEWS_DOMAINS: dict[str, list[str]] = {
+    "UZ": ["kun.uz", "gazeta.uz", "daryo.uz", "uznews.uz"],
+    "RU": ["ria.ru", "rbc.ru", "lenta.ru", "vesti.ru"],
+    "KZ": ["tengrinews.kz", "inform.kz"],
+    "US": ["apnews.com", "reuters.com", "cnn.com"],
+}
 
 
 def _normalize_article(article: dict[str, Any]) -> dict[str, Any]:
@@ -30,6 +55,132 @@ def _normalize_article(article: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _tag_name(tag: str) -> str:
+    return str(tag).split("}")[-1].lower()
+
+
+def _extract_first_text(node: ET.Element, names: set[str]) -> str:
+    for child in node.iter():
+        if child is node:
+            continue
+        if _tag_name(child.tag) in names:
+            value = (child.text or "").strip()
+            if value:
+                return value
+    return ""
+
+
+def _extract_link(node: ET.Element) -> str:
+    for child in node.iter():
+        if child is node:
+            continue
+        if _tag_name(child.tag) != "link":
+            continue
+        href = (child.attrib.get("href") or "").strip()
+        if href:
+            return href
+        text_value = (child.text or "").strip()
+        if text_value:
+            return text_value
+    return ""
+
+
+def _to_newsapi_timestamp(raw_value: str | None) -> str | None:
+    if not raw_value:
+        return None
+
+    value = raw_value.strip()
+    if not value:
+        return None
+
+    for parser in (
+        lambda: datetime.fromisoformat(value.replace("Z", "+00:00")),
+        lambda: parsedate_to_datetime(value),
+    ):
+        try:
+            parsed = parser()
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+        except Exception:
+            continue
+
+    return None
+
+
+def _article_matches_topics(article: dict[str, Any], topics: list[str]) -> bool:
+    normalized_topics = [topic.strip().lower() for topic in topics if topic and topic.strip()]
+    if not normalized_topics or "general" in normalized_topics:
+        return True
+
+    haystack = " ".join(
+        [
+            str(article.get("title") or "").lower(),
+            str(article.get("description") or "").lower(),
+            str(article.get("content") or "").lower(),
+        ]
+    )
+    return any(topic in haystack for topic in normalized_topics)
+
+
+def _rss_sources_for_country_codes(country_codes: list[str] | None) -> list[dict[str, Any]]:
+    normalized_codes = {code.strip().upper() for code in (country_codes or []) if code and code.strip()}
+
+    selected = list(RSS_SOURCE_WHITELIST["global"])
+    # Uzbekistan sources are explicitly prioritized for this product's target audience.
+    selected.extend(RSS_SOURCE_WHITELIST["uz"])
+
+    deduped: list[dict[str, Any]] = []
+    seen_urls: set[str] = set()
+    for source in selected:
+        url = str(source.get("url") or "").strip().lower()
+        if not url or url in seen_urls:
+            continue
+        seen_urls.add(url)
+        source_copy = dict(source)
+        if "UZ" in normalized_codes and source in RSS_SOURCE_WHITELIST["uz"]:
+            source_copy["priority"] = int(source_copy.get("priority") or 0) + 4
+        deduped.append(source_copy)
+
+    return deduped
+
+
+def _parse_rss_payload(payload: str, source_name: str, source_priority: int) -> list[dict[str, Any]]:
+    try:
+        root = ET.fromstring(payload)
+    except ET.ParseError:
+        return []
+
+    items: list[dict[str, Any]] = []
+    for node in root.iter():
+        if _tag_name(node.tag) not in {"item", "entry"}:
+            continue
+
+        title = _extract_first_text(node, {"title"})
+        link = _extract_link(node)
+        description = _extract_first_text(node, {"description", "summary", "content", "encoded"})
+        published_raw = _extract_first_text(node, {"pubdate", "published", "updated", "date"})
+        published_at = _to_newsapi_timestamp(published_raw)
+
+        if not title or not link:
+            continue
+
+        items.append(
+            {
+                "source": {"name": source_name},
+                "title": title,
+                "description": description,
+                "content": description,
+                "url": link,
+                "urlToImage": None,
+                "publishedAt": published_at,
+                "_source_priority": source_priority,
+            }
+        )
+
+    return items
+
+
 def _parse_newsapi_datetime(value: str | None) -> datetime | None:
     if not value:
         return None
@@ -45,45 +196,199 @@ def _prioritize_recent_articles(articles: list[dict[str, Any]]) -> list[dict[str
 
     def _sort_key(item: dict[str, Any]) -> tuple[int, float]:
         published_at = _parse_newsapi_datetime(item.get("publishedAt"))
+        source_priority = -int(item.get("_source_priority") or 0)
         if published_at is None:
-            return (1, 0.0)
+            return (source_priority, 1, 0.0)
         # 0 means priority bucket (fresh <= 24h), 1 means older bucket (but still <= 7 days).
         freshness_bucket = 0 if published_at >= recent_border else 1
-        return (freshness_bucket, -published_at.timestamp())
+        return (source_priority, freshness_bucket, -published_at.timestamp())
 
     return sorted(articles, key=_sort_key)
 
 
-async def fetch_articles_for_topics(topics: list[str], page_size: int) -> list[dict[str, Any]]:
+def _preferred_domains_for_countries(country_codes: list[str] | None) -> list[str]:
+    if not country_codes:
+        return []
+
+    unique_codes = [code.strip().upper() for code in country_codes if code and code.strip()]
+    domains: list[str] = []
+    for code in unique_codes:
+        for domain in COUNTRY_NEWS_DOMAINS.get(code, []):
+            if domain not in domains:
+                domains.append(domain)
+    return domains
+
+
+def _dedupe_articles_by_url_or_title(articles: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen_keys: set[str] = set()
+    result: list[dict[str, Any]] = []
+
+    for article in articles:
+        url = str(article.get("url") or "").strip().lower()
+        title = str(article.get("title") or "").strip().lower()
+        dedupe_key = url or title
+        if not dedupe_key or dedupe_key in seen_keys:
+            continue
+        seen_keys.add(dedupe_key)
+        result.append(article)
+
+    return result
+
+
+async def _fetch_rss_whitelist_articles(
+    topics: list[str],
+    country_codes: list[str] | None,
+    limit: int,
+) -> list[dict[str, Any]]:
+    sources = _rss_sources_for_country_codes(country_codes)
+    if not sources:
+        return []
+
+    items: list[dict[str, Any]] = []
+    async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+        for source in sources:
+            source_name = str(source.get("name") or "RSS")
+            source_url = str(source.get("url") or "").strip()
+            source_priority = int(source.get("priority") or 0)
+            if not source_url:
+                continue
+
+            try:
+                response = await client.get(source_url, params={})
+                response.raise_for_status()
+            except httpx.HTTPError:
+                continue
+
+            response_text = getattr(response, "text", "")
+            if not isinstance(response_text, str) or not response_text.strip():
+                continue
+
+            parsed = _parse_rss_payload(response_text, source_name, source_priority)
+            for article in parsed:
+                if _article_matches_topics(article, topics):
+                    items.append(article)
+
+            if len(items) >= limit * 2:
+                break
+
+    deduped = _dedupe_articles_by_url_or_title(items)
+    return _prioritize_recent_articles(deduped)[:limit]
+
+
+async def _fetch_newsapi_articles(
+    topics: list[str],
+    page_size: int,
+    preferred_domains: list[str],
+) -> list[dict[str, Any]]:
     if not settings.NEWS_API_KEY:
         return []
 
-    unique_topics = [topic for topic in dict.fromkeys([t.strip().lower() for t in topics if t.strip()])]
-    if not unique_topics:
-        unique_topics = ["uzbekistan"]
+    query = " OR ".join(topics[:5])
+    now_utc = datetime.now(timezone.utc)
+    max_age_border = now_utc - timedelta(days=settings.NEWS_MAX_AGE_DAYS)
 
-    async def _fetch() -> dict[str, Any]:
-        query = " OR ".join(unique_topics[:5])
-        now_utc = datetime.now(timezone.utc)
-        max_age_border = now_utc - timedelta(days=settings.NEWS_MAX_AGE_DAYS)
-        async with httpx.AsyncClient(timeout=30.0) as client:
+    base_params = {
+        "q": query,
+        "sortBy": "publishedAt",
+        "from": max_age_border.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "to": now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "apiKey": settings.NEWS_API_KEY,
+    }
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        if not preferred_domains:
             response = await client.get(
                 NEWS_API_URL,
                 params={
-                    "q": query,
+                    **base_params,
                     "pageSize": page_size,
-                    "sortBy": "publishedAt",
                     "language": "en",
-                    "from": max_age_border.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                    "to": now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                    "apiKey": settings.NEWS_API_KEY,
                 },
             )
-        response.raise_for_status()
-        return response.json()
+            response.raise_for_status()
+            payload = response.json()
+            for article in payload.get("articles") or []:
+                article.setdefault("_source_priority", 50)
+            return payload.get("articles") or []
 
-    cache_key = build_cache_key("newsapi:everything", {"topics": unique_topics, "page_size": page_size})
+        country_page_size = max(1, int(page_size * 0.6))
+        global_page_size = max(1, page_size - country_page_size)
+        preferred_domains_csv = ",".join(preferred_domains[:20])
+
+        country_response = await client.get(
+            NEWS_API_URL,
+            params={
+                **base_params,
+                "pageSize": country_page_size,
+                "domains": preferred_domains_csv,
+            },
+        )
+        country_response.raise_for_status()
+        country_payload = country_response.json()
+        for article in country_payload.get("articles") or []:
+            article.setdefault("_source_priority", 90)
+
+        global_response = await client.get(
+            NEWS_API_URL,
+            params={
+                **base_params,
+                "pageSize": global_page_size,
+                "language": "en",
+                "excludeDomains": preferred_domains_csv,
+            },
+        )
+        global_response.raise_for_status()
+        global_payload = global_response.json()
+        for article in global_payload.get("articles") or []:
+            article.setdefault("_source_priority", 70)
+
+        return _dedupe_articles_by_url_or_title(
+            (country_payload.get("articles") or []) + (global_payload.get("articles") or [])
+        )
+
+
+async def fetch_articles_for_topics(
+    topics: list[str],
+    page_size: int,
+    country_codes: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    unique_topics = [topic for topic in dict.fromkeys([t.strip().lower() for t in topics if t.strip()])]
+    if not unique_topics:
+        unique_topics = ["general"]
+
+    preferred_domains = _preferred_domains_for_countries(country_codes)
+
+    async def _fetch() -> dict[str, Any]:
+        rss_articles = await _fetch_rss_whitelist_articles(
+            unique_topics,
+            country_codes,
+            limit=max(page_size * 2, 24),
+        )
+
+        try:
+            newsapi_articles = await _fetch_newsapi_articles(
+                unique_topics,
+                page_size=max(page_size, 12),
+                preferred_domains=preferred_domains,
+            )
+        except httpx.HTTPError:
+            newsapi_articles = []
+
+        merged_articles = _dedupe_articles_by_url_or_title(rss_articles + newsapi_articles)
+        return {"articles": merged_articles}
+
+    cache_key = build_cache_key(
+        "newsapi:everything",
+        {
+            "topics": unique_topics,
+            "page_size": page_size,
+            "country_codes": [code.strip().upper() for code in (country_codes or []) if code and code.strip()],
+            "domains": preferred_domains,
+            "global_mix": bool(preferred_domains),
+            "rss_whitelist": True,
+        },
+    )
     payload = await get_or_set_json(cache_key, ttl_seconds=900, fetcher=_fetch)
 
     articles = _prioritize_recent_articles(payload.get("articles") or [])
-    return [_normalize_article(article) for article in articles if article.get("title")]
+    return [_normalize_article(article) for article in articles if article.get("title")][:page_size]

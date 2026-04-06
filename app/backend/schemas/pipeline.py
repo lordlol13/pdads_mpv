@@ -1,5 +1,8 @@
 from datetime import datetime
-from pydantic import BaseModel
+
+from pydantic import BaseModel, field_validator
+
+from app.backend.schemas.coercion import coerce_json_string_list
 
 
 class EnqueueResponse(BaseModel):
@@ -40,3 +43,8 @@ class AiNewsItem(BaseModel):
     ai_score: float | None
     vector_status: str | None
     created_at: datetime | None
+
+    @field_validator("image_urls", "video_urls", mode="before")
+    @classmethod
+    def _coerce_url_lists(cls, v):
+        return coerce_json_string_list(v)
