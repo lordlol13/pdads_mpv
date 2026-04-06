@@ -120,11 +120,26 @@ async def get_user_feed(session: AsyncSession, user_id: int, limit: int = 50) ->
     await _ensure_social_tables(session)
 
     query = """
-    WITH latest_interactions AS (
+    WITH dedup_user_feed AS (
+        SELECT
+            uf.id,
+            uf.user_id,
+            uf.ai_news_id,
+            uf.ai_score,
+            uf.created_at,
+            ROW_NUMBER() OVER (
+                PARTITION BY uf.user_id, uf.ai_news_id
+                ORDER BY uf.created_at DESC, uf.id DESC
+            ) AS rn
+        FROM user_feed uf
+        WHERE uf.user_id = :user_id
+    ),
+    latest_interactions AS (
         SELECT
             i.user_id,
             i.ai_news_id,
             i.liked,
+            i.viewed,
             ROW_NUMBER() OVER (
                 PARTITION BY i.user_id, i.ai_news_id
                 ORDER BY i.created_at DESC, i.id DESC
@@ -184,6 +199,9 @@ async def get_user_feed(session: AsyncSession, user_id: int, limit: int = 50) ->
               END
         ) AS rank_score
     FROM user_feed uf
+    JOIN dedup_user_feed duf
+        ON duf.id = uf.id
+        AND duf.rn = 1
     JOIN ai_news an ON an.id = uf.ai_news_id
     LEFT JOIN latest_interactions li
         ON li.user_id = uf.user_id
@@ -196,7 +214,8 @@ async def get_user_feed(session: AsyncSession, user_id: int, limit: int = 50) ->
         AND sn.ai_news_id = uf.ai_news_id
     LEFT JOIN comment_counts cc
         ON cc.ai_news_id = uf.ai_news_id
-    WHERE uf.user_id = :user_id
+        WHERE uf.user_id = :user_id
+            AND NOT (COALESCE(li.viewed, FALSE) = TRUE AND sn.id IS NULL)
     ORDER BY rank_score DESC, uf.id DESC
     LIMIT :limit
     """

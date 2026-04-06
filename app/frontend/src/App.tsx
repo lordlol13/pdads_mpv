@@ -2,10 +2,12 @@ import { ReactNode } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AuthLayout } from './components/layout/AuthLayout';
-import { LanguageSwitcher } from './components/ui/LanguageSwitcher';
+import { MainTabsLayout } from './components/layout/MainTabsLayout';
 import { I18nProvider, useI18n } from './context/I18nContext';
 import { AuthPage } from './pages/auth/AuthPage';
 import { NewsFeed } from './pages/feed/NewsFeed';
+import { SearchPage } from './pages/search/SearchPage';
+import { ProfilePage } from './pages/profile/ProfilePage';
 import { AuthProvider, useAuth } from './context/AuthContext';
 
 const queryClient = new QueryClient();
@@ -31,24 +33,30 @@ export default function App() {
       <I18nProvider>
         <AuthProvider>
           <BrowserRouter>
-            <LanguageSwitcher />
             <Routes>
               <Route element={<AuthLayout />}>
                 <Route path="/auth" element={<AuthPage />} />
                 <Route path="/register/step1" element={<Navigate to="/auth" replace />} />
                 <Route path="/register/step2" element={<Navigate to="/auth" replace />} />
                 <Route path="/register/step3" element={<Navigate to="/auth" replace />} />
-                <Route path="/register/success" element={<Navigate to="/feed" replace />} />
+                <Route path="/register/success" element={<Navigate to="/app/home" replace />} />
                 <Route path="/" element={<Navigate to="/auth" replace />} />
               </Route>
               <Route
-                path="/feed"
+                path="/app"
                 element={
                   <RequireAuth>
-                    <NewsFeed />
+                    <MainTabsLayout />
                   </RequireAuth>
                 }
-              />
+              >
+                <Route path="home" element={<NewsFeed />} />
+                <Route path="search" element={<SearchPage />} />
+                <Route path="profile" element={<ProfilePage />} />
+                <Route index element={<Navigate to="/app/home" replace />} />
+              </Route>
+
+              <Route path="/feed" element={<Navigate to="/app/home" replace />} />
 
               <Route path="*" element={<Navigate to="/auth" replace />} />
             </Routes>

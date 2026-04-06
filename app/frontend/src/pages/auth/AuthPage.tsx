@@ -145,7 +145,7 @@ export function AuthPage() {
 
   useEffect(() => {
     if (!isLoading && user) {
-      navigate('/feed', { replace: true });
+      navigate('/app/home', { replace: true });
     }
   }, [isLoading, navigate, user]);
 
@@ -268,7 +268,7 @@ export function AuthPage() {
     localStorage.setItem('token', tokenResponse.access_token);
     const currentUser = await authService.getMe();
     login(tokenResponse.access_token, currentUser);
-    navigate('/feed', { replace: true });
+    navigate('/app/home', { replace: true });
   };
 
   const resetRegisterFlow = () => {
