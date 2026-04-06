@@ -109,9 +109,9 @@ def test_fetch_articles_for_topics_mixes_country_and_global_sources(monkeypatch)
                     "articles": [
                         {
                             "source": {"name": "global"},
-                            "title": "Global markets",
-                            "description": "World update",
-                            "content": "Global details",
+                            "title": "Global economy markets",
+                            "description": "World economy update",
+                            "content": "Global economy details",
                             "url": "https://reuters.com/global-1",
                             "urlToImage": "https://reuters.com/global-1.jpg",
                             "publishedAt": "2026-04-05T09:00:00Z",
@@ -135,4 +135,24 @@ def test_fetch_articles_for_topics_mixes_country_and_global_sources(monkeypatch)
     assert len(result) == 2
     titles = {item["title"] for item in result}
     assert "UZ economy" in titles
-    assert "Global markets" in titles
+    assert "Global economy markets" in titles
+
+
+def test_article_matches_topics_for_cs_aliases() -> None:
+    article = {
+        "title": "Counter-Strike 2 Major reaches playoff stage",
+        "description": "Top esports teams compete in CS2 playoffs",
+        "content": "Detailed bracket analysis",
+    }
+
+    assert news_api_service._article_matches_topics(article, ["cs"]) is True
+
+
+def test_article_matches_topics_rejects_irrelevant_for_dota() -> None:
+    article = {
+        "title": "Global shipping rates are rising",
+        "description": "Maritime logistics update",
+        "content": "No gaming content",
+    }
+
+    assert news_api_service._article_matches_topics(article, ["dota"]) is False

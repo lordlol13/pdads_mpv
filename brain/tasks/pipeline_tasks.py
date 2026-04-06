@@ -18,21 +18,50 @@ from app.backend.db.session import SessionLocal
 logger = logging.getLogger(__name__)
 
 
+def _normalize_interests_payload(interests: Any) -> dict[str, Any] | None:
+    if isinstance(interests, dict):
+        return interests
+    if isinstance(interests, str) and interests.strip():
+        try:
+            parsed = json.loads(interests)
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError:
+            return None
+    return None
+
+
 def _extract_topics(interests: Any) -> list[str]:
     if not interests:
         return []
-    if isinstance(interests, dict):
-        if isinstance(interests.get("topics"), list):
-            return [str(t).strip().lower() for t in interests["topics"] if str(t).strip()]
-        return [str(k).strip().lower() for k, v in interests.items() if v]
+
+    payload = _normalize_interests_payload(interests)
+    if payload is not None:
+        collected: list[str] = []
+        for key in ("all_topics", "topics", "custom_topics"):
+            values = payload.get(key)
+            if isinstance(values, list):
+                collected.extend([str(t).strip().lower() for t in values if str(t).strip()])
+        if collected:
+            deduped: list[str] = []
+            seen: set[str] = set()
+            for topic in collected:
+                if topic in seen:
+                    continue
+                seen.add(topic)
+                deduped.append(topic)
+            return deduped
+        return [str(k).strip().lower() for k, v in payload.items() if v]
+
     if isinstance(interests, list):
         return [str(t).strip().lower() for t in interests if str(t).strip()]
     return []
 
 
 def _extract_profession(interests: Any) -> str | None:
-    if isinstance(interests, dict):
-        profession = str(interests.get("profession") or "").strip().lower()
+    payload = _normalize_interests_payload(interests)
+    if payload is not None:
+        profession = str(payload.get("profession") or "").strip().lower()
         return profession or None
     return None
 
@@ -314,7 +343,7 @@ async def _populate_user_feed_for_ai_news(
                             WHEN json_valid(COALESCE(u.interests, '{}')) THEN COALESCE(u.interests, '{}')
                             ELSE '{}'
                         END,
-                        '$.topics'
+                        '$.all_topics'
                     ) jt
                     WHERE LOWER(CAST(jt.value AS TEXT)) = :target_topic
                 )
@@ -361,7 +390,7 @@ async def _populate_user_feed_for_ai_news(
         WHERE u.is_active = TRUE
             AND (
                 :target_topic = 'general'
-                OR (u.interests -> 'topics') ? :target_topic
+                OR (u.interests -> 'all_topics') ? :target_topic
             )
             AND (
                 :target_profession = ''
@@ -399,13 +428,20 @@ async def _populate_user_feed_for_ai_news(
 async def _schedule_ingestion_batch_async() -> dict[str, Any]:
     async with SessionLocal() as session:
         persona_contexts = await _load_cohort_personas(session)
-        topics = [str(p.get("topic") or "general") for p in persona_contexts]
+        topics = list(dict.fromkeys([str(p.get("topic") or "general") for p in persona_contexts]))
         country_codes = [str(p.get("country_code") or "").strip().upper() for p in persona_contexts if p.get("country_code")]
         articles = await fetch_articles_for_topics(
             topics,
             settings.NEWS_FETCH_BATCH_SIZE,
             country_codes=country_codes,
         )
+
+        if not articles and "general" not in topics:
+            articles = await fetch_articles_for_topics(
+                [*topics, "general"],
+                settings.NEWS_FETCH_BATCH_SIZE,
+                country_codes=country_codes,
+            )
 
         queued = 0
         for article in articles:

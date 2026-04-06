@@ -66,24 +66,52 @@ function getYouTubeEmbedUrl(url: string): string | null {
 
     if (host.includes('youtu.be')) {
       const id = parsed.pathname.replace('/', '').trim();
-      return id ? `https://www.youtube.com/embed/${id}` : null;
+      return id ? `https://www.youtube-nocookie.com/embed/${id}` : null;
     }
 
     if (host.includes('youtube.com')) {
       const idFromQuery = parsed.searchParams.get('v')?.trim() || '';
       if (idFromQuery) {
-        return `https://www.youtube.com/embed/${idFromQuery}`;
+        return `https://www.youtube-nocookie.com/embed/${idFromQuery}`;
       }
 
       const shortMatch = parsed.pathname.match(/\/shorts\/([^/?]+)/i);
       if (shortMatch?.[1]) {
-        return `https://www.youtube.com/embed/${shortMatch[1]}`;
+        return `https://www.youtube-nocookie.com/embed/${shortMatch[1]}`;
       }
 
       const pathParts = parsed.pathname.split('/').filter(Boolean);
       const embedIdx = pathParts.findIndex((part) => part === 'embed');
       if (embedIdx >= 0 && pathParts[embedIdx + 1]) {
-        return `https://www.youtube.com/embed/${pathParts[embedIdx + 1]}`;
+        return `https://www.youtube-nocookie.com/embed/${pathParts[embedIdx + 1]}`;
+      }
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
+function getYouTubeWatchUrl(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase();
+
+    if (host.includes('youtu.be')) {
+      const id = parsed.pathname.replace('/', '').trim();
+      return id ? `https://www.youtube.com/watch?v=${id}` : null;
+    }
+
+    if (host.includes('youtube.com') || host.includes('youtube-nocookie.com')) {
+      const idFromQuery = parsed.searchParams.get('v')?.trim() || '';
+      if (idFromQuery) {
+        return `https://www.youtube.com/watch?v=${idFromQuery}`;
+      }
+
+      const pathMatch = parsed.pathname.match(/\/(?:embed|shorts)\/([^/?]+)/i);
+      if (pathMatch?.[1]) {
+        return `https://www.youtube.com/watch?v=${pathMatch[1]}`;
       }
     }
   } catch {
@@ -101,6 +129,8 @@ function withYouTubePlaybackMode(embedUrl: string, autoplay: boolean): string {
     parsed.searchParams.set('playsinline', '1');
     parsed.searchParams.set('rel', '0');
     parsed.searchParams.set('modestbranding', '1');
+    parsed.searchParams.set('enablejsapi', '1');
+    parsed.searchParams.set('origin', window.location.origin);
     return parsed.toString();
   } catch {
     return embedUrl;
@@ -119,7 +149,37 @@ function formatScore(score: number | null): string {
 }
 
 function normalizeArticleText(value: string): string {
-  return (value || '').replace(/\r/g, '').replace(/\n{3,}/g, '\n\n').trim();
+  const cleaned = (value || '')
+    .replace(/\r/g, '\n')
+    .replace(/\[\+\d+\s+chars\]/gi, '')
+    .replace(/\uFFFD/g, '')
+    .replace(/\b(?:lid|yanglik)\b\s*:?/gi, '')
+    .replace(/\b(?:news|новость|asosiy\s+yangilik)\b\s*:?/gi, '')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+
+  if (!cleaned) {
+    return '';
+  }
+
+  const paragraphs = cleaned.split(/\n\s*\n/).map((part) => part.trim()).filter(Boolean);
+  if (paragraphs.length >= 2) {
+    return paragraphs.join('\n\n');
+  }
+
+  const sentences = cleaned.split(/(?<=[.!?])\s+/).map((part) => part.trim()).filter(Boolean);
+  if (sentences.length >= 4) {
+    const chunkSize = Math.ceil(sentences.length / 3);
+    const chunks: string[] = [];
+    for (let index = 0; index < sentences.length; index += chunkSize) {
+      chunks.push(sentences.slice(index, index + chunkSize).join(' ').trim());
+    }
+    return chunks.filter(Boolean).join('\n\n');
+  }
+
+  return cleaned;
 }
 
 export function NewsFeed() {
@@ -439,6 +499,7 @@ export function NewsFeed() {
           const saved = savedOverrides[item.ai_news_id] ?? Boolean(item.saved);
           const primaryVideoUrl = getPrimaryVideoUrl(item);
           const youtubeEmbedUrl = primaryVideoUrl ? getYouTubeEmbedUrl(primaryVideoUrl) : null;
+          const youtubeWatchUrl = primaryVideoUrl ? getYouTubeWatchUrl(primaryVideoUrl) : null;
           const isActiveCard = activeCardId === item.user_feed_id;
           const shouldRenderYoutubePlayer = Boolean(youtubeEmbedUrl && isActiveCard);
 
@@ -453,17 +514,37 @@ export function NewsFeed() {
             >
               <div className="absolute inset-0 bg-black">
                 {youtubeEmbedUrl && shouldRenderYoutubePlayer ? (
-                  <iframe
-                    key={`${item.user_feed_id}-${isActiveCard ? 'active' : 'idle'}`}
-                    src={withYouTubePlaybackMode(youtubeEmbedUrl, isActiveCard)}
-                    title={item.final_title || t('feed.videoAlt')}
-                    className="h-full w-full"
-                    loading="lazy"
-                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                    allowFullScreen
-                  />
+                  <div className="relative h-full w-full">
+                    <iframe
+                      key={`${item.user_feed_id}-${isActiveCard ? 'active' : 'idle'}`}
+                      src={withYouTubePlaybackMode(youtubeEmbedUrl, isActiveCard)}
+                      title={item.final_title || t('feed.videoAlt')}
+                      className="h-full w-full"
+                      loading="lazy"
+                      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                      allowFullScreen
+                    />
+                    <a
+                      href={youtubeWatchUrl || primaryVideoUrl || '#'}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="absolute right-3 top-3 rounded-md bg-black/60 px-3 py-1.5 text-xs font-semibold text-white/95 backdrop-blur hover:bg-black/75"
+                    >
+                      {t('feed.video.openYoutube')}
+                    </a>
+                  </div>
                 ) : youtubeEmbedUrl ? (
-                  <img src={getFeedImage(item)} alt={item.final_title || t('feed.imageAlt')} className="h-full w-full object-cover" />
+                  <div className="relative h-full w-full">
+                    <img src={getFeedImage(item)} alt={item.final_title || t('feed.imageAlt')} className="h-full w-full object-cover" />
+                    <a
+                      href={youtubeWatchUrl || primaryVideoUrl || '#'}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="absolute inset-x-0 bottom-8 mx-auto w-fit rounded-lg bg-black/65 px-4 py-2 text-sm font-semibold text-white/95 backdrop-blur hover:bg-black/75"
+                    >
+                      {t('feed.video.openYoutube')}
+                    </a>
+                  </div>
                 ) : primaryVideoUrl && isDirectVideoFile(primaryVideoUrl) ? (
                   <video
                     ref={(node) => {
@@ -556,9 +637,9 @@ export function NewsFeed() {
       </main>
 
       {textSheetItem ? (
-        <div className="fixed inset-0 z-[60] flex items-end bg-black/55" onClick={() => setTextSheetItem(null)}>
+        <div className="fixed inset-0 z-[95] flex items-end bg-black/55" onClick={() => setTextSheetItem(null)}>
           <div
-            className="w-full max-h-[78vh] overflow-hidden rounded-t-3xl bg-surface-container-low shadow-2xl"
+            className="w-full max-h-[86vh] overflow-hidden rounded-t-3xl bg-surface-container-low shadow-2xl"
             onClick={(event) => event.stopPropagation()}
           >
             <div className="flex items-center justify-between border-b border-outline-variant/30 px-5 py-4">
@@ -572,7 +653,7 @@ export function NewsFeed() {
               </button>
             </div>
 
-            <div className="max-h-[calc(78vh-64px)] overflow-y-auto px-5 py-4">
+            <div className="max-h-[calc(86vh-64px)] overflow-y-auto px-5 py-4 pb-[calc(6rem+env(safe-area-inset-bottom))]">
               <h4 className="mb-3 text-lg font-semibold text-on-surface">{textSheetItem.final_title || `AI News #${textSheetItem.ai_news_id}`}</h4>
               <p className="whitespace-pre-line text-sm leading-relaxed text-on-surface-variant">
                 {normalizeArticleText(textSheetItem.final_text || t('feed.noText'))}

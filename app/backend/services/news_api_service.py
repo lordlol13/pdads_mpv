@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
+import re
 from typing import Any
 from xml.etree import ElementTree as ET
 
@@ -34,6 +35,61 @@ COUNTRY_NEWS_DOMAINS: dict[str, list[str]] = {
     "KZ": ["tengrinews.kz", "inform.kz"],
     "US": ["apnews.com", "reuters.com", "cnn.com"],
 }
+
+TOPIC_QUERY_ALIASES: dict[str, list[str]] = {
+    "cs": ["counter-strike", "counter strike", "counter-strike 2", "cs2", "esports"],
+    "cs2": ["counter-strike 2", "counter strike 2", "cs2", "esports"],
+    "dota": ["dota 2", "dota2", "the international", "esports"],
+    "dota2": ["dota 2", "dota2", "the international", "esports"],
+    "valorant": ["valorant", "vct", "esports"],
+}
+
+
+def _normalize_topic_value(topic: str) -> str:
+    return re.sub(r"\s+", " ", str(topic or "").strip().lower())
+
+
+def _topic_variants(topic: str) -> list[str]:
+    normalized = _normalize_topic_value(topic)
+    if not normalized:
+        return []
+
+    aliases = TOPIC_QUERY_ALIASES.get(normalized, [])
+    if normalized == "cs":
+        raw = aliases
+    else:
+        raw = [*aliases, normalized]
+
+    variants: list[str] = []
+    seen: set[str] = set()
+    for value in raw:
+        v = _normalize_topic_value(value)
+        if not v or v in seen:
+            continue
+        seen.add(v)
+        variants.append(v)
+    return variants
+
+
+def _expand_topics_for_query(topics: list[str]) -> list[str]:
+    normalized_topics = [_normalize_topic_value(topic) for topic in topics if _normalize_topic_value(topic)]
+    specific_topics = [topic for topic in normalized_topics if topic != "general"]
+
+    if not specific_topics:
+        return ["general news"]
+
+    expanded: list[str] = []
+    seen: set[str] = set()
+    for topic in specific_topics:
+        for variant in _topic_variants(topic):
+            if len(variant) <= 2:
+                continue
+            if variant in seen:
+                continue
+            seen.add(variant)
+            expanded.append(variant)
+
+    return expanded or specific_topics
 
 
 def _normalize_article(article: dict[str, Any]) -> dict[str, Any]:
@@ -109,8 +165,10 @@ def _to_newsapi_timestamp(raw_value: str | None) -> str | None:
 
 
 def _article_matches_topics(article: dict[str, Any], topics: list[str]) -> bool:
-    normalized_topics = [topic.strip().lower() for topic in topics if topic and topic.strip()]
-    if not normalized_topics or "general" in normalized_topics:
+    normalized_topics = [_normalize_topic_value(topic) for topic in topics if _normalize_topic_value(topic)]
+    specific_topics = [topic for topic in normalized_topics if topic != "general"]
+
+    if not specific_topics:
         return True
 
     haystack = " ".join(
@@ -120,7 +178,18 @@ def _article_matches_topics(article: dict[str, Any], topics: list[str]) -> bool:
             str(article.get("content") or "").lower(),
         ]
     )
-    return any(topic in haystack for topic in normalized_topics)
+
+    for topic in specific_topics:
+        for variant in _topic_variants(topic):
+            if len(variant) <= 2:
+                if re.search(rf"(?<![a-z0-9]){re.escape(variant)}(?![a-z0-9])", haystack):
+                    return True
+                continue
+
+            if variant in haystack:
+                return True
+
+    return False
 
 
 def _rss_sources_for_country_codes(country_codes: list[str] | None) -> list[dict[str, Any]]:
@@ -283,7 +352,12 @@ async def _fetch_newsapi_articles(
     if not settings.NEWS_API_KEY:
         return []
 
-    query = " OR ".join(topics[:5])
+    query_terms = _expand_topics_for_query(topics)
+    query = " OR ".join(
+        [f'"{term}"' if (" " in term or "-" in term) else term for term in query_terms[:8]]
+    )
+    if not query:
+        query = "general news"
     now_utc = datetime.now(timezone.utc)
     max_age_border = now_utc - timedelta(days=settings.NEWS_MAX_AGE_DAYS)
 
@@ -373,6 +447,8 @@ async def fetch_articles_for_topics(
             )
         except httpx.HTTPError:
             newsapi_articles = []
+
+        newsapi_articles = [item for item in newsapi_articles if _article_matches_topics(item, unique_topics)]
 
         merged_articles = _dedupe_articles_by_url_or_title(rss_articles + newsapi_articles)
         return {"articles": merged_articles}

@@ -47,13 +47,13 @@ def _clean_text_artifacts(text: str) -> str:
         value = value.replace(old, new)
 
     value = re.sub(r"\[\+\d+\s+chars\]", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"\b(?:lid|yanglik)\b\s*:?", "", value, flags=re.IGNORECASE)
     value = re.sub(
         r"(^|\n)\s*(lid|yanglik|новость|news|asosiy\s+yangilik|foydalanuvchiga\s+ta'siri|kasbiy\s+nuqtai\s+nazar|amaliy\s+qadamlar)\s*:\s*",
         "\\1",
         value,
         flags=re.IGNORECASE,
     )
-
     lines = [re.sub(r"\s+", " ", line).strip() for line in value.replace("\r", "\n").split("\n")]
     compact = "\n".join(line for line in lines if line)
     compact = re.sub(r"\n{3,}", "\n\n", compact)
@@ -75,11 +75,11 @@ def _sentences_to_paragraphs(text: str, target_paragraphs: int = 3) -> list[str]
     if not cleaned:
         return []
 
-    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", cleaned) if s.strip()]
+    sentences = [s.strip() for s in re.split(r"(?<=[.!?;])\s+", cleaned) if s.strip()]
     if len(sentences) <= 1:
         return [cleaned]
 
-    chunk_size = max(1, len(sentences) // max(1, target_paragraphs))
+    chunk_size = max(1, (len(sentences) + max(1, target_paragraphs) - 1) // max(1, target_paragraphs))
     result: list[str] = []
     for idx in range(0, len(sentences), chunk_size):
         result.append(" ".join(sentences[idx : idx + chunk_size]).strip())

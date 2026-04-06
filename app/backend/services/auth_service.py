@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -13,6 +14,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.backend.core.config import settings
 from app.backend.core.security import create_access_token, hash_password, verify_password
+
+
+logger = logging.getLogger(__name__)
 
 
 def _utcnow() -> datetime:
@@ -62,6 +66,115 @@ def _parse_user_dict(row: Any) -> dict[str, Any]:
 def _hash_verification_code(verification_id: str, code: str) -> str:
     payload = f"{verification_id}:{code}:{settings.JWT_SECRET_KEY}".encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
+
+
+async def _seed_user_feed_for_new_user(session: AsyncSession, *, user_id: int, topics: list[str]) -> int:
+    normalized_topics: list[str] = []
+    seen_topics: set[str] = set()
+    for topic in topics:
+        value = str(topic).strip().lower()
+        if not value or value in seen_topics:
+            continue
+        seen_topics.add(value)
+        normalized_topics.append(value)
+
+    def _persona_matches(persona: str, topic: str) -> bool:
+        if topic == "general":
+            return persona == "general" or persona.startswith("general|")
+        return persona == topic or persona.startswith(f"{topic}|")
+
+    candidates_result = await session.execute(
+        text(
+            """
+            SELECT id, ai_score, target_persona
+            FROM ai_news
+            ORDER BY created_at DESC, id DESC
+            LIMIT 300
+            """
+        )
+    )
+    candidates = [dict(row) for row in candidates_result.mappings().all()]
+
+    selected: list[dict[str, Any]] = []
+    selected_ids: set[int] = set()
+
+    for row in candidates:
+        ai_news_id = int(row.get("id") or 0)
+        if not ai_news_id or ai_news_id in selected_ids:
+            continue
+
+        persona = str(row.get("target_persona") or "").strip().lower()
+        if not persona:
+            continue
+
+        matched = False
+        for topic in normalized_topics:
+            if _persona_matches(persona, topic):
+                matched = True
+                break
+
+        if not matched:
+            continue
+
+        selected_ids.add(ai_news_id)
+        selected.append(
+            {
+                "ai_news_id": ai_news_id,
+                "ai_score": float(row.get("ai_score") or 0.0),
+            }
+        )
+        if len(selected) >= 40:
+            break
+
+    if not selected:
+        selected_ids.clear()
+        for row in candidates:
+            ai_news_id = int(row.get("id") or 0)
+            if not ai_news_id or ai_news_id in selected_ids:
+                continue
+
+            persona = str(row.get("target_persona") or "").strip().lower()
+            if not persona or not _persona_matches(persona, "general"):
+                continue
+
+            selected_ids.add(ai_news_id)
+            selected.append(
+                {
+                    "ai_news_id": ai_news_id,
+                    "ai_score": float(row.get("ai_score") or 0.0),
+                }
+            )
+            if len(selected) >= 12:
+                break
+
+    if not selected:
+        return 0
+
+    now_sql = "CURRENT_TIMESTAMP" if session.get_bind().dialect.name == "sqlite" else "NOW()"
+    inserted = 0
+    for item in selected:
+        result = await session.execute(
+            text(
+                f"""
+                INSERT INTO user_feed (user_id, ai_news_id, ai_score, created_at)
+                SELECT :user_id, :ai_news_id, :ai_score, {now_sql}
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM user_feed uf
+                    WHERE uf.user_id = :user_id
+                      AND uf.ai_news_id = :ai_news_id
+                )
+                """
+            ),
+            {
+                "user_id": user_id,
+                "ai_news_id": item["ai_news_id"],
+                "ai_score": item["ai_score"],
+            },
+        )
+        inserted += int(result.rowcount or 0)
+
+    return inserted
 
 
 async def _ensure_registration_table(session: AsyncSession) -> None:
@@ -415,13 +528,22 @@ async def complete_verified_registration(
         },
     )
 
-    await session.commit()
-
-    user_row = created.mappings().first()
-    if user_row is None:
+    new_user_row = created.mappings().first()
+    if new_user_row is None:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to create user")
 
-    return _parse_user_dict(user_row)
+    try:
+        await _seed_user_feed_for_new_user(
+            session,
+            user_id=int(new_user_row["id"]),
+            topics=all_topics,
+        )
+    except Exception:
+        logger.exception("failed to seed user_feed for new user id=%s", new_user_row.get("id"))
+
+    await session.commit()
+
+    return _parse_user_dict(new_user_row)
 
 
 async def register_user(

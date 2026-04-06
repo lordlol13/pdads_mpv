@@ -1,3 +1,4 @@
+import json
 from typing import Any
 
 from sqlalchemy import text
@@ -7,6 +8,57 @@ from app.backend.db.sql_helpers import sql_timestamp_now
 
 
 _SOCIAL_TABLES_READY_DIALECTS: set[str] = set()
+
+
+def _extract_user_topics(raw_interests: Any) -> list[str]:
+    payload: dict[str, Any] = {}
+    if isinstance(raw_interests, dict):
+        payload = raw_interests
+    elif isinstance(raw_interests, str) and raw_interests.strip():
+        try:
+            parsed = json.loads(raw_interests)
+            if isinstance(parsed, dict):
+                payload = parsed
+        except json.JSONDecodeError:
+            payload = {}
+
+    values: list[str] = []
+    for key in ("all_topics", "topics", "custom_topics"):
+        raw_list = payload.get(key)
+        if isinstance(raw_list, list):
+            values.extend([str(item).strip().lower() for item in raw_list if str(item).strip()])
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        deduped.append(value)
+
+    return deduped
+
+
+def _persona_matches_topics(target_persona: str | None, topics: list[str]) -> bool:
+    if not topics:
+        return True
+
+    persona = str(target_persona or "").strip().lower()
+    if not persona:
+        return False
+
+    for topic in topics:
+        normalized = str(topic).strip().lower()
+        if not normalized:
+            continue
+        if normalized == "general":
+            if persona == "general" or persona.startswith("general|"):
+                return True
+            continue
+        if persona == normalized or persona.startswith(f"{normalized}|"):
+            return True
+
+    return False
 
 
 async def _ensure_social_tables(session: AsyncSession) -> None:
@@ -119,6 +171,20 @@ async def _ensure_social_tables(session: AsyncSession) -> None:
 async def get_user_feed(session: AsyncSession, user_id: int, limit: int = 50) -> list[dict[str, Any]]:
     await _ensure_social_tables(session)
 
+    user_interests_result = await session.execute(
+        text(
+            """
+            SELECT interests
+            FROM users
+            WHERE id = :user_id
+            LIMIT 1
+            """
+        ),
+        {"user_id": user_id},
+    )
+    raw_interests = user_interests_result.scalar_one_or_none()
+    user_topics = _extract_user_topics(raw_interests)
+
     query = """
     WITH dedup_user_feed AS (
         SELECT
@@ -220,7 +286,20 @@ async def get_user_feed(session: AsyncSession, user_id: int, limit: int = 50) ->
     LIMIT :limit
     """
     result = await session.execute(text(query), {"user_id": user_id, "limit": limit})
-    return [dict(row) for row in result.mappings().all()]
+    rows = [dict(row) for row in result.mappings().all()]
+
+    if not user_topics:
+        return rows
+
+    filtered: list[dict[str, Any]] = []
+    for row in rows:
+        if bool(row.get("saved")):
+            filtered.append(row)
+            continue
+        if _persona_matches_topics(row.get("target_persona"), user_topics):
+            filtered.append(row)
+
+    return filtered
 
 
 async def record_interaction(session: AsyncSession, payload: dict[str, Any]) -> dict[str, Any]:
