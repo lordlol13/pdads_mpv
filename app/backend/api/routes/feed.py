@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.backend.api.dependencies import get_current_user, get_db_session
@@ -24,13 +24,18 @@ from app.backend.services.feed_service import (
 router = APIRouter(prefix="/feed", tags=["feed"])
 
 
+def _current_user_id(current_user: dict) -> int:
+    return int(current_user["id"])
+
+
 @router.get("/me", response_model=list[FeedItem])
 async def my_feed(
     limit: int = Query(default=50, ge=1, le=200),
     current_user: dict = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ):
-    items = await get_user_feed(session, current_user["id"], limit)
+    user_id = _current_user_id(current_user)
+    items = await get_user_feed(session, user_id, limit)
     return [FeedItem(**item) for item in items]
 
 
@@ -40,8 +45,12 @@ async def create_interaction(
     current_user: dict = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ):
-    if payload.user_id != current_user["id"]:
-        raise HTTPException(status_code=403, detail="Cannot create interaction for another user")
+    user_id = _current_user_id(current_user)
+    if payload.user_id != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cannot create interaction for another user",
+        )
 
     record = await record_user_interaction(session, payload.model_dump())
     return InteractionResponse(id=record["id"], status="created")
@@ -53,7 +62,8 @@ async def toggle_saved_item(
     current_user: dict = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ):
-    saved = await toggle_saved_news(session, current_user["id"], payload.ai_news_id)
+    user_id = _current_user_id(current_user)
+    saved = await toggle_saved_news(session, user_id, payload.ai_news_id)
     return SavedToggleResponse(ai_news_id=payload.ai_news_id, saved=saved)
 
 
@@ -63,10 +73,11 @@ async def list_comments(
     current_user: dict = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ):
+    user_id = _current_user_id(current_user)
     if ai_news_id <= 0:
-        raise HTTPException(status_code=400, detail="ai_news_id must be > 0")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ai_news_id must be > 0")
 
-    rows = await get_comments_tree(session, user_id=current_user["id"], ai_news_id=ai_news_id)
+    rows = await get_comments_tree(session, user_id=user_id, ai_news_id=ai_news_id)
     return [CommentItem(**row) for row in rows]
 
 
@@ -76,10 +87,11 @@ async def add_comment(
     current_user: dict = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ):
+    user_id = _current_user_id(current_user)
     try:
         row = await create_comment(
             session,
-            user_id=current_user["id"],
+            user_id=user_id,
             ai_news_id=payload.ai_news_id,
             parent_comment_id=payload.parent_comment_id,
             content=payload.content,
@@ -87,8 +99,8 @@ async def add_comment(
     except ValueError as exc:
         detail = str(exc)
         if detail in {"ai_news_not_found", "parent_comment_not_found"}:
-            raise HTTPException(status_code=404, detail=detail) from exc
-        raise HTTPException(status_code=400, detail=detail) from exc
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=detail) from exc
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail) from exc
 
     return CommentItem(**row)
 
@@ -99,14 +111,15 @@ async def toggle_comment_like_route(
     current_user: dict = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ):
+    user_id = _current_user_id(current_user)
     if comment_id <= 0:
-        raise HTTPException(status_code=400, detail="comment_id must be > 0")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="comment_id must be > 0")
 
     try:
-        result = await toggle_comment_like(session, user_id=current_user["id"], comment_id=comment_id)
+        result = await toggle_comment_like(session, user_id=user_id, comment_id=comment_id)
     except ValueError as exc:
         if str(exc) == "comment_not_found":
-            raise HTTPException(status_code=404, detail="comment_not_found") from exc
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="comment_not_found") from exc
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     return CommentLikeToggleResponse(**result)

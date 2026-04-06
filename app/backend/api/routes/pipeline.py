@@ -1,6 +1,5 @@
 from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.backend.core.celery_app import celery_app
 from app.backend.db.session import SessionLocal

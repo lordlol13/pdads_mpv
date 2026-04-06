@@ -8,13 +8,13 @@ from app.backend.schemas.coercion import coerce_json_string_list
 class EnqueueResponse(BaseModel):
     task_id: str
     raw_news_id: int
-    status: str  # queued
+    status: str
 
 
 class TaskStatusResponse(BaseModel):
     task_id: str
-    state: str   # PENDING/STARTED/SUCCESS/FAILURE
-    result: dict | None = None
+    state: str
+    result: dict[str, object] | None = None
 
 
 class RawNewsItem(BaseModel):

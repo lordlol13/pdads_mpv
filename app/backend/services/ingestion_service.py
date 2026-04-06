@@ -8,6 +8,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.backend.db.sql_helpers import sql_timestamp_now
 
 
+RAW_NEWS_SELECT_COLUMNS = """
+id, title, source_url, raw_text, category, region, is_urgent,
+created_at, process_status, error_message, attempt_count, content_hash
+"""
+
+
 def build_content_hash(title: str, raw_text: str | None, source_url: str | None) -> str:
     payload = "|".join([title.strip(), (raw_text or "").strip(), (source_url or "").strip()])
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
@@ -22,13 +28,12 @@ async def create_raw_news(session: AsyncSession, payload: dict[str, Any]) -> dic
 
     existing_query = """
     SELECT
-        id, title, source_url, raw_text, category, region, is_urgent,
-        created_at, process_status, error_message, attempt_count, content_hash
+        {columns}
     FROM raw_news
     WHERE content_hash = :content_hash
     ORDER BY id
     LIMIT 1
-    """
+    """.format(columns=RAW_NEWS_SELECT_COLUMNS)
     existing_result = await session.execute(text(existing_query), {"content_hash": content_hash})
     existing_row = existing_result.mappings().first()
     if existing_row is not None:
@@ -45,8 +50,7 @@ async def create_raw_news(session: AsyncSession, payload: dict[str, Any]) -> dic
         {now_sql}, 'pending', NULL, 0, :content_hash
     )
     RETURNING
-        id, title, source_url, raw_text, category, region, is_urgent,
-        created_at, process_status, error_message, attempt_count, content_hash
+        {RAW_NEWS_SELECT_COLUMNS}
     """
     result = await session.execute(
         text(insert_query),

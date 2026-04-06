@@ -33,9 +33,27 @@ MUSIC_VIDEO_TERMS = (
 )
 
 
+def _build_media_topic(topic: str) -> str:
+    value = str(topic or "").strip()
+    return value or "news"
+
+
+def _collect_unique_urls(values: list[str], limit: int) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        candidate = str(value or "").strip()
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        result.append(candidate)
+        if len(result) >= limit:
+            break
+    return result
+
+
 async def fetch_media_urls(topic: str, limit: int = 5) -> list[str]:
-    if not topic:
-        topic = "news"
+    topic = _build_media_topic(topic)
 
     async def _fetch() -> dict[str, Any]:
         if not settings.NEWS_API_KEY:
@@ -64,10 +82,10 @@ async def fetch_media_urls(topic: str, limit: int = 5) -> list[str]:
     urls: list[str] = []
     for article in payload.get("articles") or []:
         image_url = article.get("urlToImage")
-        if image_url and image_url not in urls:
-            urls.append(image_url)
-        if len(urls) >= limit:
-            break
+        if image_url:
+            urls.append(str(image_url))
+
+    urls = _collect_unique_urls(urls, limit)
 
     if urls:
         return urls
@@ -90,7 +108,7 @@ async def fetch_video_urls(
 ) -> list[str]:
     normalized_country = (country_code or "").strip().upper()
     country_hints = COUNTRY_VIDEO_HINTS.get(normalized_country, [])
-    query_parts = [topic.strip() if topic else "news"]
+    query_parts = [_build_media_topic(topic)]
     if profession:
         query_parts.append(profession.strip())
     if geo:
@@ -147,11 +165,9 @@ async def fetch_video_urls(
         if any(term in snippet_title for term in MUSIC_VIDEO_TERMS):
             continue
 
-        video_url = f"https://www.youtube.com/watch?v={video_id}"
-        if video_url not in videos:
-            videos.append(video_url)
-        if len(videos) >= limit:
-            break
+        videos.append(f"https://www.youtube.com/watch?v={video_id}")
+
+    videos = _collect_unique_urls(videos, limit)
 
     if videos:
         return videos

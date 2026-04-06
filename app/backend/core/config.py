@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     GROQ_API_KEY: str = ""
     GROQ_MODEL: str = "llama-3.3-70b-versatile"
     DEEPSEEK_API_KEY: str = ""
-    NEWS_API_KEY: str = ""   # <-- add this
+    NEWS_API_KEY: str = ""
 
     JWT_SECRET_KEY: str = ""
     JWT_ALGORITHM: str = "HS256"
@@ -67,7 +67,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
-        extra="ignore"   # <-- optional safety: ignore unknown env vars
+        extra="ignore"
     )
 
     @property

@@ -10,6 +10,18 @@ from app.backend.db.sql_helpers import sql_timestamp_now
 _SOCIAL_TABLES_READY_DIALECTS: set[str] = set()
 
 
+def _normalize_topics(values: list[str]) -> list[str]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        item = str(value or "").strip().lower()
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        normalized.append(item)
+    return normalized
+
+
 def _extract_user_topics(raw_interests: Any) -> list[str]:
     payload: dict[str, Any] = {}
     if isinstance(raw_interests, dict):
@@ -28,29 +40,19 @@ def _extract_user_topics(raw_interests: Any) -> list[str]:
         if isinstance(raw_list, list):
             values.extend([str(item).strip().lower() for item in raw_list if str(item).strip()])
 
-    deduped: list[str] = []
-    seen: set[str] = set()
-    for value in values:
-        if value in seen:
-            continue
-        seen.add(value)
-        deduped.append(value)
-
-    return deduped
+    return _normalize_topics(values)
 
 
 def _persona_matches_topics(target_persona: str | None, topics: list[str]) -> bool:
-    if not topics:
+    normalized_topics = _normalize_topics(topics)
+    if not normalized_topics:
         return True
 
     persona = str(target_persona or "").strip().lower()
     if not persona:
         return False
 
-    for topic in topics:
-        normalized = str(topic).strip().lower()
-        if not normalized:
-            continue
+    for normalized in normalized_topics:
         if normalized == "general":
             if persona == "general" or persona.startswith("general|"):
                 return True
@@ -280,8 +282,8 @@ async def get_user_feed(session: AsyncSession, user_id: int, limit: int = 50) ->
         AND sn.ai_news_id = uf.ai_news_id
     LEFT JOIN comment_counts cc
         ON cc.ai_news_id = uf.ai_news_id
-        WHERE uf.user_id = :user_id
-            AND NOT (COALESCE(li.viewed, FALSE) = TRUE AND sn.id IS NULL)
+    WHERE uf.user_id = :user_id
+        AND NOT (COALESCE(li.viewed, FALSE) = TRUE AND sn.id IS NULL)
     ORDER BY rank_score DESC, uf.id DESC
     LIMIT :limit
     """

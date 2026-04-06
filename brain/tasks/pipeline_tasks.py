@@ -88,6 +88,8 @@ async def _set_status(
     error_message: Optional[str] = None,
     attempt_count: Optional[int] = None,
 ) -> None:
+
+
     query = """
     UPDATE raw_news
     SET process_status = :status,
@@ -124,14 +126,6 @@ async def _fetch_raw_news(session: AsyncSession, raw_news_id: int) -> Optional[d
     if row is None:
         return None
     return dict(row)
-
-
-async def _upsert_ai_news(session: AsyncSession, raw_row: dict[str, Any]) -> int:
-    return await _upsert_ai_news_for_persona(
-        session,
-        raw_row,
-        {"topic": "general", "profession": None, "geo": None, "label": "general"},
-    )
 
 
 async def _load_cohort_personas(session: AsyncSession) -> list[dict[str, str | None]]:

@@ -23,6 +23,27 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _normalize_string_list(values: list[str] | None) -> list[str]:
+    if not values:
+        return []
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        item = str(value or "").strip()
+        if not item:
+            continue
+
+        dedupe_key = item.lower()
+        if dedupe_key in seen:
+            continue
+
+        seen.add(dedupe_key)
+        normalized.append(item)
+
+    return normalized
+
+
 def _to_utc_datetime(value: Any) -> datetime | None:
     if value is None:
         return None
@@ -48,9 +69,7 @@ def _parse_user_dict(row: Any) -> dict[str, Any]:
     """Normalize user row: interests as dict (JSONB, JSON text, or malformed)."""
     user_dict = dict(row) if hasattr(row, "keys") else row
     raw = user_dict.get("interests")
-    if raw is None:
-        pass
-    elif isinstance(raw, dict):
+    if isinstance(raw, dict):
         user_dict["interests"] = dict(raw)
     elif isinstance(raw, str):
         try:
@@ -69,14 +88,7 @@ def _hash_verification_code(verification_id: str, code: str) -> str:
 
 
 async def _seed_user_feed_for_new_user(session: AsyncSession, *, user_id: int, topics: list[str]) -> int:
-    normalized_topics: list[str] = []
-    seen_topics: set[str] = set()
-    for topic in topics:
-        value = str(topic).strip().lower()
-        if not value or value in seen_topics:
-            continue
-        seen_topics.add(value)
-        normalized_topics.append(value)
+    normalized_topics = [value.lower() for value in _normalize_string_list(topics)]
 
     def _persona_matches(persona: str, topic: str) -> bool:
         if topic == "general":
@@ -460,9 +472,9 @@ async def complete_verified_registration(
     if await check_email_exists(session, email):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already exists")
 
-    topics_clean = [item.strip() for item in interests if item and item.strip()]
-    custom_clean = [item.strip() for item in (custom_interests or []) if item and item.strip()]
-    all_topics = list(dict.fromkeys([*topics_clean, *custom_clean]))
+    topics_clean = _normalize_string_list(interests)
+    custom_clean = _normalize_string_list(custom_interests)
+    all_topics = _normalize_string_list([*topics_clean, *custom_clean])
     if not all_topics:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="At least one interest is required")
 

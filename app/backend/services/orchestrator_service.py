@@ -21,6 +21,10 @@ def build_cache_key(prefix: str, payload: dict[str, Any]) -> str:
     return f"{prefix}:{digest}"
 
 
+def _serialize_cache_value(value: dict[str, Any]) -> str:
+    return json.dumps(value, ensure_ascii=False)
+
+
 async def get_or_set_json(
     key: str,
     ttl_seconds: int,
@@ -30,10 +34,16 @@ async def get_or_set_json(
     try:
         cached = await client.get(key)
         if cached:
-            return json.loads(cached)
+            try:
+                parsed = json.loads(cached)
+                if isinstance(parsed, dict):
+                    return parsed
+            except json.JSONDecodeError:
+                # Malformed cache payload should not break request flow.
+                await client.delete(key)
 
         value = await fetcher()
-        await client.set(key, json.dumps(value, ensure_ascii=False), ex=ttl_seconds)
+        await client.set(key, _serialize_cache_value(value), ex=ttl_seconds)
         return value
     except RedisError:
         # Redis is optional for local MVP. Fall back to direct fetch without caching.

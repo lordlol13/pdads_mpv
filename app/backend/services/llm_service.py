@@ -26,10 +26,6 @@ def _word_count(text: str) -> int:
     return len([w for w in text.split() if w.strip()])
 
 
-def _normalize_spaces(text: str) -> str:
-    return " ".join((text or "").split())
-
-
 def _clean_text_artifacts(text: str) -> str:
     value = (text or "")
 
@@ -127,13 +123,6 @@ def _fit_word_bounds_with_paragraphs(text: str, min_words: int, max_words: int) 
     return combined.strip()
 
 
-def _fit_word_bounds(text: str, min_words: int, max_words: int) -> str:
-    words = [w for w in (text or "").split() if w.strip()]
-    if len(words) > max_words:
-        words = words[:max_words]
-    return " ".join(words)
-
-
 def _ensure_structured_personal_text(
     text: str,
     *,
@@ -191,26 +180,78 @@ def _normalize_score(raw_score: float, fallback_score: float) -> float:
     return round(score, 2)
 
 
-def _build_primary_client() -> tuple[AsyncOpenAI | None, str | None, str]:
-    if settings.GROQ_API_KEY:
-        return (
-            AsyncOpenAI(api_key=settings.GROQ_API_KEY, base_url="https://api.groq.com/openai/v1"),
-            settings.GROQ_MODEL,
-            "Groq",
-        )
-
+def _build_deepseek_client() -> tuple[AsyncOpenAI | None, str | None]:
     if settings.DEEPSEEK_API_KEY:
         return (
             AsyncOpenAI(api_key=settings.DEEPSEEK_API_KEY, base_url="https://api.deepseek.com"),
             "deepseek-chat",
-            "DeepSeek",
         )
 
-    return None, None, "fallback"
+    return None, None
 
 
-def _gemini_review_enabled() -> bool:
-    return bool(settings.GEMINI_REVIEW_ENABLED and settings.GEMINI_API_KEY)
+def _gemini_generation_available() -> bool:
+    return bool(settings.GEMINI_API_KEY)
+
+
+async def _generate_with_gemini(
+    *,
+    title: str,
+    raw_text: str,
+    category: str | None,
+    target_persona: str,
+    region: str | None,
+    profession: str | None,
+    user_geo: str | None,
+    rewrite_round: int,
+) -> dict[str, str | float] | None:
+    if not _gemini_generation_available():
+        return None
+
+    try:
+        import google.generativeai as genai
+
+        genai.configure(api_key=settings.GEMINI_API_KEY)
+        gemini_model = genai.GenerativeModel(settings.GEMINI_MODEL)
+        prompt = json.dumps(
+            {
+                "task": "generate_personalized_news_rewrite",
+                "constraints": {
+                    "format": "strict_json",
+                    "required_keys": [
+                        "final_title",
+                        "final_text",
+                        "ai_score",
+                        "category",
+                        "target_persona",
+                    ],
+                    "paragraphs": "3-5",
+                    "words": [settings.PIPELINE_TEXT_MIN_WORDS, settings.PIPELINE_TEXT_MAX_WORDS],
+                    "no_markers": ["Lid:", "Yanglik:", "Новость:"],
+                },
+                "payload": {
+                    "title": title,
+                    "raw_text": raw_text,
+                    "category": category,
+                    "target_persona": target_persona,
+                    "region": region,
+                    "profession": profession,
+                    "user_geo": user_geo,
+                    "rewrite_round": rewrite_round,
+                },
+            },
+            ensure_ascii=False,
+        )
+
+        response = await asyncio.to_thread(gemini_model.generate_content, prompt)
+        content = _strip_json_code_fence(getattr(response, "text", "") or "{}")
+        data = json.loads(content)
+        if not isinstance(data, dict):
+            return None
+        return data
+    except Exception:
+        logger.exception("Gemini generation failed")
+        return None
 
 
 async def generate_news(
@@ -242,7 +283,40 @@ async def generate_news(
         "combined_score": 8.5,
     }
 
-    client, model_name, provider_name = _build_primary_client()
+    gemini_payload = await _generate_with_gemini(
+        title=title,
+        raw_text=raw_text,
+        category=category,
+        target_persona=target_persona,
+        region=region,
+        profession=profession,
+        user_geo=user_geo,
+        rewrite_round=rewrite_round,
+    )
+    if gemini_payload is not None:
+        gemini_score = _normalize_score(
+            float(gemini_payload.get("ai_score") or gemini_payload.get("gemini_score") or fallback["ai_score"]),
+            float(fallback["ai_score"]),
+        )
+        return {
+            "final_title": str(gemini_payload.get("final_title") or fallback["final_title"]),
+            "final_text": _ensure_structured_personal_text(
+                str(gemini_payload.get("final_text") or fallback["final_text"]),
+                title=title,
+                target_persona=target_persona,
+                profession=profession,
+                geo=user_geo or region,
+                raw_text=raw_text,
+            ),
+            "ai_score": gemini_score,
+            "category": str(gemini_payload.get("category") or fallback["category"]),
+            "target_persona": str(gemini_payload.get("target_persona") or fallback["target_persona"]),
+            "deepseek_score": gemini_score,
+            "gemini_score": gemini_score,
+            "combined_score": gemini_score,
+        }
+
+    client, model_name = _build_deepseek_client()
     if client is None or model_name is None:
         return fallback
 
@@ -284,7 +358,8 @@ async def generate_news(
         content = response.choices[0].message.content or "{}"
         data = json.loads(content)
         ai_score = _normalize_score(float(data.get("ai_score") or fallback["ai_score"]), float(fallback["ai_score"]))
-        primary_output = {
+
+        return {
             "final_title": str(data.get("final_title") or fallback["final_title"]),
             "final_text": _ensure_structured_personal_text(
                 str(data.get("final_text") or fallback["final_text"]),
@@ -298,65 +373,11 @@ async def generate_news(
             "category": str(data.get("category") or fallback["category"]),
             "target_persona": str(data.get("target_persona") or fallback["target_persona"]),
             "deepseek_score": ai_score,
-            "gemini_score": fallback["gemini_score"],
+            "gemini_score": ai_score,
             "combined_score": ai_score,
         }
-
-        if not _gemini_review_enabled():
-            return primary_output
-
-        try:
-            import google.generativeai as genai
-
-            genai.configure(api_key=settings.GEMINI_API_KEY)
-            gemini_model = genai.GenerativeModel(settings.GEMINI_MODEL)
-            gemini_prompt = json.dumps(
-                {
-                    "task": "review_and_improve_news_rewrite",
-                    "input": primary_output,
-                    "instructions": [
-                        "Сохрани язык исходного текста (или русский при неоднозначности).",
-                        "Убери все служебные метки вроде Lid/Yanglik/Новость и любые артефакты кодировки.",
-                        "Сделай 3-5 читабельных абзацев с плавной логикой и ясными переходами.",
-                        "Оцени качество и верни gemini_score от 0 до 10.",
-                        "Return only JSON with final_title, final_text, ai_score, category, target_persona, gemini_score.",
-                    ],
-                },
-                ensure_ascii=False,
-            )
-            gemini_response = await asyncio.to_thread(gemini_model.generate_content, gemini_prompt)
-            gemini_content = getattr(gemini_response, "text", "") or "{}"
-            gemini_data = json.loads(_strip_json_code_fence(gemini_content))
-
-            deepseek_score = _normalize_score(float(primary_output["deepseek_score"]), float(primary_output["deepseek_score"]))
-            gemini_score = _normalize_score(
-                float(gemini_data.get("gemini_score") or gemini_data.get("ai_score") or deepseek_score),
-                deepseek_score,
-            )
-            combined_score = round((deepseek_score + gemini_score) / 2, 2)
-
-            return {
-                "final_title": str(gemini_data.get("final_title") or primary_output["final_title"]),
-                "final_text": _ensure_structured_personal_text(
-                    str(gemini_data.get("final_text") or primary_output["final_text"]),
-                    title=title,
-                    target_persona=target_persona,
-                    profession=profession,
-                    geo=user_geo or region,
-                    raw_text=raw_text,
-                ),
-                "ai_score": combined_score,
-                "category": str(gemini_data.get("category") or primary_output["category"]),
-                "target_persona": str(gemini_data.get("target_persona") or primary_output["target_persona"]),
-                "deepseek_score": deepseek_score,
-                "gemini_score": gemini_score,
-                "combined_score": combined_score,
-            }
-        except Exception:
-            logger.exception("Gemini review failed, returning %s output", provider_name)
-            return primary_output
     except Exception:
-        logger.exception("%s generation failed, falling back to mock output", provider_name)
+        logger.exception("DeepSeek generation failed, falling back to mock output")
         return fallback
 
 

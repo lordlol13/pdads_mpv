@@ -2,16 +2,21 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
+import json
+import logging
 import re
 from typing import Any
 from xml.etree import ElementTree as ET
 
 import httpx
+from openai import AsyncOpenAI
 
 from app.backend.core.config import settings
 from app.backend.services.orchestrator_service import build_cache_key, get_or_set_json
 
 NEWS_API_URL = "https://newsapi.org/v2/everything"
+logger = logging.getLogger(__name__)
+_GROQ_BACKOFF_UNTIL: datetime | None = None
 
 RSS_SOURCE_WHITELIST: dict[str, list[dict[str, Any]]] = {
     "global": [
@@ -49,6 +54,18 @@ def _normalize_topic_value(topic: str) -> str:
     return re.sub(r"\s+", " ", str(topic or "").strip().lower())
 
 
+def _normalize_topics(topics: list[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for topic in topics:
+        value = _normalize_topic_value(topic)
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
+
+
 def _topic_variants(topic: str) -> list[str]:
     normalized = _normalize_topic_value(topic)
     if not normalized:
@@ -72,7 +89,7 @@ def _topic_variants(topic: str) -> list[str]:
 
 
 def _expand_topics_for_query(topics: list[str]) -> list[str]:
-    normalized_topics = [_normalize_topic_value(topic) for topic in topics if _normalize_topic_value(topic)]
+    normalized_topics = _normalize_topics(topics)
     specific_topics = [topic for topic in normalized_topics if topic != "general"]
 
     if not specific_topics:
@@ -90,6 +107,220 @@ def _expand_topics_for_query(topics: list[str]) -> list[str]:
             expanded.append(variant)
 
     return expanded or specific_topics
+
+
+def _merge_topics_preserving_order(primary: list[str], secondary: list[str]) -> list[str]:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for raw in [*primary, *secondary]:
+        value = _normalize_topic_value(raw)
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        merged.append(value)
+    return merged
+
+
+def _build_interest_classifier_client() -> tuple[AsyncOpenAI | None, str | None]:
+    global _GROQ_BACKOFF_UNTIL
+
+    if not settings.GROQ_API_KEY:
+        return None, None
+
+    if _GROQ_BACKOFF_UNTIL and datetime.now(timezone.utc) < _GROQ_BACKOFF_UNTIL:
+        return None, None
+
+    return (
+        AsyncOpenAI(api_key=settings.GROQ_API_KEY, base_url="https://api.groq.com/openai/v1"),
+        settings.GROQ_MODEL,
+    )
+
+
+def _mark_groq_backoff_if_needed(exc: Exception) -> None:
+    global _GROQ_BACKOFF_UNTIL
+
+    message = str(exc).lower()
+    if "rate limit" not in message and "429" not in message and "rate_limit" not in message:
+        return
+
+    _GROQ_BACKOFF_UNTIL = datetime.now(timezone.utc) + timedelta(minutes=10)
+
+
+async def _classify_interest_topics(topics: list[str]) -> list[str]:
+    normalized_topics = _normalize_topics(topics)
+    if not normalized_topics:
+        return ["general"]
+
+    if "general" in normalized_topics and len(normalized_topics) == 1:
+        return ["general"]
+
+    client, model_name = _build_interest_classifier_client()
+    if client is None or not model_name:
+        return normalized_topics
+
+    try:
+        response = await client.chat.completions.create(
+            model=model_name,
+            temperature=0.1,
+            response_format={"type": "json_object"},
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You classify user interests for news ranking. "
+                        "Return strict JSON: {\"query_terms\": string[], \"strict_topics\": string[]}. "
+                        "query_terms: 4-10 expanded search phrases for NewsAPI; "
+                        "strict_topics: 2-8 canonical topics for strict filtering. "
+                        "Do not add topics that are not present in the original interests."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {
+                            "interests": normalized_topics,
+                            "language": "ru",
+                            "goal": "pick relevant newsapi news",
+                        },
+                        ensure_ascii=False,
+                    ),
+                },
+            ],
+        )
+        payload = json.loads(response.choices[0].message.content or "{}")
+
+        strict_topics = payload.get("strict_topics") if isinstance(payload, dict) else []
+        query_terms = payload.get("query_terms") if isinstance(payload, dict) else []
+
+        combined: list[str] = []
+        seen: set[str] = set()
+        for raw_value in [*(strict_topics or []), *(query_terms or [])]:
+            value = _normalize_topic_value(str(raw_value))
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            combined.append(value)
+
+        if combined:
+            return combined[:12]
+    except Exception as exc:
+        _mark_groq_backoff_if_needed(exc)
+        logger.warning("interest classification fallback triggered: %s", exc)
+
+    return normalized_topics
+
+
+async def _classify_interest_topics_cached(topics: list[str]) -> list[str]:
+    normalized_topics = _normalize_topics(topics)
+    if not normalized_topics:
+        return ["general"]
+    if not settings.GROQ_API_KEY:
+        return normalized_topics
+
+    cache_key = build_cache_key(
+        "newsapi:interest-classifier",
+        {
+            "topics": normalized_topics,
+            "model": settings.GROQ_MODEL,
+            "provider": "groq",
+        },
+    )
+
+    async def _fetch() -> dict[str, Any]:
+        classified = await _classify_interest_topics(normalized_topics)
+        return {"topics": classified}
+
+    payload = await get_or_set_json(cache_key, ttl_seconds=3600, fetcher=_fetch)
+    classified_topics = payload.get("topics") if isinstance(payload, dict) else []
+    if isinstance(classified_topics, list):
+        result = _normalize_topics([str(value) for value in classified_topics])
+        if result:
+            return result
+
+    return normalized_topics
+
+
+async def _ai_select_newsapi_articles(
+    topics: list[str],
+    newsapi_articles: list[dict[str, Any]],
+    max_items: int,
+) -> list[dict[str, Any]]:
+    if not newsapi_articles:
+        return []
+
+    client, model_name = _build_interest_classifier_client()
+    if client is None or not model_name:
+        return newsapi_articles[:max_items]
+
+    sampled = newsapi_articles[: min(len(newsapi_articles), 30)]
+    compact_articles = []
+    for idx, article in enumerate(sampled):
+        compact_articles.append(
+            {
+                "idx": idx,
+                "title": str(article.get("title") or "")[:240],
+                "description": str(article.get("description") or "")[:280],
+                "content": str(article.get("content") or "")[:360],
+            }
+        )
+
+    try:
+        response = await client.chat.completions.create(
+            model=model_name,
+            temperature=0.0,
+            response_format={"type": "json_object"},
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You rank article relevance for a user profile. Return strict JSON as "
+                        "{\"selected_indices\": number[]}. Select only truly relevant articles "
+                        "for the provided user interests."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {
+                            "topics": topics,
+                            "limit": int(max_items),
+                            "articles": compact_articles,
+                        },
+                        ensure_ascii=False,
+                    ),
+                },
+            ],
+        )
+        payload = json.loads(response.choices[0].message.content or "{}")
+        selected_indices = payload.get("selected_indices") if isinstance(payload, dict) else []
+
+        selected: list[dict[str, Any]] = []
+        seen_idx: set[int] = set()
+        for raw_idx in selected_indices or []:
+            try:
+                idx = int(raw_idx)
+            except (TypeError, ValueError):
+                continue
+            if idx < 0 or idx >= len(sampled) or idx in seen_idx:
+                continue
+            seen_idx.add(idx)
+            selected.append(sampled[idx])
+            if len(selected) >= max_items:
+                break
+
+        if selected:
+            for idx, article in enumerate(sampled):
+                if idx in seen_idx:
+                    continue
+                selected.append(article)
+                if len(selected) >= max_items:
+                    break
+            return selected[:max_items]
+    except Exception as exc:
+        _mark_groq_backoff_if_needed(exc)
+        logger.warning("news selection fallback triggered: %s", exc)
+
+    return sampled[:max_items]
 
 
 def _normalize_article(article: dict[str, Any]) -> dict[str, Any]:
@@ -165,7 +396,7 @@ def _to_newsapi_timestamp(raw_value: str | None) -> str | None:
 
 
 def _article_matches_topics(article: dict[str, Any], topics: list[str]) -> bool:
-    normalized_topics = [_normalize_topic_value(topic) for topic in topics if _normalize_topic_value(topic)]
+    normalized_topics = _normalize_topics(topics)
     specific_topics = [topic for topic in normalized_topics if topic != "general"]
 
     if not specific_topics:
@@ -430,25 +661,37 @@ async def fetch_articles_for_topics(
     if not unique_topics:
         unique_topics = ["general"]
 
+    classified_topics = await _classify_interest_topics_cached(unique_topics)
+    if not classified_topics:
+        classified_topics = unique_topics
+    effective_topics = _merge_topics_preserving_order(unique_topics, classified_topics)
+    if not effective_topics:
+        effective_topics = unique_topics
+
     preferred_domains = _preferred_domains_for_countries(country_codes)
 
     async def _fetch() -> dict[str, Any]:
         rss_articles = await _fetch_rss_whitelist_articles(
-            unique_topics,
+            effective_topics,
             country_codes,
             limit=max(page_size * 2, 24),
         )
 
         try:
             newsapi_articles = await _fetch_newsapi_articles(
-                unique_topics,
+                effective_topics,
                 page_size=max(page_size, 12),
                 preferred_domains=preferred_domains,
             )
         except httpx.HTTPError:
             newsapi_articles = []
 
-        newsapi_articles = [item for item in newsapi_articles if _article_matches_topics(item, unique_topics)]
+        newsapi_articles = [item for item in newsapi_articles if _article_matches_topics(item, effective_topics)]
+        newsapi_articles = await _ai_select_newsapi_articles(
+            effective_topics,
+            newsapi_articles,
+            max_items=max(page_size, 12),
+        )
 
         merged_articles = _dedupe_articles_by_url_or_title(rss_articles + newsapi_articles)
         return {"articles": merged_articles}
@@ -457,6 +700,8 @@ async def fetch_articles_for_topics(
         "newsapi:everything",
         {
             "topics": unique_topics,
+            "classified_topics": classified_topics,
+            "effective_topics": effective_topics,
             "page_size": page_size,
             "country_codes": [code.strip().upper() for code in (country_codes or []) if code and code.strip()],
             "domains": preferred_domains,

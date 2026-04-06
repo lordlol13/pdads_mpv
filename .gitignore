@@ -170,13 +170,8 @@ cython_debug/
 # Ruff stuff:
 .ruff_cache/
 
-# PyPI configuration file
 .pypirc
 
-# Cursor  
-#  Cursor is an AI-powered code editor.`.cursorignore` specifies files/directories to 
-#  exclude from AI features like autocomplete and code analysis. Recommended for sensitive data
-#  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
 
@@ -206,3 +201,13 @@ dist/
 **/node_modules/
 **/dist/
 .vite/
+
+# Project runtime artifacts
+celerybeat-schedule.*
+scripts/.runtime/
+scripts/run_all.ps1
+
+# Local env variants (keep only template in git)
+.env.*
+!.env.example
+

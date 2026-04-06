@@ -4,6 +4,10 @@ from typing import Any
 from pydantic import BaseModel, Field, model_validator
 
 
+def _clean_non_empty_items(values: list[str]) -> list[str]:
+    return [item.strip() for item in values if item and item.strip()]
+
+
 class AuthRegisterRequest(BaseModel):
     username: str = Field(min_length=3, max_length=100)
     email: str = Field(min_length=5, max_length=255)
@@ -64,8 +68,8 @@ class AuthRegisterCompleteRequest(BaseModel):
 
     @model_validator(mode="after")
     def _validate_interests(self) -> "AuthRegisterCompleteRequest":
-        cleaned = [item.strip() for item in self.interests if item and item.strip()]
-        custom_cleaned = [item.strip() for item in self.custom_interests if item and item.strip()]
+        cleaned = _clean_non_empty_items(self.interests)
+        custom_cleaned = _clean_non_empty_items(self.custom_interests)
         if not cleaned and not custom_cleaned:
             raise ValueError("At least one interest is required")
         if not (self.country_code and self.country_code.strip()):
