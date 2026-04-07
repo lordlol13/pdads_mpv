@@ -78,6 +78,23 @@ class Settings(BaseSettings):
         return values or ["http://127.0.0.1:8000"]
 
     @model_validator(mode="after")
+    def _normalise_database_url(self) -> "Settings":
+        """Ensure DATABASE_URL always uses the asyncpg driver.
+
+        When DATABASE_URL is supplied via an environment variable it is common
+        to use the bare ``postgresql://`` (or ``postgres://``) scheme which
+        causes SQLAlchemy to attempt loading the synchronous psycopg2 driver.
+        Rewrite any such scheme to ``postgresql+asyncpg://`` so the async
+        driver is always selected, regardless of how the variable is set.
+        """
+        url = self.DATABASE_URL or ""
+        for bare in ("postgres://", "postgresql://"):
+            if url.startswith(bare):
+                self.DATABASE_URL = "postgresql+asyncpg://" + url[len(bare):]
+                break
+        return self
+
+    @model_validator(mode="after")
     def _validate_security(self) -> "Settings":
         env = (self.APP_ENV or "dev").strip().lower()
         weak_values = {"", "change_me_super_secret", "changeme", "secret"}
