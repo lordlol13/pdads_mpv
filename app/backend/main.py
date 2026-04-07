@@ -14,11 +14,17 @@ from app.backend.core.config import settings
 app = FastAPI(title="PDADS MVP")
 
 cors_origins = settings.cors_allow_origins
+cors_origin_regex = settings.cors_allow_origin_regex
+
+# credentials=True is incompatible with a bare wildcard origin ("*").
+# When specific origins or a regex are provided, credentials can be enabled
+# so cookies / Authorization headers are forwarded correctly.
 allow_credentials = "*" not in cors_origins
 
 app.add_middleware(
 	CORSMiddleware,
 	allow_origins=cors_origins,
+	allow_origin_regex=cors_origin_regex,
 	allow_credentials=allow_credentials,
 	allow_methods=["*"],
 	allow_headers=["*"],

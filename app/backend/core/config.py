@@ -47,6 +47,9 @@ class Settings(BaseSettings):
         "http://127.0.0.1:5173,http://localhost:5173,"
         "http://127.0.0.1:8000,http://localhost:8000"
     )
+    # Optional regex pattern for dynamic origins (e.g. Vercel preview deployments).
+    # Example: https://.*\.vercel\.app
+    CORS_ALLOW_ORIGIN_REGEX: str = ""
 
     PIPELINE_MAX_ATTEMPTS: int = 1
     PIPELINE_TARGET_SCORE: float = 8.0
@@ -85,8 +88,31 @@ class Settings(BaseSettings):
 
     @property
     def cors_allow_origins(self) -> list[str]:
-        values = [item.strip() for item in self.CORS_ALLOW_ORIGINS.split(",") if item.strip()]
+        # Strip whitespace and newlines from each entry so multi-line env var
+        # values (common in Railway / Docker) are handled correctly.
+        raw = self.CORS_ALLOW_ORIGINS.replace("\n", ",").replace(";", ",")
+        values = [item.strip() for item in raw.split(",") if item.strip()]
         return values or ["http://127.0.0.1:8000"]
+
+    @property
+    def cors_allow_origin_regex(self) -> str | None:
+        """Return a compiled-ready regex string for dynamic origin matching.
+
+        If CORS_ALLOW_ORIGIN_REGEX is set explicitly, that value is used as-is.
+        Otherwise a sensible default is built that covers:
+          - all *.vercel.app subdomains (Vercel preview + production deployments)
+          - localhost on any port (development convenience)
+        """
+        explicit = (self.CORS_ALLOW_ORIGIN_REGEX or "").strip()
+        if explicit:
+            return explicit
+        # Default: Vercel preview/production domains + localhost dev origins.
+        return (
+            r"https://[a-zA-Z0-9-]+-[a-zA-Z0-9-]+\.vercel\.app"
+            r"|https://[a-zA-Z0-9-]+\.vercel\.app"
+            r"|http://localhost(:\d+)?"
+            r"|http://127\.0\.0\.1(:\d+)?"
+        )
 
     @model_validator(mode="after")
     def _normalize_runtime_urls(self) -> "Settings":
