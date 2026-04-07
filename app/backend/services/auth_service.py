@@ -98,7 +98,7 @@ async def _seed_user_feed_for_new_user(session: AsyncSession, *, user_id: int, t
     candidates_result = await session.execute(
         text(
             """
-            SELECT id, ai_score, target_persona
+            SELECT id, ai_score, target_persona, raw_news_id
             FROM ai_news
             ORDER BY created_at DESC, id DESC
             LIMIT 300
@@ -109,10 +109,15 @@ async def _seed_user_feed_for_new_user(session: AsyncSession, *, user_id: int, t
 
     selected: list[dict[str, Any]] = []
     selected_ids: set[int] = set()
+    selected_raw_news_ids: set[int] = set()
 
     for row in candidates:
         ai_news_id = int(row.get("id") or 0)
         if not ai_news_id or ai_news_id in selected_ids:
+            continue
+
+        raw_news_id = int(row.get("raw_news_id") or 0)
+        if raw_news_id and raw_news_id in selected_raw_news_ids:
             continue
 
         persona = str(row.get("target_persona") or "").strip().lower()
@@ -129,6 +134,8 @@ async def _seed_user_feed_for_new_user(session: AsyncSession, *, user_id: int, t
             continue
 
         selected_ids.add(ai_news_id)
+        if raw_news_id:
+            selected_raw_news_ids.add(raw_news_id)
         selected.append(
             {
                 "ai_news_id": ai_news_id,
@@ -140,9 +147,14 @@ async def _seed_user_feed_for_new_user(session: AsyncSession, *, user_id: int, t
 
     if not selected:
         selected_ids.clear()
+        selected_raw_news_ids.clear()
         for row in candidates:
             ai_news_id = int(row.get("id") or 0)
             if not ai_news_id or ai_news_id in selected_ids:
+                continue
+
+            raw_news_id = int(row.get("raw_news_id") or 0)
+            if raw_news_id and raw_news_id in selected_raw_news_ids:
                 continue
 
             persona = str(row.get("target_persona") or "").strip().lower()
@@ -150,6 +162,8 @@ async def _seed_user_feed_for_new_user(session: AsyncSession, *, user_id: int, t
                 continue
 
             selected_ids.add(ai_news_id)
+            if raw_news_id:
+                selected_raw_news_ids.add(raw_news_id)
             selected.append(
                 {
                     "ai_news_id": ai_news_id,
@@ -157,6 +171,32 @@ async def _seed_user_feed_for_new_user(session: AsyncSession, *, user_id: int, t
                 }
             )
             if len(selected) >= 12:
+                break
+
+    if not selected:
+        selected_ids.clear()
+        selected_raw_news_ids.clear()
+        # Final cold-start fallback: give latest unique stories regardless of persona,
+        # so a brand-new account never lands on an empty feed.
+        for row in candidates:
+            ai_news_id = int(row.get("id") or 0)
+            if not ai_news_id or ai_news_id in selected_ids:
+                continue
+
+            raw_news_id = int(row.get("raw_news_id") or 0)
+            if raw_news_id and raw_news_id in selected_raw_news_ids:
+                continue
+
+            selected_ids.add(ai_news_id)
+            if raw_news_id:
+                selected_raw_news_ids.add(raw_news_id)
+            selected.append(
+                {
+                    "ai_news_id": ai_news_id,
+                    "ai_score": float(row.get("ai_score") or 0.0),
+                }
+            )
+            if len(selected) >= 16:
                 break
 
     if not selected:
@@ -184,7 +224,7 @@ async def _seed_user_feed_for_new_user(session: AsyncSession, *, user_id: int, t
                 "ai_score": item["ai_score"],
             },
         )
-        inserted += int(result.rowcount or 0)
+        inserted += int(getattr(result, "rowcount", 0) or 0)
 
     return inserted
 

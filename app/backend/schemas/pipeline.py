@@ -21,6 +21,7 @@ class RawNewsItem(BaseModel):
     id: int
     title: str
     source_url: str | None
+    image_url: str | None
     raw_text: str | None
     category: str | None
     region: str | None

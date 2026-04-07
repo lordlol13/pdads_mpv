@@ -6,6 +6,7 @@ import json
 import logging
 import re
 from typing import Any
+from urllib.parse import parse_qs, unquote, urlparse
 from xml.etree import ElementTree as ET
 
 import httpx
@@ -179,7 +180,7 @@ async def _classify_interest_topics(topics: list[str]) -> list[str]:
                     "content": json.dumps(
                         {
                             "interests": normalized_topics,
-                            "language": "ru",
+                            "language": "uz",
                             "goal": "pick relevant newsapi news",
                         },
                         ensure_ascii=False,
@@ -333,13 +334,39 @@ def _normalize_article(article: dict[str, Any]) -> dict[str, Any]:
     return {
         "title": title or "Untitled",
         "raw_text": raw_text,
-        "source_url": article.get("url"),
+        "source_url": _unwrap_redirect_url(str(article.get("url") or "").strip()),
         "category": "general",
         "region": source.get("name") or "global",
         "is_urgent": False,
         "image_url": article.get("urlToImage"),
         "published_at": article.get("publishedAt"),
     }
+
+
+def _unwrap_redirect_url(url: str) -> str:
+    value = str(url or "").strip()
+    if not value:
+        return ""
+
+    current = value
+    for _ in range(3):
+        parsed = urlparse(current)
+        query = parse_qs(parsed.query)
+        next_url = ""
+        for key in ("url", "u", "continue", "redirect", "redirect_uri", "dest", "destination", "r"):
+            candidates = query.get(key)
+            if not candidates:
+                continue
+            candidate = unquote(str(candidates[0] or "").strip())
+            if candidate.lower().startswith(("http://", "https://")):
+                next_url = candidate
+                break
+
+        if not next_url:
+            break
+        current = next_url
+
+    return current
 
 
 def _tag_name(tag: str) -> str:
@@ -370,6 +397,37 @@ def _extract_link(node: ET.Element) -> str:
         if text_value:
             return text_value
     return ""
+
+
+def _extract_image_url(node: ET.Element) -> str | None:
+    for child in node.iter():
+        if child is node:
+            continue
+
+        tag = _tag_name(child.tag)
+        attrs = {str(k or "").lower(): str(v or "").strip() for k, v in child.attrib.items()}
+
+        if tag in {"content", "thumbnail"}:
+            # media:content and media:thumbnail usually expose image URL in url attr.
+            media_url = attrs.get("url") or attrs.get("href")
+            if media_url and media_url.lower().startswith(("http://", "https://")):
+                return media_url
+
+        if tag == "enclosure":
+            media_url = attrs.get("url") or attrs.get("href")
+            media_type = attrs.get("type", "").lower()
+            if media_url and media_url.lower().startswith(("http://", "https://")):
+                if ("image/" in media_type) or media_url.lower().endswith((".jpg", ".jpeg", ".png", ".webp", ".avif")):
+                    return media_url
+
+        if tag in {"image", "url"}:
+            text_value = (child.text or "").strip()
+            if text_value.lower().startswith(("http://", "https://")):
+                lowered = text_value.lower()
+                if lowered.endswith((".jpg", ".jpeg", ".png", ".webp", ".avif")) or "image" in lowered:
+                    return text_value
+
+    return None
 
 
 def _to_newsapi_timestamp(raw_value: str | None) -> str | None:
@@ -459,6 +517,7 @@ def _parse_rss_payload(payload: str, source_name: str, source_priority: int) -> 
         title = _extract_first_text(node, {"title"})
         link = _extract_link(node)
         description = _extract_first_text(node, {"description", "summary", "content", "encoded"})
+        image_url = _extract_image_url(node)
         published_raw = _extract_first_text(node, {"pubdate", "published", "updated", "date"})
         published_at = _to_newsapi_timestamp(published_raw)
 
@@ -472,7 +531,7 @@ def _parse_rss_payload(payload: str, source_name: str, source_priority: int) -> 
                 "description": description,
                 "content": description,
                 "url": link,
-                "urlToImage": None,
+                "urlToImage": image_url,
                 "publishedAt": published_at,
                 "_source_priority": source_priority,
             }
@@ -494,7 +553,7 @@ def _prioritize_recent_articles(articles: list[dict[str, Any]]) -> list[dict[str
     now_utc = datetime.now(timezone.utc)
     recent_border = now_utc - timedelta(hours=settings.NEWS_PRIORITY_MAX_AGE_HOURS)
 
-    def _sort_key(item: dict[str, Any]) -> tuple[int, float]:
+    def _sort_key(item: dict[str, Any]) -> tuple[int, int, float]:
         published_at = _parse_newsapi_datetime(item.get("publishedAt"))
         source_priority = -int(item.get("_source_priority") or 0)
         if published_at is None:

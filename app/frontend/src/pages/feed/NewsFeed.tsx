@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { type TouchEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { Bookmark, Heart, MessageCircle, RefreshCw, X } from 'lucide-react';
 
 import { newsService } from '../../api/services';
@@ -8,7 +8,7 @@ import { useNewsFeed, useReactToNews } from '../../hooks/useNews';
 import { CommentItem, FeedItem } from '../../types';
 
 const FALLBACK_IMAGE =
-  'https://images.unsplash.com/photo-1495020689067-958852a7765e?auto=format&fit=crop&q=80&w=1200';
+  'https://images.unsplash.com/photo-1495020689067-958852a7765e?auto=format&fit=crop&q=80&w=1400';
 
 function normalizeMediaUrl(url: string): string {
   const trimmed = url.trim();
@@ -23,122 +23,17 @@ function normalizeMediaUrl(url: string): string {
   return FALLBACK_IMAGE;
 }
 
-function getFeedImage(item: FeedItem): string {
-  if (Array.isArray(item.image_urls) && item.image_urls.length > 0) {
-    return normalizeMediaUrl(item.image_urls[0]);
-  }
-  return FALLBACK_IMAGE;
-}
-
-function getPrimaryVideoUrl(item: FeedItem): string | null {
-  if (!Array.isArray(item.video_urls) || item.video_urls.length === 0) {
-    return null;
+function getFeedImages(item: FeedItem): string[] {
+  if (!Array.isArray(item.image_urls) || item.image_urls.length === 0) {
+    return [FALLBACK_IMAGE];
   }
 
-  for (const rawUrl of item.video_urls) {
-    const candidate = (rawUrl || '').trim();
-    if (!candidate || !/^https?:\/\//i.test(candidate)) {
-      continue;
-    }
+  const prepared = item.image_urls
+    .map((url) => normalizeMediaUrl(url))
+    .filter(Boolean);
 
-    const lower = candidate.toLowerCase();
-    // Hide obvious legacy fallback/music links from older feed items.
-    if (
-      lower.includes('dqw4w9wx') ||
-      lower.includes('music') ||
-      lower.includes('song') ||
-      lower.includes('lyrics') ||
-      lower.includes('karaoke')
-    ) {
-      continue;
-    }
-
-    return candidate;
-  }
-
-  return null;
-}
-
-function getYouTubeEmbedUrl(url: string): string | null {
-  try {
-    const parsed = new URL(url);
-    const host = parsed.hostname.toLowerCase();
-
-    if (host.includes('youtu.be')) {
-      const id = parsed.pathname.replace('/', '').trim();
-      return id ? `https://www.youtube-nocookie.com/embed/${id}` : null;
-    }
-
-    if (host.includes('youtube.com')) {
-      const idFromQuery = parsed.searchParams.get('v')?.trim() || '';
-      if (idFromQuery) {
-        return `https://www.youtube-nocookie.com/embed/${idFromQuery}`;
-      }
-
-      const shortMatch = parsed.pathname.match(/\/shorts\/([^/?]+)/i);
-      if (shortMatch?.[1]) {
-        return `https://www.youtube-nocookie.com/embed/${shortMatch[1]}`;
-      }
-
-      const pathParts = parsed.pathname.split('/').filter(Boolean);
-      const embedIdx = pathParts.findIndex((part) => part === 'embed');
-      if (embedIdx >= 0 && pathParts[embedIdx + 1]) {
-        return `https://www.youtube-nocookie.com/embed/${pathParts[embedIdx + 1]}`;
-      }
-    }
-  } catch {
-    return null;
-  }
-
-  return null;
-}
-
-function getYouTubeWatchUrl(url: string): string | null {
-  try {
-    const parsed = new URL(url);
-    const host = parsed.hostname.toLowerCase();
-
-    if (host.includes('youtu.be')) {
-      const id = parsed.pathname.replace('/', '').trim();
-      return id ? `https://www.youtube.com/watch?v=${id}` : null;
-    }
-
-    if (host.includes('youtube.com') || host.includes('youtube-nocookie.com')) {
-      const idFromQuery = parsed.searchParams.get('v')?.trim() || '';
-      if (idFromQuery) {
-        return `https://www.youtube.com/watch?v=${idFromQuery}`;
-      }
-
-      const pathMatch = parsed.pathname.match(/\/(?:embed|shorts)\/([^/?]+)/i);
-      if (pathMatch?.[1]) {
-        return `https://www.youtube.com/watch?v=${pathMatch[1]}`;
-      }
-    }
-  } catch {
-    return null;
-  }
-
-  return null;
-}
-
-function withYouTubePlaybackMode(embedUrl: string, autoplay: boolean): string {
-  try {
-    const parsed = new URL(embedUrl);
-    parsed.searchParams.set('autoplay', autoplay ? '1' : '0');
-    parsed.searchParams.set('mute', '1');
-    parsed.searchParams.set('playsinline', '1');
-    parsed.searchParams.set('rel', '0');
-    parsed.searchParams.set('modestbranding', '1');
-    parsed.searchParams.set('enablejsapi', '1');
-    parsed.searchParams.set('origin', window.location.origin);
-    return parsed.toString();
-  } catch {
-    return embedUrl;
-  }
-}
-
-function isDirectVideoFile(url: string): boolean {
-  return /\.(mp4|webm|ogg|m3u8)(\?|#|$)/i.test(url);
+  const unique = Array.from(new Set(prepared));
+  return unique.length > 0 ? unique : [FALLBACK_IMAGE];
 }
 
 function formatScore(score: number | null): string {
@@ -199,10 +94,11 @@ export function NewsFeed() {
   const [commentError, setCommentError] = useState<string>('');
   const [textSheetItem, setTextSheetItem] = useState<FeedItem | null>(null);
   const [activeCardId, setActiveCardId] = useState<number | null>(null);
+  const [imageIndexByCard, setImageIndexByCard] = useState<Record<number, number>>({});
 
   const feedContainerRef = useRef<HTMLElement | null>(null);
   const sectionRefs = useRef<Record<number, HTMLElement | null>>({});
-  const videoRefs = useRef<Record<number, HTMLVideoElement | null>>({});
+  const imageSwipeStartXRef = useRef<Record<number, number | null>>({});
   const viewedAiNewsIdsRef = useRef<Set<number>>(new Set());
 
   const orderedFeed = useMemo(() => {
@@ -305,23 +201,45 @@ export function NewsFeed() {
       });
   }, [activeCardId, orderedFeed, user]);
 
-  useEffect(() => {
-    for (const [cardIdRaw, video] of Object.entries(videoRefs.current)) {
-      if (!video) {
-        continue;
-      }
-
-      const cardId = Number(cardIdRaw);
-      if (activeCardId && cardId === activeCardId) {
-        const playAttempt = video.play();
-        if (playAttempt && typeof playAttempt.catch === 'function') {
-          playAttempt.catch(() => undefined);
-        }
-      } else {
-        video.pause();
-      }
+  const handleImageChange = (cardId: number, imageCount: number, delta: number) => {
+    if (imageCount < 2) {
+      return;
     }
-  }, [activeCardId, orderedFeed]);
+
+    setImageIndexByCard((prev) => {
+      const currentIndex = prev[cardId] ?? 0;
+      const nextIndex = (currentIndex + delta + imageCount) % imageCount;
+      return { ...prev, [cardId]: nextIndex };
+    });
+  };
+
+  const handleImageTouchStart = (cardId: number, event: TouchEvent<HTMLDivElement>) => {
+    if (event.touches.length !== 1) {
+      return;
+    }
+    imageSwipeStartXRef.current[cardId] = event.touches[0].clientX;
+  };
+
+  const handleImageTouchEnd = (cardId: number, imageCount: number, event: TouchEvent<HTMLDivElement>) => {
+    if (imageCount < 2) {
+      return;
+    }
+
+    const startX = imageSwipeStartXRef.current[cardId];
+    imageSwipeStartXRef.current[cardId] = null;
+
+    if (typeof startX !== 'number') {
+      return;
+    }
+
+    const endX = event.changedTouches[0]?.clientX ?? startX;
+    const delta = endX - startX;
+    if (Math.abs(delta) < 40) {
+      return;
+    }
+
+    handleImageChange(cardId, imageCount, delta < 0 ? 1 : -1);
+  };
 
   const handleLikeToggle = (item: FeedItem, currentlyLiked: boolean) => {
     if (!user) {
@@ -497,11 +415,10 @@ export function NewsFeed() {
         {orderedFeed.map((item) => {
           const liked = likedOverrides[item.ai_news_id] ?? Boolean(item.liked);
           const saved = savedOverrides[item.ai_news_id] ?? Boolean(item.saved);
-          const primaryVideoUrl = getPrimaryVideoUrl(item);
-          const youtubeEmbedUrl = primaryVideoUrl ? getYouTubeEmbedUrl(primaryVideoUrl) : null;
-          const youtubeWatchUrl = primaryVideoUrl ? getYouTubeWatchUrl(primaryVideoUrl) : null;
-          const isActiveCard = activeCardId === item.user_feed_id;
-          const shouldRenderYoutubePlayer = Boolean(youtubeEmbedUrl && isActiveCard);
+          const feedImages = getFeedImages(item);
+          const imageCount = feedImages.length;
+          const currentImageIndex = ((imageIndexByCard[item.user_feed_id] ?? 0) + imageCount) % imageCount;
+          const currentImage = feedImages[currentImageIndex] ?? FALLBACK_IMAGE;
 
           return (
             <section
@@ -513,66 +430,55 @@ export function NewsFeed() {
               className="relative h-screen snap-start overflow-hidden"
             >
               <div className="absolute inset-0 bg-black">
-                {youtubeEmbedUrl && shouldRenderYoutubePlayer ? (
-                  <div className="relative h-full w-full">
-                    <iframe
-                      key={`${item.user_feed_id}-${isActiveCard ? 'active' : 'idle'}`}
-                      src={withYouTubePlaybackMode(youtubeEmbedUrl, isActiveCard)}
-                      title={item.final_title || t('feed.videoAlt')}
-                      className="h-full w-full"
-                      loading="lazy"
-                      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                      allowFullScreen
-                    />
-                    <a
-                      href={youtubeWatchUrl || primaryVideoUrl || '#'}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="absolute right-3 top-3 rounded-md bg-black/60 px-3 py-1.5 text-xs font-semibold text-white/95 backdrop-blur hover:bg-black/75"
-                    >
-                      {t('feed.video.openYoutube')}
-                    </a>
-                  </div>
-                ) : youtubeEmbedUrl ? (
-                  <div className="relative h-full w-full">
-                    <img src={getFeedImage(item)} alt={item.final_title || t('feed.imageAlt')} className="h-full w-full object-cover" />
-                    <a
-                      href={youtubeWatchUrl || primaryVideoUrl || '#'}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="absolute inset-x-0 bottom-8 mx-auto w-fit rounded-lg bg-black/65 px-4 py-2 text-sm font-semibold text-white/95 backdrop-blur hover:bg-black/75"
-                    >
-                      {t('feed.video.openYoutube')}
-                    </a>
-                  </div>
-                ) : primaryVideoUrl && isDirectVideoFile(primaryVideoUrl) ? (
-                  <video
-                    ref={(node) => {
-                      videoRefs.current[item.user_feed_id] = node;
-                    }}
+                <div
+                  className="relative h-full w-full touch-pan-y"
+                  onTouchStart={(event) => handleImageTouchStart(item.user_feed_id, event)}
+                  onTouchEnd={(event) => handleImageTouchEnd(item.user_feed_id, imageCount, event)}
+                >
+                  <img
+                    src={currentImage}
+                    alt={item.final_title || t('feed.imageAlt')}
                     className="h-full w-full object-cover"
-                    controls={isActiveCard}
-                    muted
-                    playsInline
-                    preload={isActiveCard ? 'auto' : 'metadata'}
-                    autoPlay={isActiveCard}
-                    src={primaryVideoUrl}
+                    onError={(event) => {
+                      const target = event.currentTarget;
+                      if (target.src !== FALLBACK_IMAGE) {
+                        target.src = FALLBACK_IMAGE;
+                      }
+                    }}
                   />
-                ) : primaryVideoUrl ? (
-                  <div className="flex h-full w-full flex-col items-center justify-center gap-3 bg-surface-container text-center">
-                    <p className="max-w-xs text-sm text-on-surface-variant">{t('feed.videoAlt')}</p>
-                    <a
-                      href={primaryVideoUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="rounded-lg bg-primary-container px-4 py-2 text-sm font-semibold text-white"
-                    >
-                      Open Video
-                    </a>
-                  </div>
-                ) : (
-                  <img src={getFeedImage(item)} alt={item.final_title || t('feed.imageAlt')} className="h-full w-full object-cover" />
-                )}
+
+                  {imageCount > 1 ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          handleImageChange(item.user_feed_id, imageCount, -1);
+                        }}
+                        className="absolute left-3 top-1/2 -translate-y-1/2 rounded-full bg-black/55 px-3 py-2 text-xl leading-none text-white backdrop-blur hover:bg-black/70"
+                        aria-label="Previous image"
+                      >
+                        {'‹'}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          handleImageChange(item.user_feed_id, imageCount, 1);
+                        }}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 rounded-full bg-black/55 px-3 py-2 text-xl leading-none text-white backdrop-blur hover:bg-black/70"
+                        aria-label="Next image"
+                      >
+                        {'›'}
+                      </button>
+
+                      <div className="absolute bottom-5 left-1/2 -translate-x-1/2 rounded-full bg-black/50 px-3 py-1 text-xs font-semibold text-white/90 backdrop-blur">
+                        {currentImageIndex + 1}/{imageCount}
+                      </div>
+                    </>
+                  ) : null}
+                </div>
               </div>
 
               <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/30 to-black/35" />

@@ -1,4 +1,5 @@
 import json
+import re
 from typing import Any
 
 from sqlalchemy import text
@@ -61,6 +62,180 @@ def _persona_matches_topics(target_persona: str | None, topics: list[str]) -> bo
             return True
 
     return False
+
+
+def _normalize_title_key(value: str | None) -> str:
+    title = str(value or "").strip().lower()
+    if not title:
+        return ""
+    return re.sub(r"\s+", " ", title)
+
+
+def _dedupe_feed_rows(rows: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+    if not rows:
+        return []
+
+    by_key: dict[str, dict[str, Any]] = {}
+
+    for row in rows:
+        raw_news_id = int(row.get("raw_news_id") or 0)
+        if raw_news_id > 0:
+            dedupe_key = f"raw:{raw_news_id}"
+        else:
+            title_key = _normalize_title_key(row.get("final_title"))
+            if not title_key:
+                dedupe_key = f"ai:{int(row.get('ai_news_id') or 0)}"
+            else:
+                dedupe_key = f"title:{title_key}"
+
+        existing = by_key.get(dedupe_key)
+        if existing is None:
+            by_key[dedupe_key] = row
+            continue
+
+        current_rank = float(row.get("rank_score") or 0.0)
+        existing_rank = float(existing.get("rank_score") or 0.0)
+        current_saved = bool(row.get("saved"))
+        existing_saved = bool(existing.get("saved"))
+        current_ai_score = float(row.get("ai_score") or 0.0)
+        existing_ai_score = float(existing.get("ai_score") or 0.0)
+        current_feed_id = int(row.get("user_feed_id") or 0)
+        existing_feed_id = int(existing.get("user_feed_id") or 0)
+
+        should_replace = (
+            (current_saved and not existing_saved)
+            or (current_saved == existing_saved and current_rank > existing_rank)
+            or (
+                current_saved == existing_saved
+                and abs(current_rank - existing_rank) < 1e-9
+                and current_ai_score > existing_ai_score
+            )
+            or (
+                current_saved == existing_saved
+                and abs(current_rank - existing_rank) < 1e-9
+                and abs(current_ai_score - existing_ai_score) < 1e-9
+                and current_feed_id > existing_feed_id
+            )
+        )
+
+        if should_replace:
+            by_key[dedupe_key] = row
+
+    deduped = list(by_key.values())
+    deduped.sort(
+        key=lambda item: (
+            bool(item.get("saved")),
+            float(item.get("rank_score") or 0.0),
+            int(item.get("user_feed_id") or 0),
+        ),
+        reverse=True,
+    )
+    return deduped[:limit]
+
+
+async def _backfill_user_feed_if_empty(session: AsyncSession, *, user_id: int, user_topics: list[str]) -> int:
+    existing = await session.execute(
+        text(
+            """
+            SELECT 1
+            FROM user_feed
+            WHERE user_id = :user_id
+            LIMIT 1
+            """
+        ),
+        {"user_id": user_id},
+    )
+    if existing.scalar_one_or_none() is not None:
+        return 0
+
+    candidates_result = await session.execute(
+        text(
+            """
+            SELECT id, ai_score, target_persona, raw_news_id
+            FROM ai_news
+            ORDER BY created_at DESC, id DESC
+            LIMIT 400
+            """
+        )
+    )
+    candidates = [dict(row) for row in candidates_result.mappings().all()]
+    if not candidates:
+        return 0
+
+    selected: list[dict[str, Any]] = []
+    selected_ids: set[int] = set()
+    selected_raw_news_ids: set[int] = set()
+
+    normalized_topics = _normalize_topics(user_topics)
+    if normalized_topics:
+        for row in candidates:
+            ai_news_id = int(row.get("id") or 0)
+            if not ai_news_id or ai_news_id in selected_ids:
+                continue
+
+            raw_news_id = int(row.get("raw_news_id") or 0)
+            if raw_news_id and raw_news_id in selected_raw_news_ids:
+                continue
+
+            persona = str(row.get("target_persona") or "").strip().lower()
+            if not _persona_matches_topics(persona, normalized_topics):
+                continue
+
+            selected_ids.add(ai_news_id)
+            if raw_news_id:
+                selected_raw_news_ids.add(raw_news_id)
+            selected.append({"ai_news_id": ai_news_id, "ai_score": float(row.get("ai_score") or 0.0)})
+            if len(selected) >= 40:
+                break
+
+    if not selected:
+        for row in candidates:
+            ai_news_id = int(row.get("id") or 0)
+            if not ai_news_id or ai_news_id in selected_ids:
+                continue
+
+            raw_news_id = int(row.get("raw_news_id") or 0)
+            if raw_news_id and raw_news_id in selected_raw_news_ids:
+                continue
+
+            selected_ids.add(ai_news_id)
+            if raw_news_id:
+                selected_raw_news_ids.add(raw_news_id)
+            selected.append({"ai_news_id": ai_news_id, "ai_score": float(row.get("ai_score") or 0.0)})
+            if len(selected) >= 20:
+                break
+
+    if not selected:
+        return 0
+
+    now_sql = sql_timestamp_now(session)
+    inserted = 0
+    for item in selected:
+        result = await session.execute(
+            text(
+                f"""
+                INSERT INTO user_feed (user_id, ai_news_id, ai_score, created_at)
+                SELECT :user_id, :ai_news_id, :ai_score, {now_sql}
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM user_feed uf
+                    WHERE uf.user_id = :user_id
+                      AND uf.ai_news_id = :ai_news_id
+                )
+                """
+            ),
+            {
+                "user_id": user_id,
+                "ai_news_id": item["ai_news_id"],
+                "ai_score": item["ai_score"],
+            },
+        )
+        inserted += int(getattr(result, "rowcount", 0) or 0)
+
+    if inserted > 0:
+        await session.commit()
+
+    return inserted
 
 
 async def _ensure_social_tables(session: AsyncSession) -> None:
@@ -172,6 +347,7 @@ async def _ensure_social_tables(session: AsyncSession) -> None:
 
 async def get_user_feed(session: AsyncSession, user_id: int, limit: int = 50) -> list[dict[str, Any]]:
     await _ensure_social_tables(session)
+    query_limit = max(int(limit or 0), 1) * 6
 
     user_interests_result = await session.execute(
         text(
@@ -285,13 +461,20 @@ async def get_user_feed(session: AsyncSession, user_id: int, limit: int = 50) ->
     WHERE uf.user_id = :user_id
         AND NOT (COALESCE(li.viewed, FALSE) = TRUE AND sn.id IS NULL)
     ORDER BY rank_score DESC, uf.id DESC
-    LIMIT :limit
+    LIMIT :query_limit
     """
-    result = await session.execute(text(query), {"user_id": user_id, "limit": limit})
-    rows = [dict(row) for row in result.mappings().all()]
+    async def _load_rows() -> list[dict[str, Any]]:
+        result = await session.execute(text(query), {"user_id": user_id, "query_limit": query_limit})
+        return [dict(row) for row in result.mappings().all()]
+
+    rows = await _load_rows()
+    if not rows:
+        inserted = await _backfill_user_feed_if_empty(session, user_id=user_id, user_topics=user_topics)
+        if inserted > 0:
+            rows = await _load_rows()
 
     if not user_topics:
-        return rows
+        return _dedupe_feed_rows(rows, limit)
 
     filtered: list[dict[str, Any]] = []
     for row in rows:
@@ -301,7 +484,11 @@ async def get_user_feed(session: AsyncSession, user_id: int, limit: int = 50) ->
         if _persona_matches_topics(row.get("target_persona"), user_topics):
             filtered.append(row)
 
-    return filtered
+    if not filtered and rows:
+        # Keep feed non-empty for narrow/new interests when no persona match is available yet.
+        return _dedupe_feed_rows(rows, limit)
+
+    return _dedupe_feed_rows(filtered, limit)
 
 
 async def record_interaction(session: AsyncSession, payload: dict[str, Any]) -> dict[str, Any]:

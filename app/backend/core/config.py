@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     GROQ_MODEL: str = "llama-3.3-70b-versatile"
     DEEPSEEK_API_KEY: str = ""
     NEWS_API_KEY: str = ""
+    GOOGLE_CSE_API_KEY: str = ""
+    GOOGLE_CSE_ID: str = ""
 
     JWT_SECRET_KEY: str = ""
     JWT_ALGORITHM: str = "HS256"
@@ -57,8 +59,8 @@ class Settings(BaseSettings):
     NEWS_PRIORITY_MAX_AGE_HOURS: int = 24
     AI_PRODUCT_RETENTION_DAYS: int = 7
     PIPELINE_TEXT_MIN_WORDS: int = 170
-    PIPELINE_TEXT_MAX_WORDS: int = 320
-    PIPELINE_TEXT_MAX_CHARS: int = 2600
+    PIPELINE_TEXT_MAX_WORDS: int = 0
+    PIPELINE_TEXT_MAX_CHARS: int = 0
 
     YOUTUBE_API_KEY: str = ""
     YOUTUBE_REGION_CODE: str = "UZ"

@@ -27,7 +27,7 @@ async def ingest_raw_news(
 async def get_raw_news(raw_news_id: int, session: AsyncSession = Depends(get_db_session)):
     query = """
     SELECT
-        id, title, source_url, raw_text, category, region, is_urgent,
+        id, title, source_url, image_url, raw_text, category, region, is_urgent,
         created_at, process_status, error_message, attempt_count, content_hash
     FROM raw_news
     WHERE id = :raw_news_id

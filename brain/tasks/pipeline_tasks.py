@@ -11,7 +11,7 @@ from app.backend.core.celery_app import celery_app
 from app.backend.core.config import settings
 from app.backend.services.ingestion_service import create_raw_news
 from app.backend.services.llm_service import generate_news
-from app.backend.services.media_service import fetch_media_urls, fetch_video_urls
+from app.backend.services.media_service import fetch_media_urls
 from app.backend.services.news_api_service import fetch_articles_for_topics
 from app.backend.db.session import SessionLocal
 
@@ -115,6 +115,7 @@ async def _fetch_raw_news(session: AsyncSession, raw_news_id: int) -> Optional[d
         title,
         raw_text,
         source_url,
+        image_url,
         category,
         region,
         is_urgent
@@ -217,18 +218,14 @@ async def _upsert_ai_news_for_persona(
     ).strip().lower()
 
     generated = await _generate_with_quality_loop(raw_row, topic, profession, geo)
-    video_urls = await fetch_video_urls(
-        raw_row.get("title") or topic,
-        profession=profession,
-        geo=geo,
+    media_query = " ".join(part for part in [str(raw_row.get("title") or "").strip(), topic] if part).strip()
+    media_urls = await fetch_media_urls(
+        media_query,
         limit=4,
-        country_code=country_code,
+        source_url=str(raw_row.get("source_url") or "").strip() or None,
+        source_image_url=str(raw_row.get("image_url") or "").strip() or None,
     )
-    media_urls = (
-        []
-        if video_urls
-        else await fetch_media_urls(f"{raw_row.get('title') or ''} {topic} {profession or ''}", limit=3)
-    )
+    video_urls: list[str] = []
     is_sqlite = session.get_bind().dialect.name == "sqlite"
 
     params = {
