@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.backend.api.dependencies import get_current_user, get_db_session
@@ -58,6 +58,12 @@ async def register_start(
     )
 
     sent = send_verification_code(payload.email, data["code"])
+    if not sent and not settings.AUTH_DEBUG_RETURN_CODE:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Email delivery is not configured. Contact support or enable AUTH_DEBUG_RETURN_CODE for testing.",
+        )
+
     debug_code = data["code"] if settings.AUTH_DEBUG_RETURN_CODE and (not sent) else None
 
     return AuthRegisterStartResponse(
