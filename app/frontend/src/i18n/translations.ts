@@ -25,7 +25,7 @@ export const translations: Record<Language, Record<string, string>> = {
 
     'layout.footer': '© 2026 PDADS. Все права защищены.',
 
-    'auth.title': 'PDADS MVP',
+    'auth.title': 'pdadsmvp',
     'auth.subtitle': 'Регистрация: аккаунт -> email код -> интересы',
     'auth.mode.login': 'Вход',
     'auth.mode.register': 'Регистрация',
@@ -127,7 +127,7 @@ export const translations: Record<Language, Record<string, string>> = {
 
     'layout.footer': '© 2026 PDADS. All rights reserved.',
 
-    'auth.title': 'PDADS MVP',
+    'auth.title': 'pdadsmvp',
     'auth.subtitle': 'Signup: account -> email code -> interests',
     'auth.mode.login': 'Login',
     'auth.mode.register': 'Register',
@@ -229,7 +229,7 @@ export const translations: Record<Language, Record<string, string>> = {
 
     'layout.footer': '© 2026 PDADS. Barcha huquqlar himoyalangan.',
 
-    'auth.title': 'PDADS MVP',
+    'auth.title': 'pdadsmvp',
     'auth.subtitle': 'Ro\'yxat: akkaunt -> email kod -> qiziqishlar',
     'auth.mode.login': 'Kirish',
     'auth.mode.register': 'Ro\'yxatdan o\'tish',
