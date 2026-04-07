@@ -72,10 +72,26 @@ class Settings(BaseSettings):
         extra="ignore"
     )
 
+    @staticmethod
+    def _normalize_database_url(url: str) -> str:
+        value = (url or "").strip()
+        if value.startswith("postgres://"):
+            value = "postgresql://" + value[len("postgres://"):]
+        if value.startswith("postgresql+psycopg2://"):
+            return "postgresql+asyncpg://" + value[len("postgresql+psycopg2://"):]
+        if value.startswith("postgresql://"):
+            return "postgresql+asyncpg://" + value[len("postgresql://"):]
+        return value
+
     @property
     def cors_allow_origins(self) -> list[str]:
         values = [item.strip() for item in self.CORS_ALLOW_ORIGINS.split(",") if item.strip()]
         return values or ["http://127.0.0.1:8000"]
+
+    @model_validator(mode="after")
+    def _normalize_runtime_urls(self) -> "Settings":
+        self.DATABASE_URL = self._normalize_database_url(self.DATABASE_URL)
+        return self
 
     @model_validator(mode="after")
     def _validate_security(self) -> "Settings":
