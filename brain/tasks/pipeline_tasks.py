@@ -233,7 +233,8 @@ async def _upsert_ai_news_for_persona(
         "target_persona": target_persona,
         "final_title": generated["final_title"],
         "final_text": generated["final_text"],
-        "image_urls": json.dumps(media_urls, ensure_ascii=False) if is_sqlite else media_urls,
+        # ai_news.image_urls is stored as TEXT in both SQLite and PostgreSQL migrations.
+        "image_urls": json.dumps(media_urls, ensure_ascii=False),
         "video_urls": json.dumps(video_urls, ensure_ascii=False) if is_sqlite else video_urls,
         "category": generated["category"],
         "ai_score": generated["combined_score"],
