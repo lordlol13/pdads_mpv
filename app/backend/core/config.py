@@ -1,4 +1,5 @@
 import secrets
+import re
 
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -47,6 +48,7 @@ class Settings(BaseSettings):
         "http://127.0.0.1:5173,http://localhost:5173,"
         "http://127.0.0.1:8000,http://localhost:8000"
     )
+    CORS_ALLOW_ORIGIN_REGEX: str = ""
 
     PIPELINE_MAX_ATTEMPTS: int = 1
     PIPELINE_TARGET_SCORE: float = 8.0
@@ -85,7 +87,10 @@ class Settings(BaseSettings):
 
     @property
     def cors_allow_origins(self) -> list[str]:
-        values = [item.strip() for item in self.CORS_ALLOW_ORIGINS.split(",") if item.strip()]
+        raw = (self.CORS_ALLOW_ORIGINS or "").strip()
+        # Accept comma/semicolon/newline separated values from hosting dashboards.
+        parts = re.split(r"[,;\r\n]+", raw)
+        values = [item.strip() for item in parts if item and item.strip()]
         return values or ["http://127.0.0.1:8000"]
 
     @model_validator(mode="after")
