@@ -23,6 +23,11 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _utcnow_naive() -> datetime:
+    """Return UTC datetime without tzinfo for DB columns declared as TIMESTAMP."""
+    return _utcnow().replace(tzinfo=None)
+
+
 def _normalize_string_list(values: list[str] | None) -> list[str]:
     if not values:
         return []
@@ -333,7 +338,8 @@ async def create_registration_verification(
     verification_id = str(uuid.uuid4())
     code = f"{secrets.randbelow(1000000):06d}"
     code_hash = _hash_verification_code(verification_id, code)
-    expires_at = _utcnow() + timedelta(minutes=settings.AUTH_VERIFICATION_CODE_TTL_MINUTES)
+    expires_at = _utcnow_naive() + timedelta(minutes=settings.AUTH_VERIFICATION_CODE_TTL_MINUTES)
+    created_now = _utcnow_naive()
 
     insert_query = """
     INSERT INTO registration_verifications (
@@ -374,8 +380,8 @@ async def create_registration_verification(
             "code_expires_at": expires_at,
             "is_verified": False,
             "attempt_count": 0,
-            "created_at": _utcnow(),
-            "updated_at": _utcnow(),
+            "created_at": created_now,
+            "updated_at": created_now,
             "consumed_at": None,
         },
     )
@@ -432,7 +438,7 @@ async def verify_registration_code(session: AsyncSession, verification_id: str, 
             ),
             {
                 "attempt_count": attempts,
-                "updated_at": _utcnow(),
+                "updated_at": _utcnow_naive(),
                 "verification_id": verification_id,
             },
         )
@@ -454,7 +460,7 @@ async def verify_registration_code(session: AsyncSession, verification_id: str, 
         ),
         {
             "is_verified": True,
-            "updated_at": _utcnow(),
+            "updated_at": _utcnow_naive(),
             "verification_id": verification_id,
         },
     )
@@ -574,8 +580,8 @@ async def complete_verified_registration(
             """
         ),
         {
-            "consumed_at": _utcnow(),
-            "updated_at": _utcnow(),
+            "consumed_at": _utcnow_naive(),
+            "updated_at": _utcnow_naive(),
             "verification_id": verification_id,
         },
     )
