@@ -32,7 +32,7 @@ def get_task_status(task_id: str):
 async def list_raw_news(limit: int = Query(default=50, ge=1, le=200)):
     query = """
     SELECT
-        id, title, source_url, raw_text, category, region, is_urgent,
+        id, title, source_url, image_url, raw_text, category, region, is_urgent,
         process_status, error_message, attempt_count, created_at
     FROM raw_news
     ORDER BY id DESC

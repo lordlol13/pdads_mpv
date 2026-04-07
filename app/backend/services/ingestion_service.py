@@ -9,7 +9,7 @@ from app.backend.db.sql_helpers import sql_timestamp_now
 
 
 RAW_NEWS_SELECT_COLUMNS = """
-id, title, source_url, raw_text, category, region, is_urgent,
+id, title, source_url, image_url, raw_text, category, region, is_urgent,
 created_at, process_status, error_message, attempt_count, content_hash
 """
 
@@ -42,11 +42,11 @@ async def create_raw_news(session: AsyncSession, payload: dict[str, Any]) -> dic
     now_sql = sql_timestamp_now(session)
     insert_query = f"""
     INSERT INTO raw_news (
-        title, source_url, raw_text, category, region, is_urgent,
+        title, source_url, image_url, raw_text, category, region, is_urgent,
         created_at, process_status, error_message, attempt_count, content_hash
     )
     VALUES (
-        :title, :source_url, :raw_text, :category, :region, :is_urgent,
+        :title, :source_url, :image_url, :raw_text, :category, :region, :is_urgent,
         {now_sql}, 'pending', NULL, 0, :content_hash
     )
     RETURNING
@@ -57,6 +57,7 @@ async def create_raw_news(session: AsyncSession, payload: dict[str, Any]) -> dic
         {
             "title": payload["title"],
             "source_url": payload.get("source_url"),
+            "image_url": payload.get("image_url"),
             "raw_text": payload.get("raw_text"),
             "category": payload.get("category"),
             "region": payload.get("region"),

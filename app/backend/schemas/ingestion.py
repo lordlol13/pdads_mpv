@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 class RawNewsCreateRequest(BaseModel):
     title: str = Field(min_length=1, max_length=500)
     source_url: str | None = None
+    image_url: str | None = None
     raw_text: str | None = None
     category: str | None = None
     region: str | None = None
