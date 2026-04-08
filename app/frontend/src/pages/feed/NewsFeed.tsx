@@ -10,6 +10,11 @@ import { CommentItem, FeedItem } from '../../types';
 const FALLBACK_IMAGE =
   'https://images.unsplash.com/photo-1495020689067-958852a7765e?auto=format&fit=crop&q=80&w=1400';
 
+const ENGLISH_STOPWORDS = new Set([
+  'the', 'and', 'of', 'to', 'in', 'for', 'with', 'on', 'from', 'by', 'is', 'are', 'was', 'were',
+  'after', 'before', 'into', 'warning', 'adds', 'uncertainty', 'shipping',
+]);
+
 function normalizeMediaUrl(url: string): string {
   const trimmed = url.trim();
   if (!trimmed) {
@@ -67,6 +72,37 @@ function getFeedImages(item: FeedItem): string[] {
   return unique.length > 0 ? unique : [FALLBACK_IMAGE];
 }
 
+function normalizeFeedTitle(value: string | null | undefined): string {
+  const source = String(value || '').trim();
+  if (!source) {
+    return '';
+  }
+
+  return source
+    .replace(/^\s*(?:yangilik|yanglik|news|новость|headline|sarlavha)\s*[:\-–—]+\s*/i, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+function stripLikelyEnglishSentences(text: string): string {
+  const sentences = text
+    .split(/(?<=[.!?])\s+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  const filtered = sentences.filter((sentence) => {
+    const words = sentence.toLowerCase().match(/[a-z']+/g) || [];
+    if (words.length < 5) {
+      return true;
+    }
+
+    const hits = words.reduce((acc, word) => acc + (ENGLISH_STOPWORDS.has(word) ? 1 : 0), 0);
+    return !(hits >= 2 && hits / words.length >= 0.2);
+  });
+
+  return filtered.join(' ').trim();
+}
+
 function formatScore(score: number | null): string {
   if (typeof score !== 'number') {
     return 'n/a';
@@ -79,23 +115,26 @@ function normalizeArticleText(value: string): string {
     .replace(/\r/g, '\n')
     .replace(/\[\+\d+\s+chars\]/gi, '')
     .replace(/\uFFFD/g, '')
-    .replace(/\b(?:lid|yanglik)\b\s*:?/gi, '')
+    .replace(/\b(?:lid|yanglik|yangilik|headline|sarlavha)\b\s*:?/gi, '')
     .replace(/\b(?:news|новость|asosiy\s+yangilik)\b\s*:?/gi, '')
+    .replace(/bo['’`]yicha\s+asosiy\s+yangilikni\s+qisqa\s+va\s+aniq\s+formatda\s+beraman\.?/gi, '')
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .replace(/\s{2,}/g, ' ')
     .trim();
 
-  if (!cleaned) {
+  const uzbekOnly = stripLikelyEnglishSentences(cleaned);
+
+  if (!uzbekOnly) {
     return '';
   }
 
-  const paragraphs = cleaned.split(/\n\s*\n/).map((part) => part.trim()).filter(Boolean);
+  const paragraphs = uzbekOnly.split(/\n\s*\n/).map((part) => part.trim()).filter(Boolean);
   if (paragraphs.length >= 2) {
     return paragraphs.join('\n\n');
   }
 
-  const sentences = cleaned.split(/(?<=[.!?])\s+/).map((part) => part.trim()).filter(Boolean);
+  const sentences = uzbekOnly.split(/(?<=[.!?])\s+/).map((part) => part.trim()).filter(Boolean);
   if (sentences.length >= 4) {
     const chunkSize = Math.ceil(sentences.length / 3);
     const chunks: string[] = [];
@@ -105,7 +144,7 @@ function normalizeArticleText(value: string): string {
     return chunks.filter(Boolean).join('\n\n');
   }
 
-  return cleaned;
+  return uzbekOnly;
 }
 
 function ImageWithSkeleton({ src, alt }: { src: string; alt: string }) {
@@ -488,6 +527,7 @@ export function NewsFeed() {
           const liked = likedOverrides[item.ai_news_id] ?? Boolean(item.liked);
           const saved = savedOverrides[item.ai_news_id] ?? Boolean(item.saved);
           const feedImages = getFeedImages(item);
+          const displayTitle = normalizeFeedTitle(item.final_title);
           const imageCount = feedImages.length;
           const currentImageIndex = ((imageIndexByCard[item.user_feed_id] ?? 0) + imageCount) % imageCount;
           const currentImage = feedImages[currentImageIndex] ?? FALLBACK_IMAGE;
@@ -508,7 +548,7 @@ export function NewsFeed() {
                   onTouchEnd={(event) => handleImageTouchEnd(item.user_feed_id, imageCount, event)}
                 >
                   <div className="relative w-full max-w-[980px]">
-                    <ImageWithSkeleton src={currentImage} alt={item.final_title || t('feed.imageAlt')} />
+                    <ImageWithSkeleton src={currentImage} alt={displayTitle || t('feed.imageAlt')} />
 
                     {imageCount > 1 ? (
                       <>
@@ -555,7 +595,7 @@ export function NewsFeed() {
                       <span className="rounded-full bg-black/35 px-2.5 py-1">{t('feed.badge.score', { score: formatScore(item.ai_score) })}</span>
                     </div>
 
-                    <h2 className="text-xl font-bold leading-tight">{item.final_title || `AI News #${item.ai_news_id}`}</h2>
+                    <h2 className="text-xl font-bold leading-tight">{displayTitle || `AI News #${item.ai_news_id}`}</h2>
 
                     <button
                       type="button"
@@ -624,7 +664,7 @@ export function NewsFeed() {
             </div>
 
             <div className="max-h-[calc(86vh-64px)] overflow-y-auto px-5 py-4 pb-[calc(6rem+env(safe-area-inset-bottom))]">
-              <h4 className="mb-3 text-lg font-semibold text-on-surface">{textSheetItem.final_title || `AI News #${textSheetItem.ai_news_id}`}</h4>
+              <h4 className="mb-3 text-lg font-semibold text-on-surface">{normalizeFeedTitle(textSheetItem.final_title) || `AI News #${textSheetItem.ai_news_id}`}</h4>
               <p className="whitespace-pre-line text-sm leading-relaxed text-on-surface-variant">
                 {normalizeArticleText(textSheetItem.final_text || t('feed.noText'))}
               </p>

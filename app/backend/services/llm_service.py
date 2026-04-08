@@ -13,6 +13,28 @@ logger = logging.getLogger(__name__)
 _GEMINI_BACKOFF_UNTIL: datetime | None = None
 _GEMINI_DEFAULT_BACKOFF_SECONDS = 180
 
+ENGLISH_TITLE_STOPWORDS = {
+    "the",
+    "and",
+    "of",
+    "to",
+    "in",
+    "for",
+    "with",
+    "on",
+    "from",
+    "by",
+    "is",
+    "are",
+    "was",
+    "were",
+    "after",
+    "before",
+    "warning",
+    "adds",
+    "uncertainty",
+}
+
 
 class GeneratedNews(TypedDict):
     final_title: str
@@ -53,9 +75,9 @@ def _clean_text_artifacts(text: str) -> str:
         value = value.replace(old, new)
 
     value = re.sub(r"\[\+\d+\s+chars\]", "", value, flags=re.IGNORECASE)
-    value = re.sub(r"\b(?:lid|yanglik)\b\s*:?", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"\b(?:lid|yanglik|yangilik|headline|sarlavha)\b\s*:?", "", value, flags=re.IGNORECASE)
     value = re.sub(
-        r"(^|\n)\s*(lid|yanglik|новость|news|asosiy\s+yangilik|foydalanuvchiga\s+ta'siri|kasbiy\s+nuqtai\s+nazar|amaliy\s+qadamlar)\s*:\s*",
+        r"(^|\n)\s*(lid|yanglik|yangilik|headline|sarlavha|новость|news|asosiy\s+yangilik|foydalanuvchiga\s+ta'siri|kasbiy\s+nuqtai\s+nazar|amaliy\s+qadamlar)\s*:\s*",
         "\\1",
         value,
         flags=re.IGNORECASE,
@@ -70,11 +92,38 @@ def _contains_cyrillic(text: str) -> bool:
     return bool(re.search(r"[\u0400-\u04FF]", text or ""))
 
 
+def _strip_title_heading_prefix(value: str) -> str:
+    cleaned = str(value or "").strip()
+    cleaned = re.sub(
+        r"^\s*(?:yangilik|yanglik|news|новость|headline|sarlavha)\s*[:\-–—]+\s*",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    return re.sub(r"\s+", " ", cleaned).strip(" -:\t")
+
+
+def _looks_english_heavy(value: str) -> bool:
+    tokens = [token for token in re.findall(r"[a-zA-Z']+", str(value or "").lower()) if token]
+    if len(tokens) < 4:
+        return False
+
+    stopword_hits = sum(1 for token in tokens if token in ENGLISH_TITLE_STOPWORDS)
+    return stopword_hits >= 2 and (stopword_hits / max(1, len(tokens))) >= 0.2
+
+
 def _ensure_uzbek_title(value: str, fallback_title: str) -> str:
     title = str(value or "").strip()
     source = title or str(fallback_title or "").strip() or "yangilik"
     source = re.sub(r"^\s*\[ai\]\s*", "", source, flags=re.IGNORECASE).strip()
-    return f"Yangilik: {source}"
+    source = _strip_title_heading_prefix(source)
+    source = _clean_text_artifacts(source).split("\n", 1)[0].strip()
+    source = _strip_title_heading_prefix(source)
+
+    if not source or _contains_cyrillic(source) or _looks_english_heavy(source):
+        return "Dolzarb xabar"
+
+    return source
 
 
 def _split_into_paragraphs(text: str) -> list[str]:
@@ -443,7 +492,7 @@ def _compose_generated_news(
     final_title = _ensure_uzbek_title(final_title_raw, title)
     structured_text = _ensure_structured_personal_text(
         final_text_raw,
-        title=title,
+        title=final_title,
         target_persona=target_persona,
         profession=profession,
         geo=geo,
@@ -452,7 +501,7 @@ def _compose_generated_news(
     editorial_text = _enforce_editorial_structure(
         structured_text,
         raw_text=raw_text,
-        title=title,
+        title=final_title,
         target_persona=target_persona,
         profession=profession,
         geo=geo,
