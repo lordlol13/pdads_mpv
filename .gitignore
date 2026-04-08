@@ -14,7 +14,10 @@ dist/
 downloads/
 eggs/
 .eggs/
+# Keep Python packaging ignore, but allow frontend src/lib utilities.
 lib/
+!app/frontend/src/lib/
+!app/frontend/src/lib/**
 lib64/
 parts/
 sdist/
