@@ -442,11 +442,11 @@ export function NewsFeed() {
   };
 
   return (
-    <div className="relative h-screen overflow-hidden bg-black text-white">
+    <div className="relative h-[100dvh] overflow-hidden bg-black text-white">
       <header className="pointer-events-none absolute inset-x-0 top-0 z-20">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-4">
           <div className="pointer-events-auto">
-            <p className="text-xs uppercase tracking-wide text-white/70">PDADS MVP</p>
+            <p className="text-xs uppercase tracking-wide text-white/70">pdadsmvp</p>
             <h1 className="text-base font-bold">{t('feed.title')}</h1>
           </div>
 
@@ -499,7 +499,7 @@ export function NewsFeed() {
               ref={(node) => {
                 sectionRefs.current[item.user_feed_id] = node;
               }}
-              className="relative h-screen snap-start overflow-hidden"
+              className="relative h-[100dvh] snap-start snap-always overflow-hidden"
             >
               <div className="absolute inset-0 bg-black">
                 <div

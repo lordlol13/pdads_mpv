@@ -11,7 +11,7 @@ from app.backend.api.routes.ingestion import router as ingestion_router
 from app.backend.api.routes.pipeline import router as pipeline_router
 from app.backend.core.config import settings
 
-app = FastAPI(title="PDADS MVP")
+app = FastAPI(title="pdadsmvp")
 
 cors_origins = settings.cors_allow_origins
 allow_credentials = "*" not in cors_origins
