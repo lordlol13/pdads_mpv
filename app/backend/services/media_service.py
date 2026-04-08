@@ -46,6 +46,10 @@ LOW_QUALITY_IMAGE_TERMS = (
     "sprite",
 )
 
+MIN_PUBLIC_IMAGE_WIDTH = 800
+MIN_PUBLIC_IMAGE_HEIGHT = 450
+MIN_PUBLIC_IMAGE_AREA = MIN_PUBLIC_IMAGE_WIDTH * MIN_PUBLIC_IMAGE_HEIGHT
+
 NEWS_IMAGE_BLOCKLIST_TERMS = (
     "logo",
     "icon",
@@ -248,6 +252,69 @@ class _ImageCandidateParser(HTMLParser):
                 self._add(attrs_map.get("href"), rel)
 
 
+def _extract_dimension_hints(url: str) -> tuple[int | None, int | None]:
+    value = str(url or "").strip().lower()
+    if not value:
+        return None, None
+
+    parsed = urlparse(value)
+    query = parse_qs(parsed.query)
+
+    width: int | None = None
+    height: int | None = None
+
+    for key in ("w", "width", "imgw"):
+        values = query.get(key)
+        if not values:
+            continue
+        raw = str(values[0] or "").strip()
+        if raw.isdigit():
+            width = int(raw)
+            break
+
+    for key in ("h", "height", "imgh"):
+        values = query.get(key)
+        if not values:
+            continue
+        raw = str(values[0] or "").strip()
+        if raw.isdigit():
+            height = int(raw)
+            break
+
+    if width is None or height is None:
+        match = re.search(r"(?<!\d)(\d{2,4})[xX](\d{2,4})(?!\d)", f"{parsed.path} {parsed.query}")
+        if match:
+            if width is None:
+                width = int(match.group(1))
+            if height is None:
+                height = int(match.group(2))
+
+    if width is None:
+        path_match = re.search(r"/(?:standard|news|thumb|thumbnail)/(\d{2,4})/", parsed.path)
+        if path_match:
+            width = int(path_match.group(1))
+
+    return width, height
+
+
+def _upgrade_known_image_url_quality(url: str) -> str:
+    value = str(url or "").strip()
+    if not value:
+        return value
+
+    parsed = urlparse(value)
+    host = parsed.netloc.lower()
+    path = parsed.path
+    query = parsed.query
+
+    if "ichef.bbci.co.uk" in host:
+        # BBC often provides low-res variants like /standard/240/ and /news/480/.
+        path = re.sub(r"(/ace/standard/)(\d{2,4})(/)", lambda m: f"{m.group(1)}1024{m.group(3)}" if int(m.group(2)) < 720 else m.group(0), path)
+        path = re.sub(r"(/news/)(\d{2,4})(/)", lambda m: f"{m.group(1)}1024{m.group(3)}" if int(m.group(2)) < 720 else m.group(0), path)
+
+    return parsed._replace(path=path, query=query).geturl()
+
+
 def _build_media_topic(topic: str) -> str:
     value = str(topic or "").strip()
     return value or "news"
@@ -291,6 +358,17 @@ def _looks_like_news_photo(url: str) -> bool:
         return False
 
     if parsed.path.endswith(NON_IMAGE_FILE_SUFFIXES):
+        return False
+
+    width_hint, height_hint = _extract_dimension_hints(candidate)
+    if width_hint is not None and height_hint is not None:
+        if width_hint < MIN_PUBLIC_IMAGE_WIDTH or height_hint < MIN_PUBLIC_IMAGE_HEIGHT:
+            return False
+        if width_hint * height_hint < MIN_PUBLIC_IMAGE_AREA:
+            return False
+    elif width_hint is not None and width_hint < MIN_PUBLIC_IMAGE_WIDTH:
+        return False
+    elif height_hint is not None and height_hint < MIN_PUBLIC_IMAGE_HEIGHT:
         return False
 
     for width_raw, height_raw in re.findall(r"(?<!\d)(\d{2,4})[xX](\d{2,4})(?!\d)", combined):
@@ -405,6 +483,17 @@ def _canonical_image_key(url: str) -> str:
     return f"{host}{path}?{stable_query}" if stable_query else f"{host}{path}"
 
 
+def _visual_image_key(url: str) -> str:
+    parsed = urlparse(str(url or "").strip().lower())
+    host = parsed.netloc.removeprefix("www.")
+    path = unquote(parsed.path or "/")
+    path = re.sub(r"/+", "/", path)
+    path = re.sub(r"(?<!\d)\d{2,4}[xX]\d{2,4}(?!\d)", "{size}", path)
+    path = re.sub(r"(w|h|width|height|q|quality)[=_-]?\d{1,4}", r"\1={n}", path)
+    path = path.rstrip("/") or "/"
+    return f"{host}{path}"
+
+
 def _rank_image_urls(
     urls: list[str],
     topic: str,
@@ -430,6 +519,26 @@ def _rank_image_urls(
             score += 60.0
         if _looks_like_news_photo(url):
             score += 25.0
+
+        width_hint, height_hint = _extract_dimension_hints(url)
+        if width_hint is not None:
+            if width_hint >= 1280:
+                score += 14.0
+            elif width_hint >= 1024:
+                score += 10.0
+            elif width_hint >= MIN_PUBLIC_IMAGE_WIDTH:
+                score += 6.0
+            elif width_hint >= 720:
+                score += 2.0
+        if height_hint is not None:
+            if height_hint >= 720:
+                score += 6.0
+            elif height_hint >= 480:
+                score += 3.0
+            elif height_hint >= MIN_PUBLIC_IMAGE_HEIGHT:
+                score += 1.5
+        else:
+            score -= 4.0
 
         token_hits_url = 0
         token_hits_context = 0
@@ -511,6 +620,7 @@ def _filter_topical_candidates(
 def _collect_unique_urls(values: list[str], limit: int) -> list[str]:
     result: list[str] = []
     seen_keys: set[str] = set()
+    seen_visual_keys: set[str] = set()
     domain_counts: dict[str, int] = {}
     # Keep diversity so feed doesn't show 3-4 near-identical CDN variants.
     max_per_domain = 2 if limit >= 4 else 3
@@ -521,7 +631,10 @@ def _collect_unique_urls(values: list[str], limit: int) -> list[str]:
             continue
 
         dedupe_key = _canonical_image_key(candidate)
+        visual_key = _visual_image_key(candidate)
         if not dedupe_key or dedupe_key in seen_keys:
+            continue
+        if visual_key in seen_visual_keys:
             continue
 
         domain = _source_domain(candidate)
@@ -532,6 +645,7 @@ def _collect_unique_urls(values: list[str], limit: int) -> list[str]:
             domain_counts[domain] = count + 1
 
         seen_keys.add(dedupe_key)
+        seen_visual_keys.add(visual_key)
         result.append(candidate)
         if len(result) >= limit:
             break
@@ -545,9 +659,13 @@ def _collect_unique_urls(values: list[str], limit: int) -> list[str]:
         if not candidate:
             continue
         dedupe_key = _canonical_image_key(candidate)
+        visual_key = _visual_image_key(candidate)
         if not dedupe_key or dedupe_key in seen_keys:
             continue
+        if visual_key in seen_visual_keys:
+            continue
         seen_keys.add(dedupe_key)
+        seen_visual_keys.add(visual_key)
         result.append(candidate)
         if len(result) >= limit:
             break
@@ -573,12 +691,12 @@ def _fallback_image_urls(topic: str, start_sig: int, count: int) -> list[str]:
 
 async def fetch_media_urls(
     topic: str,
-    limit: int = 5,
+    limit: int = 4,
     source_url: str | None = None,
     source_image_url: str | None = None,
 ) -> list[str]:
     topic = _build_media_topic(topic)
-    limit = max(1, int(limit))
+    limit = min(4, max(1, int(limit)))
     source_url = _unwrap_redirect_url(source_url)
     search_tokens = _topic_tokens(topic)
     search_query = " ".join(search_tokens[:8]) or topic
@@ -681,9 +799,11 @@ async def fetch_media_urls(
 
     candidates: list[str] = []
 
-    min_required = min(limit, 3)
+    min_required = 1
 
     normalized_source_image = _normalize_candidate_url(source_image_url)
+    if normalized_source_image:
+        normalized_source_image = _upgrade_known_image_url_quality(normalized_source_image)
     if normalized_source_image and _looks_like_news_photo(normalized_source_image):
         candidates.append(normalized_source_image)
         context_by_url[normalized_source_image] = topic
@@ -708,6 +828,8 @@ async def fetch_media_urls(
 
     for article in payload.get("articles") or []:
         image_url = _normalize_candidate_url(article.get("urlToImage"))
+        if image_url:
+            image_url = _upgrade_known_image_url_quality(image_url)
         if image_url and _looks_like_news_photo(image_url):
             candidates.append(image_url)
             article_context = " ".join(
@@ -728,6 +850,8 @@ async def fetch_media_urls(
 
     for item in google_payload.get("items") or []:
         image_url = _normalize_candidate_url(item.get("link"))
+        if image_url:
+            image_url = _upgrade_known_image_url_quality(image_url)
         if image_url and _looks_like_news_photo(image_url):
             candidates.append(image_url)
             google_context = " ".join(
@@ -752,6 +876,8 @@ async def fetch_media_urls(
             if not isinstance(image_info, list) or not image_info:
                 continue
             image_url = _normalize_candidate_url((image_info[0] or {}).get("thumburl") or (image_info[0] or {}).get("url"))
+            if image_url:
+                image_url = _upgrade_known_image_url_quality(image_url)
             if image_url and _looks_like_news_photo(image_url):
                 candidates.append(image_url)
                 wiki_context = str((page or {}).get("title") or "").strip()
