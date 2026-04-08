@@ -5,6 +5,7 @@ import { newsService } from '../../api/services';
 import { useAuth } from '../../context/AuthContext';
 import { useI18n } from '../../context/I18nContext';
 import { useNewsFeed, useReactToNews } from '../../hooks/useNews';
+import { getUzbekHeadlineFallback, normalizeFeedTitle } from '../../lib/newsText';
 import { CommentItem, FeedItem } from '../../types';
 
 const FALLBACK_IMAGE =
@@ -70,18 +71,6 @@ function getFeedImages(item: FeedItem): string[] {
 
   const unique = Array.from(uniqueByKey.values());
   return unique.length > 0 ? unique : [FALLBACK_IMAGE];
-}
-
-function normalizeFeedTitle(value: string | null | undefined): string {
-  const source = String(value || '').trim();
-  if (!source) {
-    return '';
-  }
-
-  return source
-    .replace(/^\s*(?:yangilik|yanglik|news|новость|headline|sarlavha)\s*[:\-–—]+\s*/i, '')
-    .replace(/\s{2,}/g, ' ')
-    .trim();
 }
 
 function stripLikelyEnglishSentences(text: string): string {
@@ -206,11 +195,13 @@ export function NewsFeed() {
   const [textSheetItem, setTextSheetItem] = useState<FeedItem | null>(null);
   const [activeCardId, setActiveCardId] = useState<number | null>(null);
   const [imageIndexByCard, setImageIndexByCard] = useState<Record<number, number>>({});
+  const [likePulseByCard, setLikePulseByCard] = useState<Record<number, boolean>>({});
 
   const feedContainerRef = useRef<HTMLElement | null>(null);
   const sectionRefs = useRef<Record<number, HTMLElement | null>>({});
   const imageSwipeStartXRef = useRef<Record<number, number | null>>({});
   const viewedAiNewsIdsRef = useRef<Set<number>>(new Set());
+  const likeAnimationTimersRef = useRef<Record<number, number | null>>({});
 
   const orderedFeed = useMemo(() => {
     return [...feedItems].sort((a, b) => {
@@ -236,6 +227,16 @@ export function NewsFeed() {
       return orderedFeed[0].user_feed_id;
     });
   }, [orderedFeed]);
+
+  useEffect(() => {
+    return () => {
+      Object.values(likeAnimationTimersRef.current).forEach((timerId) => {
+        if (timerId !== null) {
+          window.clearTimeout(timerId);
+        }
+      });
+    };
+  }, []);
 
   useEffect(() => {
     if (!orderedFeed.length) {
@@ -358,18 +359,33 @@ export function NewsFeed() {
     }
 
     const nextLiked = !currentlyLiked;
+    const previousLiked = currentlyLiked;
+
+    const existingTimer = likeAnimationTimersRef.current[item.ai_news_id];
+    if (existingTimer !== null) {
+      window.clearTimeout(existingTimer);
+    }
+
+    setLikePulseByCard((prev) => ({ ...prev, [item.ai_news_id]: true }));
+    likeAnimationTimersRef.current[item.ai_news_id] = window.setTimeout(() => {
+      setLikePulseByCard((prev) => ({ ...prev, [item.ai_news_id]: false }));
+      likeAnimationTimersRef.current[item.ai_news_id] = null;
+    }, 220);
+
+    setLikedOverrides((prev) => ({ ...prev, [item.ai_news_id]: nextLiked }));
 
     interactionMutation.mutate(
       {
         user_id: user.id,
         ai_news_id: item.ai_news_id,
         liked: nextLiked,
-        viewed: true,
-        watch_time: 12,
       },
       {
         onSuccess: () => {
-          setLikedOverrides((prev) => ({ ...prev, [item.ai_news_id]: nextLiked }));
+          // Keep the optimistic state and let the feed refetch update ranking in the background.
+        },
+        onError: () => {
+          setLikedOverrides((prev) => ({ ...prev, [item.ai_news_id]: previousLiked }));
         },
       },
     );
@@ -595,7 +611,7 @@ export function NewsFeed() {
                       <span className="rounded-full bg-black/35 px-2.5 py-1">{t('feed.badge.score', { score: formatScore(item.ai_score) })}</span>
                     </div>
 
-                    <h2 className="text-xl font-bold leading-tight">{displayTitle || `AI News #${item.ai_news_id}`}</h2>
+                    <h2 className="text-xl font-bold leading-tight">{displayTitle || getUzbekHeadlineFallback(item.ai_news_id)}</h2>
 
                     <button
                       type="button"
@@ -614,7 +630,7 @@ export function NewsFeed() {
                       type="button"
                       onClick={() => handleLikeToggle(item, liked)}
                       disabled={interactionMutation.isPending}
-                      className={`flex h-11 min-w-11 items-center justify-center rounded-full ${liked ? 'bg-green-600' : 'bg-white/20'} backdrop-blur hover:bg-white/30 disabled:cursor-not-allowed disabled:opacity-70`}
+                      className={`flex h-11 min-w-11 items-center justify-center rounded-full transition-transform duration-200 ${likePulseByCard[item.ai_news_id] ? 'scale-110' : 'scale-100'} ${liked ? 'bg-green-600' : 'bg-white/20'} backdrop-blur hover:bg-white/30 disabled:cursor-not-allowed disabled:opacity-70`}
                       title={liked ? t('common.unlike') : t('common.like')}
                     >
                       <Heart size={18} fill={liked ? 'currentColor' : 'none'} />
@@ -664,7 +680,7 @@ export function NewsFeed() {
             </div>
 
             <div className="max-h-[calc(86vh-64px)] overflow-y-auto px-5 py-4 pb-[calc(6rem+env(safe-area-inset-bottom))]">
-              <h4 className="mb-3 text-lg font-semibold text-on-surface">{normalizeFeedTitle(textSheetItem.final_title) || `AI News #${textSheetItem.ai_news_id}`}</h4>
+              <h4 className="mb-3 text-lg font-semibold text-on-surface">{normalizeFeedTitle(textSheetItem.final_title) || getUzbekHeadlineFallback(textSheetItem.ai_news_id)}</h4>
               <p className="whitespace-pre-line text-sm leading-relaxed text-on-surface-variant">
                 {normalizeArticleText(textSheetItem.final_text || t('feed.noText'))}
               </p>

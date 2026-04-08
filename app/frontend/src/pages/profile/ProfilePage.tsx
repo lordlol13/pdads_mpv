@@ -5,6 +5,7 @@ import { LanguageSwitcher } from '../../components/ui/LanguageSwitcher';
 import { useAuth } from '../../context/AuthContext';
 import { useI18n } from '../../context/I18nContext';
 import { useNewsFeed } from '../../hooks/useNews';
+import { getUzbekHeadlineFallback, normalizeFeedTitle } from '../../lib/newsText';
 
 export function ProfilePage() {
   const { t } = useI18n();
@@ -68,7 +69,7 @@ export function ProfilePage() {
                   <Bookmark size={14} className="mt-0.5 text-blue-300" />
                   <div>
                     <p className="line-clamp-2 text-sm font-medium text-white/90">
-                      {item.final_title || `AI News #${item.ai_news_id}`}
+                      {normalizeFeedTitle(item.final_title) || getUzbekHeadlineFallback(item.ai_news_id)}
                     </p>
                     <p className="mt-0.5 text-xs text-white/60">{item.category || t('feed.category.general')}</p>
                   </div>

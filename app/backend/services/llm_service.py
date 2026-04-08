@@ -35,6 +35,18 @@ ENGLISH_TITLE_STOPWORDS = {
     "uncertainty",
 }
 
+ENGLISH_TEXT_STOPWORDS = ENGLISH_TITLE_STOPWORDS | {
+    "today",
+    "breaking",
+    "report",
+    "story",
+    "latest",
+    "update",
+    "video",
+    "watch",
+    "more",
+}
+
 
 class GeneratedNews(TypedDict):
     final_title: str
@@ -110,6 +122,26 @@ def _looks_english_heavy(value: str) -> bool:
 
     stopword_hits = sum(1 for token in tokens if token in ENGLISH_TITLE_STOPWORDS)
     return stopword_hits >= 2 and (stopword_hits / max(1, len(tokens))) >= 0.2
+
+
+def _strip_likely_english_sentences(text: str) -> str:
+    sentences = [part.strip() for part in re.split(r"(?<=[.!?])\s+", str(text or "")) if part.strip()]
+    if not sentences:
+        return ""
+
+    filtered: list[str] = []
+    for sentence in sentences:
+        words = re.findall(r"[a-z']+", sentence.lower()) or []
+        if len(words) < 5:
+            filtered.append(sentence)
+            continue
+
+        hits = sum(1 for word in words if word in ENGLISH_TEXT_STOPWORDS)
+        if hits >= 2 and (hits / max(1, len(words))) >= 0.2:
+            continue
+        filtered.append(sentence)
+
+    return " ".join(filtered).strip()
 
 
 def _ensure_uzbek_title(value: str, fallback_title: str) -> str:
@@ -590,12 +622,12 @@ def _ensure_structured_personal_text(
     geo: str | None,
     raw_text: str,
 ) -> str:
-    clean_text = _clean_text_artifacts(text)
-    clean_raw_text = _clean_text_artifacts(raw_text)
+    clean_text = _strip_likely_english_sentences(_clean_text_artifacts(text))
+    clean_raw_text = _strip_likely_english_sentences(_clean_text_artifacts(raw_text))
     min_words = settings.PIPELINE_TEXT_MIN_WORDS
     max_words = int(settings.PIPELINE_TEXT_MAX_WORDS or 0)
 
-    if _word_count(clean_text) >= min_words and not _contains_cyrillic(clean_text):
+    if _word_count(clean_text) >= min_words and not _contains_cyrillic(clean_text) and not _looks_english_heavy(clean_text):
         paragraphs = _split_into_paragraphs(clean_text)
         if len(paragraphs) < 3:
             paragraphs = _sentences_to_paragraphs(" ".join(paragraphs), target_paragraphs=3)
