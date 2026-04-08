@@ -23,6 +23,25 @@ function normalizeMediaUrl(url: string): string {
   return FALLBACK_IMAGE;
 }
 
+function buildImageDedupeKey(url: string): string {
+  const value = (url || '').trim();
+  if (!value) {
+    return '';
+  }
+
+  try {
+    const parsed = new URL(value);
+    const host = parsed.hostname.replace(/^www\./i, '').toLowerCase();
+    let path = decodeURIComponent(parsed.pathname || '/').toLowerCase();
+    path = path.replace(/\/+/g, '/');
+    path = path.replace(/\b\d{2,4}x\d{2,4}\b/g, '{size}');
+    path = path.replace(/(w|h|width|height|q|quality)[=_-]?\d{1,4}/g, '$1={n}');
+    return `${host}${path}`;
+  } catch {
+    return value.toLowerCase();
+  }
+}
+
 function getFeedImages(item: FeedItem): string[] {
   if (!Array.isArray(item.image_urls) || item.image_urls.length === 0) {
     return [FALLBACK_IMAGE];
@@ -32,7 +51,19 @@ function getFeedImages(item: FeedItem): string[] {
     .map((url) => normalizeMediaUrl(url))
     .filter(Boolean);
 
-  const unique = Array.from(new Set(prepared));
+  const uniqueByKey = new Map<string, string>();
+  for (const url of prepared) {
+    const key = buildImageDedupeKey(url);
+    if (!key || uniqueByKey.has(key)) {
+      continue;
+    }
+    uniqueByKey.set(key, url);
+    if (uniqueByKey.size >= 4) {
+      break;
+    }
+  }
+
+  const unique = Array.from(uniqueByKey.values());
   return unique.length > 0 ? unique : [FALLBACK_IMAGE];
 }
 
@@ -75,6 +106,47 @@ function normalizeArticleText(value: string): string {
   }
 
   return cleaned;
+}
+
+function ImageWithSkeleton({ src, alt }: { src: string; alt: string }) {
+  const [loaded, setLoaded] = useState(false);
+  const [error, setError] = useState(false);
+
+  return (
+    <div
+      className="relative w-full"
+      style={{
+        width: 'min(96vw, 980px)',
+        aspectRatio: '16 / 9',
+        background: '#222',
+        borderRadius: '18px',
+        overflow: 'hidden',
+        boxShadow: '0 2px 16px rgba(0,0,0,0.18)',
+      }}
+    >
+      {!loaded ? (
+        <div className="absolute inset-0 z-10 flex items-center justify-center bg-neutral-800 animate-pulse">
+          <svg width="64" height="64" fill="#444" viewBox="0 0 24 24">
+            <rect width="100%" height="100%" rx="12" fill="#444" />
+            <path d="M8 17l4-4 4 4M12 13V7" stroke="#888" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </div>
+      ) : null}
+
+      <img
+        src={error ? FALLBACK_IMAGE : src}
+        alt={alt}
+        className="absolute inset-0 h-full w-full object-cover transition-opacity duration-500"
+        style={{ opacity: loaded ? 1 : 0 }}
+        onLoad={() => setLoaded(true)}
+        onError={() => {
+          setError(true);
+          setLoaded(true);
+        }}
+        draggable={false}
+      />
+    </div>
+  );
 }
 
 export function NewsFeed() {
@@ -431,58 +503,49 @@ export function NewsFeed() {
             >
               <div className="absolute inset-0 bg-black">
                 <div
-                  className="relative h-full w-full touch-pan-y"
+                  className="absolute inset-x-0 top-1/2 flex -translate-y-1/2 justify-center px-3 touch-pan-y"
                   onTouchStart={(event) => handleImageTouchStart(item.user_feed_id, event)}
                   onTouchEnd={(event) => handleImageTouchEnd(item.user_feed_id, imageCount, event)}
                 >
-                  <img
-                    src={currentImage}
-                    alt={item.final_title || t('feed.imageAlt')}
-                    className="h-full w-full object-cover object-center"
-                    loading="lazy"
-                    onError={(event) => {
-                      const target = event.currentTarget;
-                      if (target.src !== FALLBACK_IMAGE) {
-                        target.src = FALLBACK_IMAGE;
-                      }
-                    }}
-                  />
+                  <div className="relative w-full max-w-[980px]">
+                    <ImageWithSkeleton src={currentImage} alt={item.final_title || t('feed.imageAlt')} />
 
-                  {imageCount > 1 ? (
-                    <>
-                      <button
-                        type="button"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          handleImageChange(item.user_feed_id, imageCount, -1);
-                        }}
-                        className="absolute left-3 top-1/2 -translate-y-1/2 rounded-full bg-black/55 px-3 py-2 text-xl leading-none text-white backdrop-blur hover:bg-black/70"
-                        aria-label="Previous image"
-                      >
-                        {'‹'}
-                      </button>
+                    {imageCount > 1 ? (
+                      <>
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            handleImageChange(item.user_feed_id, imageCount, -1);
+                          }}
+                          className="absolute left-3 top-1/2 z-20 -translate-y-1/2 rounded-full bg-black/55 px-3 py-2 text-xl leading-none text-white backdrop-blur hover:bg-black/70"
+                          aria-label="Previous image"
+                        >
+                          {'‹'}
+                        </button>
 
-                      <button
-                        type="button"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          handleImageChange(item.user_feed_id, imageCount, 1);
-                        }}
-                        className="absolute right-3 top-1/2 -translate-y-1/2 rounded-full bg-black/55 px-3 py-2 text-xl leading-none text-white backdrop-blur hover:bg-black/70"
-                        aria-label="Next image"
-                      >
-                        {'›'}
-                      </button>
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            handleImageChange(item.user_feed_id, imageCount, 1);
+                          }}
+                          className="absolute right-3 top-1/2 z-20 -translate-y-1/2 rounded-full bg-black/55 px-3 py-2 text-xl leading-none text-white backdrop-blur hover:bg-black/70"
+                          aria-label="Next image"
+                        >
+                          {'›'}
+                        </button>
 
-                      <div className="absolute bottom-5 left-1/2 -translate-x-1/2 rounded-full bg-black/50 px-3 py-1 text-xs font-semibold text-white/90 backdrop-blur">
-                        {currentImageIndex + 1}/{imageCount}
-                      </div>
-                    </>
-                  ) : null}
+                        <div className="absolute bottom-5 left-1/2 z-20 -translate-x-1/2 rounded-full bg-black/50 px-3 py-1 text-xs font-semibold text-white/90 backdrop-blur">
+                          {currentImageIndex + 1}/{imageCount}
+                        </div>
+                      </>
+                    ) : null}
+                  </div>
                 </div>
               </div>
 
-              <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/30 to-black/35" />
+              <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/85 via-black/30 to-black/35" />
 
               <div className="absolute inset-x-0 bottom-0 z-10 p-4 pb-24">
                 <div className="mx-auto flex max-w-6xl items-end justify-between gap-4">
