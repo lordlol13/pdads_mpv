@@ -334,7 +334,15 @@ export function BackendMainFeed({ currentUser, onLogout }: BackendMainFeedProps)
               <>
                 <div className="flex flex-col items-center gap-4">
                   <div className={`h-24 w-24 overflow-hidden rounded-full border-4 ${theme === 'dark' ? 'bg-zinc-900 border-white/5' : 'bg-white border-zinc-200'}`}>
-                    <img src="/PR.ADS.png" alt="PR.ADS" className="h-full w-full object-cover" />
+                    {currentUser?.username ? (
+                      <div className="h-full w-full flex items-center justify-center text-2xl font-bold text-zinc-300">
+                        {currentUser.username.charAt(0).toUpperCase()}
+                      </div>
+                    ) : (
+                      <div className="h-full w-full flex items-center justify-center">
+                        <User className="w-12 h-12 text-zinc-400" />
+                      </div>
+                    )}
                   </div>
                   <div className="text-center space-y-1">
                     <h2 className="text-2xl font-bold">{currentUser?.username || 'User'}</h2>

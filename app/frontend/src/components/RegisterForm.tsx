@@ -48,10 +48,7 @@ export function RegisterForm({
     >
       <form className="space-y-8" onSubmit={handleSubmit}>
         <div className="space-y-2">
-          <div className="flex items-center gap-2 pb-2">
-            <img src="/PR.ADS.png" alt="PR.ADS" className="h-8 w-8 rounded-md object-cover" />
-            <span className="text-sm font-semibold text-zinc-300">PR.ADS</span>
-          </div>
+          {/* branding removed from inside the form; kept only on AuthLayout left panel */}
           <h2 className="text-3xl font-bold tracking-tight">{t.register}</h2>
           <p className="text-zinc-500">{t.alreadyHaveAccount}</p>
         </div>
