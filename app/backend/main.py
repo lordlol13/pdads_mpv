@@ -16,6 +16,7 @@ import time
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from starlette.middleware.proxy_headers import ProxyHeadersMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
@@ -55,6 +56,9 @@ app = FastAPI(
 # =====================================================================
 # Middleware Stack
 # =====================================================================
+
+# Respect X-Forwarded-* headers from Railway/Proxy so OAuth redirect_uri uses https://
+app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
 
 # Add request correlation ID
 @app.middleware("http")

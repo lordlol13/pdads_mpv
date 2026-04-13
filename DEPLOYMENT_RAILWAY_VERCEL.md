@@ -19,7 +19,7 @@ Use the same repository for all 3 Python services.
 `pdads_mpv` start command:
 
 ```bash
-python -m uvicorn app.backend.main:app --host 0.0.0.0 --port ${PORT}
+python -m uvicorn app.backend.main:app --host 0.0.0.0 --port ${PORT} --proxy-headers --forwarded-allow-ips='*'
 ```
 
 `pdads_mpv_worker` start command:

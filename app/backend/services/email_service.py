@@ -26,8 +26,10 @@ def _send_with_resend(*, to_email: str, subject: str, html: str) -> bool:
             }
         )
         return True
-    except Exception:
-        logger.exception("Failed to send email via Resend to %s", to_email)
+    except Exception as exc:
+        # Resend SDK exceptions often include HTTP status/message (e.g. 401/403/422).
+        # Log the exception details without leaking any secrets.
+        logger.exception("Failed to send email via Resend to %s: %s", to_email, exc)
         return False
 
 
