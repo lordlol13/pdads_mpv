@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-2.5-flash"
     GEMINI_REVIEW_ENABLED: bool = False
+    OPENAI_API_KEY: str = ""
+    OPENAI_MODEL: str = "gpt-4.1-mini"
+    OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-small"
     GROQ_API_KEY: str = ""
     GROQ_MODEL: str = "llama-3.3-70b-versatile"
     DEEPSEEK_API_KEY: str = ""
@@ -30,6 +33,17 @@ class Settings(BaseSettings):
     JWT_SECRET_KEY: str = ""
     JWT_ALGORITHM: str = "HS256"
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
+    SESSION_SECRET_KEY: str = ""
+
+    OAUTH_FRONTEND_SUCCESS_URL: str = "http://localhost:5173"
+    OAUTH_FRONTEND_ERROR_URL: str = "http://localhost:5173"
+
+    GOOGLE_OAUTH_CLIENT_ID: str = ""
+    GOOGLE_OAUTH_CLIENT_SECRET: str = ""
+    MICROSOFT_OAUTH_CLIENT_ID: str = ""
+    MICROSOFT_OAUTH_CLIENT_SECRET: str = ""
+    APPLE_OAUTH_CLIENT_ID: str = ""
+    APPLE_OAUTH_CLIENT_SECRET: str = ""
 
     AUTH_VERIFICATION_CODE_TTL_MINUTES: int = 10
     AUTH_VERIFICATION_MAX_ATTEMPTS: int = 5
@@ -41,6 +55,11 @@ class Settings(BaseSettings):
     SMTP_PASSWORD: str = ""
     SMTP_FROM_EMAIL: str = "noreply@pdads.local"
     SMTP_USE_TLS: bool = True
+    RESEND_API_KEY: str = ""
+    RESEND_FROM_EMAIL: str = "onboarding@resend.dev"
+
+    PASSWORD_RESET_CODE_TTL_MINUTES: int = 15
+    PASSWORD_RESET_MAX_ATTEMPTS: int = 5
 
     CORS_ALLOW_ORIGINS: str = (
         "http://127.0.0.1:3000,http://localhost:3000,"
@@ -50,6 +69,7 @@ class Settings(BaseSettings):
         "http://127.0.0.1:8000,http://localhost:8000"
     )
     CORS_ALLOW_ORIGIN_REGEX: str = ""
+    TRUSTED_HOSTS: str = "*"
 
     PIPELINE_MAX_ATTEMPTS: int = 1
     PIPELINE_TARGET_SCORE: float = 8.0
@@ -64,6 +84,35 @@ class Settings(BaseSettings):
     PIPELINE_TEXT_MIN_WORDS: int = 170
     PIPELINE_TEXT_MAX_WORDS: int = 0
     PIPELINE_TEXT_MAX_CHARS: int = 0
+
+    EMBEDDING_DIMENSION: int = 256
+    RECOMMENDER_USER_HISTORY_LIMIT: int = 20
+    RECOMMENDER_SIMILARITY_WINDOW_MULTIPLIER: int = 4
+    RECOMMENDER_SIMILARITY_WEIGHT: float = 1.0
+    RECOMMENDER_ENGAGEMENT_WEIGHT: float = 0.45
+    RECOMMENDER_FRESHNESS_WEIGHT: float = 0.2
+
+    # API Resilience & Retry Strategy
+    API_RETRY_MAX_ATTEMPTS: int = 3
+    API_RETRY_BASE_DELAY_SECONDS: int = 2
+    API_RETRY_MAX_DELAY_SECONDS: int = 60
+
+    # Rate Limiting
+    NEWS_API_RATE_LIMIT_PER_MINUTE: int = 20
+    NEWS_API_RATE_LIMIT_PER_DAY: int = 500
+    LLM_RATE_LIMIT_PER_MINUTE: int = 5
+    LLM_RATE_LIMIT_PER_HOUR: int = 200
+
+    # Caching TTL
+    CACHE_LLM_RESULTS_TTL_HOURS: int = 24
+    CACHE_NEWS_RESULTS_TTL_HOURS: int = 6
+    CACHE_EMBEDDINGS_TTL_HOURS: int = 168  # 1 week
+
+    # Fallback & Degradation
+    LLM_FALLBACK_ENABLED: bool = True
+    LLM_FALLBACK_MODEL: str = "deepseek"
+    LLM_FALLBACK_RETURN_CACHED: bool = True
+    NEWS_API_FALLBACK_TO_RSS: bool = True
 
     YOUTUBE_API_KEY: str = ""
     YOUTUBE_REGION_CODE: str = "UZ"
@@ -94,6 +143,13 @@ class Settings(BaseSettings):
         values = [item.strip() for item in parts if item and item.strip()]
         return values or ["http://127.0.0.1:8000"]
 
+    @property
+    def trusted_hosts(self) -> list[str]:
+        raw = (self.TRUSTED_HOSTS or "").strip()
+        parts = re.split(r"[,;\r\n]+", raw)
+        values = [item.strip() for item in parts if item and item.strip()]
+        return values or ["*"]
+
     @model_validator(mode="after")
     def _normalize_runtime_urls(self) -> "Settings":
         self.DATABASE_URL = self._normalize_database_url(self.DATABASE_URL)
@@ -112,6 +168,9 @@ class Settings(BaseSettings):
         if not (self.JWT_SECRET_KEY or "").strip():
             # Dev-only fallback to prevent shipping predictable secrets.
             self.JWT_SECRET_KEY = f"dev-{secrets.token_urlsafe(32)}"
+
+        if not (self.SESSION_SECRET_KEY or "").strip():
+            self.SESSION_SECRET_KEY = f"session-{secrets.token_urlsafe(32)}"
 
         return self
 

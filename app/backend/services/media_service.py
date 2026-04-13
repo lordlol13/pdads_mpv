@@ -483,6 +483,13 @@ def _canonical_image_key(url: str) -> str:
     return f"{host}{path}?{stable_query}" if stable_query else f"{host}{path}"
 
 
+def canonical_image_key(url: str | None) -> str:
+    value = str(url or "").strip()
+    if not value:
+        return ""
+    return _canonical_image_key(value)
+
+
 def _visual_image_key(url: str) -> str:
     parsed = urlparse(str(url or "").strip().lower())
     host = parsed.netloc.removeprefix("www.")

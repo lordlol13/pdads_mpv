@@ -21,6 +21,7 @@ class FeedItem(BaseModel):
     ai_score: float | None = None
     vector_status: str | None = None
     liked: bool | None = None
+    like_count: int = 0
     saved: bool | None = None
     comment_count: int = 0
     created_at: datetime | None = None

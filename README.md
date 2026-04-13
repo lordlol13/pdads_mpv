@@ -1,108 +1,122 @@
-# 🌍 AI-Driven Personalized News Feed (TikTok for News)
+# AI-Driven Personalized News Feed
 
-![Python](https://img.shields.io/badge/Python-3.12-blue) ![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-green) ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15.0-blue) ![AI](https://img.shields.io/badge/AI-DeepSeek-orange)
+![Python](https://img.shields.io/badge/Python-3.12-blue)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-green)
+![Celery](https://img.shields.io/badge/Celery-Distributed-orange)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15-blue)
 
-## 📌 О проекте (Project Vision)
-Информационный шум — главная проблема современных медиа. Этот проект представляет собой MVP интеллектуального новостного агрегатора, который решает эту проблему с помощью **мультиагентной ИИ-архитектуры**. 
+Personalized news platform with asynchronous AI pipeline, recommendation ranking, and production-focused observability.
 
-Вместо классической выдачи одних и тех же статей всем пользователям, система работает как алгоритм TikTok: она анализирует сырые новости, классифицирует их по гео-привязке и срочности, а затем **автоматически переписывает текст** под конкретные интересы когорт пользователей (персон). 
+## Architecture Diagram
 
-> **Пример, в котором используется эта задача:** Если в городе проходит крупный технологический форум, система не просто выдаст сухую сводку. Инженер получит сгенерированную новость с акцентом на представленные архитектурные решения, а предприниматель — текст с фокусом на привлеченные инвестиции стартапов.
+```mermaid
+flowchart LR
+		A[News API / RSS Sources] --> B[Ingestion API]
+		B --> C[(raw_news)]
+		C --> D[Celery Pipeline]
+		D --> E[LLM Generation<br/>Primary + Fallback]
+		E --> F[(ai_news)]
+		F --> G[Feed Service + Recommender]
+		G --> H[(user_feed + interactions + feed_feature_log)]
+		H --> I[FastAPI /feed]
+		I --> J[Frontend]
 
----
+		K[Redis] --> D
+		K --> G
+		L[Health & Metrics] --> I
+```
 
-## ⚙️ Как работает архитектура (Core Pipeline)
+## Pipeline Flow
 
-Система разделена на независимые микросервисы для обеспечения масштабируемости и снижения затрат на API.
+1. Ingestion stores raw content in `raw_news`.
+2. Celery task `brain.process_raw_news` processes each raw item.
+3. LLM service generates persona-specific AI variants with retry/cache/fallback.
+4. Results are saved to `ai_news` and added to `user_feed`.
+5. Recommender ranks feed by similarity, engagement, and freshness.
+6. Feed requests are logged as impressions for quality analytics.
 
-### 1. Ingestion & Classification (Левое полушарие мозга)
-* Сырые данные попадают в `raw_news` через API или внешний ingestion-слой.
-* В текущем MVP классификация и генерация сведены к стабильному backend-пайплайну. DeepSeek отвечает за переписывание и оценку, а отдельный Gemini-классификатор можно подключить позже как расширение.
+## Tech Stack
 
-> **Пример, в котором используется эта задача:** Поступает новость: "В Ташкенте сошел сель, перекрыта трасса". Сначала запись сохраняется как raw news, затем пайплайн готовит AI-версию и статус обработки для ленты.
+- Backend: FastAPI, SQLAlchemy Async, Alembic
+- Queue/Workers: Celery + Redis
+- Data: PostgreSQL (SQLite-compatible fallback in several paths)
+- AI: LLM generation with fallback chain
+- Frontend: React + Vite
+- Testing: Pytest
 
-### 2. Prompt Factory & Cohort Generation (Правое полушарие мозга)
-* Чтобы не тратить токены на генерацию уникального текста для *каждого* пользователя (что убьет бюджет проекта), используется когортный подход.
-* Тяжелая языковая модель (**DeepSeek**) получает сырую новость и системный промпт с требованием переписать ее для 2-3 ключевых аудиторий (например, "tech", "sports", "general").
+## Features
 
-> **Пример, в котором используется эта задача:** Новость о запуске нового стадиона в Андижане обрабатывается DeepSeek. Модель создает две записи в БД: одну с меткой `persona = sports` (про вместимость и газон), вторую с меткой `persona = economy` (про создание рабочих мест и стоимость контракта). 
+- Async ingestion + background processing
+- LLM resilience: retry, rate limit, cache, fallback
+- Personalized ranking with embeddings and engagement signals
+- Health checks: liveness/readiness/system
+- Production metrics:
+	- Recommendation: CTR, average time spent, recommendation accuracy
+	- Pipeline: failed tasks, latency, retry count, pending queue
 
-### 3. Smart Feed Serving (Выдача пользователю)
-* Бэкенд на **FastAPI** обрабатывает запросы пользователей.
-* Алгоритм сопоставляет `location` пользователя и его `interests` (хранящиеся в формате JSONB) с обработанными новостями из базы данных.
-* Формируется бесконечная лента, оптимизированная по скорости отклика (через асинхронный драйвер asyncpg).
+## Monitoring Endpoints
 
-> **Пример, в котором используется эта задача:** Когда пользователь открывает приложение, FastAPI делает быстрый SQL-запрос, который фильтрует таблицу готовых ИИ-новостей. Если у пользователя в JSONB интересах есть "спорт", алгоритм подтягивает именно спортивные версии текстов, игнорируя версии для финансистов.
+- `GET /api/health/live`
+- `GET /api/health/ready`
+- `GET /api/health/system`
+- `GET /api/health/metrics`
+- `GET /api/health/metrics/recommendations`
+- `GET /api/health/metrics/pipeline`
 
----
+## Demo
 
-## 🗄️ Схема Базы Данных (Database Schema)
-Проект использует строгую реляционную модель **PostgreSQL** для предотвращения дублирования данных.
+- Frontend demo (Vercel): set your URL here after deployment
+	- `https://<your-project>.vercel.app`
+- Local demo:
+	1. Start backend + worker + beat
+	2. Start frontend (`npm run dev` in `app/frontend`)
+	3. Open frontend and use demo credentials
 
-* `users`: Профили (геолокация, вектор интересов).
-* `raw_news`: Сырые тексты из интернета + ИИ-оценка региона и срочности.
-* `ai_news`: Сгенерированные вариации текстов привязанные к `raw_news_id` (FK).
-* `user_feed`: Таблица связи для быстрой отдачи персонализированной ленты.
-* `interactions`: Сбор метрик (лайки, время просмотра) для будущего обучения ML-моделей.
+Demo credentials:
+- Email: `demo@example.com`
+- Password: `Demo12345!`
 
-> **Пример, в котором используется эта задача:** Жесткие связи (Foreign Keys) с правилом `ON DELETE CASCADE` гарантируют, что если сырая новость удаляется из базы по истечении срока давности, все её сгенерированные AI-вариации и лайки от пользователей удаляются автоматически, сохраняя чистоту сервера.
+## Quick Start
 
----
+1. Create and activate virtual environment.
+2. Configure `.env` at minimum:
+	 - `DATABASE_URL`
+	 - `REDIS_URL`
+	 - `CELERY_BROKER_URL`
+	 - `CELERY_RESULT_BACKEND`
+	 - LLM API key(s)
+3. Run migrations:
 
-## 🛠️ Технологический стек (Tech Stack)
-* **Backend:** Python 3.12, FastAPI, Uvicorn
-* **Database:** PostgreSQL, SQLAlchemy (Async), Alembic
-* **AI Integration:** DeepSeek API for generation, Gemini API for review/enhancement, mock fallback for local runs
-* **Environment:** python-dotenv, Virtual Environments (.venv)
+```bash
+alembic upgrade head
+```
 
-## 🚀 MVP Startup
-1. Create and activate the virtual environment.
-2. Set `.env` values at minimum for `DATABASE_URL`, `REDIS_URL`, `CELERY_BROKER_URL`, `CELERY_RESULT_BACKEND`, and `DEEPSEEK_API_KEY` if you want real generation.
-	Optional for video search: `YOUTUBE_API_KEY`.
-3. Apply the database schema:
-	```bash
-	alembic upgrade head
-	```
-   Note: `sql/db_init.sql` is legacy and kept only as a compatibility placeholder.
-4. Seed demo data if needed:
-	```bash
-	psql -d news_mvp -f sql/seed_test_data.sql
-	```
-5. Start the API:
-	```bash
-	uvicorn app.backend.main:app --reload
-	```
-6. Start the Celery worker:
-	```bash
-	python -m celery -A app.backend.core.celery_app:celery_app worker --loglevel=info --pool=solo
-	```
-7. Start Celery Beat (scheduler every 15 minutes):
-	```bash
-	python -m celery -A app.backend.core.celery_app:celery_app beat --loglevel=info
-	```
+4. Start backend:
 
-## ✅ Readiness and Smoke Test
-* Basic health: `GET /health`
-* Dependency health (PostgreSQL, Redis, Celery worker): `GET /health/dependencies`
-* Full smoke test from command line:
-	```bash
-	python scripts/smoke_test.py --base-url http://127.0.0.1:8000
-	```
-	Before running smoke test, make sure API and Celery worker are started.
+```bash
+uvicorn app.backend.main:app --reload
+```
 
-## 🔐 Demo Access
-* Email: `demo@example.com`
-* Password: `Demo12345!`
+5. Start Celery worker:
 
-## Notes for MVP
-* `raw_news.content_hash` prevents duplicate ingestion.
-* `ai_news` is unique by `(raw_news_id, target_persona)`.
-* If `DEEPSEEK_API_KEY` is empty, the pipeline falls back to a safe mock generator.
-* DeepSeek/Groq generates structured long-form text in Uzbek. Gemini review is optional (`GEMINI_REVIEW_ENABLED`).
-* Combined score is used for quality loop: target score is 8.0, hard minimum is 7.0.
-* If score is below target, the pipeline runs a second rewrite round before final decision.
-* NewsAPI ingestion now pulls only the last 7 days, while items from the last 24 hours are prioritized first.
-* AI-generated products (`ai_news` with text/image links) are automatically deleted after 7 days by Celery Beat cleanup.
-* Personalization context is built from user `interests.topics`, `interests.profession`, and `location`.
-* Text policy defaults: minimum 170 words, maximum 320 words, and analytical structure (lead + news + user impact + practical actions).
-* Media policy: each generated item includes image URLs and may include YouTube video URLs (or template fallback URLs when YouTube API key is missing).
+```bash
+python -m celery -A app.backend.core.celery_app:celery_app worker --loglevel=info --pool=solo
+```
+
+6. Start Celery beat:
+
+```bash
+python -m celery -A app.backend.core.celery_app:celery_app beat --loglevel=info
+```
+
+7. Optional smoke test:
+
+```bash
+python scripts/smoke_test.py --base-url http://127.0.0.1:8000
+```
+
+## Production Notes
+
+- Heavy LLM operations are executed in pipeline tasks, not per user request.
+- Feed endpoint is optimized for serving ranked content, not generating it.
+- Keep retry/fallback settings tuned in `app/backend/core/config.py`.

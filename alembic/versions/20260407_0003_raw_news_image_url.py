@@ -1,4 +1,4 @@
-"""add image_url to raw_news
+﻿"""add image_url to raw_news
 
 Revision ID: 20260407_0003
 Revises: 20260405_0002
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision = "20260407_0003"
-down_revision = "20260405_0002"
+down_revision = "20260405_0003"
 branch_labels = None
 depends_on = None
 

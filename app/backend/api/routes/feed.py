@@ -39,6 +39,38 @@ async def my_feed(
     return [FeedItem(**item) for item in items]
 
 
+@router.get("/search", response_model=list[FeedItem])
+async def search_feed(
+    q: str = Query(min_length=1, max_length=200),
+    limit: int = Query(default=50, ge=1, le=100),
+    current_user: dict = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+):
+    user_id = _current_user_id(current_user)
+    items = await get_user_feed(session, user_id, max(limit * 4, 100))
+
+    query = q.strip().lower()
+    if not query:
+        return [FeedItem(**item) for item in items[:limit]]
+
+    filtered: list[dict] = []
+    for item in items:
+        haystack = " ".join(
+            str(value or "")
+            for value in (
+                item.get("final_title"),
+                item.get("final_text"),
+                item.get("target_persona"),
+                item.get("category"),
+                item.get("raw_news_id"),
+            )
+        ).lower()
+        if query in haystack:
+            filtered.append(item)
+
+    return [FeedItem(**item) for item in filtered[:limit]]
+
+
 @router.post("/interactions", response_model=InteractionResponse)
 async def create_interaction(
     payload: InteractionCreateRequest,

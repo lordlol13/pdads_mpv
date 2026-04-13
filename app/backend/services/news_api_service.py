@@ -10,14 +10,19 @@ from urllib.parse import parse_qs, unquote, urlparse
 from xml.etree import ElementTree as ET
 
 import httpx
-from openai import AsyncOpenAI
 
 from app.backend.core.config import settings
+from app.backend.core.logging import ContextLogger
 from app.backend.services.orchestrator_service import build_cache_key, get_or_set_json
+from app.backend.services.recommender_service import cosine_similarity, text_to_embedding
+from app.backend.services.resilience_service import (
+    check_rate_limit,
+    retry_async,
+    _news_api_limiter,
+)
 
 NEWS_API_URL = "https://newsapi.org/v2/everything"
-logger = logging.getLogger(__name__)
-_GROQ_BACKOFF_UNTIL: datetime | None = None
+logger = ContextLogger(__name__)
 
 RSS_SOURCE_WHITELIST: dict[str, list[dict[str, Any]]] = {
     "global": [
@@ -122,31 +127,6 @@ def _merge_topics_preserving_order(primary: list[str], secondary: list[str]) -> 
     return merged
 
 
-def _build_interest_classifier_client() -> tuple[AsyncOpenAI | None, str | None]:
-    global _GROQ_BACKOFF_UNTIL
-
-    if not settings.GROQ_API_KEY:
-        return None, None
-
-    if _GROQ_BACKOFF_UNTIL and datetime.now(timezone.utc) < _GROQ_BACKOFF_UNTIL:
-        return None, None
-
-    return (
-        AsyncOpenAI(api_key=settings.GROQ_API_KEY, base_url="https://api.groq.com/openai/v1"),
-        settings.GROQ_MODEL,
-    )
-
-
-def _mark_groq_backoff_if_needed(exc: Exception) -> None:
-    global _GROQ_BACKOFF_UNTIL
-
-    message = str(exc).lower()
-    if "rate limit" not in message and "429" not in message and "rate_limit" not in message:
-        return
-
-    _GROQ_BACKOFF_UNTIL = datetime.now(timezone.utc) + timedelta(minutes=10)
-
-
 async def _classify_interest_topics(topics: list[str]) -> list[str]:
     normalized_topics = _normalize_topics(topics)
     if not normalized_topics:
@@ -155,75 +135,29 @@ async def _classify_interest_topics(topics: list[str]) -> list[str]:
     if "general" in normalized_topics and len(normalized_topics) == 1:
         return ["general"]
 
-    client, model_name = _build_interest_classifier_client()
-    if client is None or not model_name:
-        return normalized_topics
-
-    try:
-        response = await client.chat.completions.create(
-            model=model_name,
-            temperature=0.1,
-            response_format={"type": "json_object"},
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You classify user interests for news ranking. "
-                        "Return strict JSON: {\"query_terms\": string[], \"strict_topics\": string[]}. "
-                        "query_terms: 4-10 expanded search phrases for NewsAPI; "
-                        "strict_topics: 2-8 canonical topics for strict filtering. "
-                        "Do not add topics that are not present in the original interests."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": json.dumps(
-                        {
-                            "interests": normalized_topics,
-                            "language": "uz",
-                            "goal": "pick relevant newsapi news",
-                        },
-                        ensure_ascii=False,
-                    ),
-                },
-            ],
-        )
-        payload = json.loads(response.choices[0].message.content or "{}")
-
-        strict_topics = payload.get("strict_topics") if isinstance(payload, dict) else []
-        query_terms = payload.get("query_terms") if isinstance(payload, dict) else []
-
-        combined: list[str] = []
-        seen: set[str] = set()
-        for raw_value in [*(strict_topics or []), *(query_terms or [])]:
-            value = _normalize_topic_value(str(raw_value))
-            if not value or value in seen:
+    expanded: list[str] = []
+    seen: set[str] = set()
+    for topic in normalized_topics:
+        for variant in _topic_variants(topic):
+            if variant in seen:
                 continue
-            seen.add(value)
-            combined.append(value)
+            seen.add(variant)
+            expanded.append(variant)
 
-        if combined:
-            return combined[:12]
-    except Exception as exc:
-        _mark_groq_backoff_if_needed(exc)
-        logger.warning("interest classification fallback triggered: %s", exc)
-
-    return normalized_topics
+    return expanded or normalized_topics
 
 
 async def _classify_interest_topics_cached(topics: list[str]) -> list[str]:
     normalized_topics = _normalize_topics(topics)
     if not normalized_topics:
         return ["general"]
-    if not settings.GROQ_API_KEY:
-        return normalized_topics
 
     cache_key = build_cache_key(
         "newsapi:interest-classifier",
         {
             "topics": normalized_topics,
-            "model": settings.GROQ_MODEL,
-            "provider": "groq",
+            "model": "embedding-heuristic-v1",
+            "provider": "local",
         },
     )
 
@@ -249,79 +183,36 @@ async def _ai_select_newsapi_articles(
     if not newsapi_articles:
         return []
 
-    client, model_name = _build_interest_classifier_client()
-    if client is None or not model_name:
-        return newsapi_articles[:max_items]
-
     sampled = newsapi_articles[: min(len(newsapi_articles), 30)]
-    compact_articles = []
-    for idx, article in enumerate(sampled):
-        compact_articles.append(
-            {
-                "idx": idx,
-                "title": str(article.get("title") or "")[:240],
-                "description": str(article.get("description") or "")[:280],
-                "content": str(article.get("content") or "")[:360],
-            }
+    topic_text = " ".join(_normalize_topics(topics)) or "general news"
+    topic_vector = text_to_embedding(topic_text)
+
+    scored: list[tuple[float, dict[str, Any]]] = []
+    for article in sampled:
+        article_text = " ".join(
+            [
+                str(article.get("title") or ""),
+                str(article.get("description") or ""),
+                str(article.get("content") or ""),
+                str((article.get("source") or {}).get("name") or ""),
+            ]
         )
+        article_vector = text_to_embedding(article_text)
+        similarity = cosine_similarity(topic_vector, article_vector)
+        topical_match = 1.0 if _article_matches_topics(article, topics) else 0.0
+        source_priority = float(article.get("_source_priority") or 0) / 100.0
+        freshness_boost = 0.0
+        published_at = _parse_newsapi_datetime(article.get("publishedAt"))
+        if published_at is not None:
+            age_hours = max(0.0, (datetime.now(timezone.utc) - published_at).total_seconds() / 3600.0)
+            freshness_boost = max(0.0, 1.0 - min(age_hours / 96.0, 1.0))
 
-    try:
-        response = await client.chat.completions.create(
-            model=model_name,
-            temperature=0.0,
-            response_format={"type": "json_object"},
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You rank article relevance for a user profile. Return strict JSON as "
-                        "{\"selected_indices\": number[]}. Select only truly relevant articles "
-                        "for the provided user interests."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": json.dumps(
-                        {
-                            "topics": topics,
-                            "limit": int(max_items),
-                            "articles": compact_articles,
-                        },
-                        ensure_ascii=False,
-                    ),
-                },
-            ],
-        )
-        payload = json.loads(response.choices[0].message.content or "{}")
-        selected_indices = payload.get("selected_indices") if isinstance(payload, dict) else []
+        score = (similarity * 1.8) + (topical_match * 1.2) + source_priority + freshness_boost
+        scored.append((score, article))
 
-        selected: list[dict[str, Any]] = []
-        seen_idx: set[int] = set()
-        for raw_idx in selected_indices or []:
-            try:
-                idx = int(raw_idx)
-            except (TypeError, ValueError):
-                continue
-            if idx < 0 or idx >= len(sampled) or idx in seen_idx:
-                continue
-            seen_idx.add(idx)
-            selected.append(sampled[idx])
-            if len(selected) >= max_items:
-                break
-
-        if selected:
-            for idx, article in enumerate(sampled):
-                if idx in seen_idx:
-                    continue
-                selected.append(article)
-                if len(selected) >= max_items:
-                    break
-            return selected[:max_items]
-    except Exception as exc:
-        _mark_groq_backoff_if_needed(exc)
-        logger.warning("news selection fallback triggered: %s", exc)
-
-    return sampled[:max_items]
+    scored.sort(key=lambda item: item[0], reverse=True)
+    selected = [article for score, article in scored[:max_items] if score >= 0.15]
+    return selected or sampled[:max_items]
 
 
 def _normalize_article(article: dict[str, Any]) -> dict[str, Any]:
@@ -642,6 +533,20 @@ async def _fetch_newsapi_articles(
     if not settings.NEWS_API_KEY:
         return []
 
+    # Rate limit check
+    allowed = await check_rate_limit(
+        f"newsapi:topics:{','.join(topics[:3])}",
+        limiter=_news_api_limiter,
+        limit=settings.NEWS_API_RATE_LIMIT_PER_MINUTE,
+        window_seconds=60,
+    )
+    if not allowed:
+        logger.warning(f"News API rate limit exceeded for topics: {topics}")
+        if settings.NEWS_API_FALLBACK_TO_RSS:
+            logger.info("Falling back to RSS sources")
+            return []
+        return []
+
     query_terms = _expand_topics_for_query(topics)
     query = " OR ".join(
         [f'"{term}"' if (" " in term or "-" in term) else term for term in query_terms[:8]]
@@ -659,56 +564,73 @@ async def _fetch_newsapi_articles(
         "apiKey": settings.NEWS_API_KEY,
     }
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        if not preferred_domains:
-            response = await client.get(
+    async def _make_requests():
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            if not preferred_domains:
+                response = await client.get(
+                    NEWS_API_URL,
+                    params={
+                        **base_params,
+                        "pageSize": page_size,
+                        "language": "en",
+                    },
+                )
+                response.raise_for_status()
+                payload = response.json()
+                for article in payload.get("articles") or []:
+                    article.setdefault("_source_priority", 50)
+                return payload.get("articles") or []
+
+            country_page_size = max(1, int(page_size * 0.6))
+            global_page_size = max(1, page_size - country_page_size)
+            preferred_domains_csv = ",".join(preferred_domains[:20])
+
+            country_response = await client.get(
                 NEWS_API_URL,
                 params={
                     **base_params,
-                    "pageSize": page_size,
-                    "language": "en",
+                    "pageSize": country_page_size,
+                    "domains": preferred_domains_csv,
                 },
             )
-            response.raise_for_status()
-            payload = response.json()
-            for article in payload.get("articles") or []:
-                article.setdefault("_source_priority", 50)
-            return payload.get("articles") or []
+            country_response.raise_for_status()
+            country_payload = country_response.json()
+            for article in country_payload.get("articles") or []:
+                article.setdefault("_source_priority", 90)
 
-        country_page_size = max(1, int(page_size * 0.6))
-        global_page_size = max(1, page_size - country_page_size)
-        preferred_domains_csv = ",".join(preferred_domains[:20])
+            global_response = await client.get(
+                NEWS_API_URL,
+                params={
+                    **base_params,
+                    "pageSize": global_page_size,
+                    "language": "en",
+                    "excludeDomains": preferred_domains_csv,
+                },
+            )
+            global_response.raise_for_status()
+            global_payload = global_response.json()
+            for article in global_payload.get("articles") or []:
+                article.setdefault("_source_priority", 70)
 
-        country_response = await client.get(
-            NEWS_API_URL,
-            params={
-                **base_params,
-                "pageSize": country_page_size,
-                "domains": preferred_domains_csv,
-            },
+            return _dedupe_articles_by_url_or_title(
+                (country_payload.get("articles") or []) + (global_payload.get("articles") or [])
+            )
+
+    try:
+        articles = await retry_async(
+            _make_requests,
+            max_attempts=settings.API_RETRY_MAX_ATTEMPTS,
+            base_delay_seconds=settings.API_RETRY_BASE_DELAY_SECONDS,
+            max_delay_seconds=settings.API_RETRY_MAX_DELAY_SECONDS,
+            retry_on_exceptions=(httpx.HTTPError, Exception),
         )
-        country_response.raise_for_status()
-        country_payload = country_response.json()
-        for article in country_payload.get("articles") or []:
-            article.setdefault("_source_priority", 90)
-
-        global_response = await client.get(
-            NEWS_API_URL,
-            params={
-                **base_params,
-                "pageSize": global_page_size,
-                "language": "en",
-                "excludeDomains": preferred_domains_csv,
-            },
-        )
-        global_response.raise_for_status()
-        global_payload = global_response.json()
-        for article in global_payload.get("articles") or []:
-            article.setdefault("_source_priority", 70)
-
-        return _dedupe_articles_by_url_or_title(
-            (country_payload.get("articles") or []) + (global_payload.get("articles") or [])
-        )
+        return articles
+    except Exception as e:
+        logger.error(f"News API fetch failed after retries: {e}")
+        if settings.NEWS_API_FALLBACK_TO_RSS:
+            logger.info("Falling back to RSS sources")
+            return []
+        raise
 
 
 async def fetch_articles_for_topics(

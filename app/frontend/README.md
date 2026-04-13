@@ -1,33 +1,37 @@
-# Frontend (PDADS MVP)
+﻿# PR.ADS Frontend
+
+Frontend app path: `app/frontend`.
 
 ## Local run
 
-1. Install dependencies:
-
 ```bash
 npm install
-```
-
-2. Configure API URL (optional, default is http://127.0.0.1:8889):
-
-```bash
-cp .env.example .env
-```
-
-3. Start dev server:
-
-```bash
 npm run dev
 ```
 
-## Checks
+Default local URL: `http://localhost:5173`.
+
+## Build
 
 ```bash
-npm run lint
 npm run build
+npm run preview
 ```
 
-## Notes
+## Required env
 
-- Auth uses backend endpoints: /auth/register, /auth/login, /auth/me.
-- Feed uses backend endpoints: /feed/me and /feed/interactions.
+Create `.env` in `app/frontend`:
+
+```bash
+VITE_API_BASE_URL=https://<your-railway-backend-domain>/api
+```
+
+Use `/api` only when backend is reverse-proxied on the same host.
+
+## OAuth buttons
+
+OAuth buttons are enabled from backend response:
+
+- `GET /api/auth/oauth/providers`
+
+If provider credentials are missing in backend env, the button is disabled.

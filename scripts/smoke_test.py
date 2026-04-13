@@ -17,13 +17,14 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     base = args.base_url.rstrip("/")
+    api = f"{base}/api"
     timeout = args.timeout
 
     session = requests.Session()
 
     # Preflight API availability check to fail fast with a clear message.
     try:
-        health_response = session.get(f"{base}/health", timeout=timeout)
+        health_response = session.get(f"{api}/health/live", timeout=timeout)
         health_response.raise_for_status()
     except RequestException as exc:
         raise SystemExit(
@@ -45,14 +46,14 @@ def main() -> None:
         "country_code": "UZ",
         "region_code": "TAS",
     }
-    response = session.post(f"{base}/auth/register", json=register_payload, timeout=timeout)
+    response = session.post(f"{api}/auth/register", json=register_payload, timeout=timeout)
     print("register", response.status_code)
     if response.status_code not in (200, 409):
         print(response.text)
         raise SystemExit(1)
 
     response = session.post(
-        f"{base}/auth/login",
+        f"{api}/auth/login",
         json={"identifier": email, "password": password},
         timeout=timeout,
     )
@@ -61,7 +62,7 @@ def main() -> None:
     token = response.json()["access_token"]
     session.headers["Authorization"] = f"Bearer {token}"
 
-    response = session.get(f"{base}/auth/me", timeout=timeout)
+    response = session.get(f"{api}/auth/me", timeout=timeout)
     print("me", response.status_code)
     response.raise_for_status()
 
@@ -73,12 +74,12 @@ def main() -> None:
         "region": "global",
         "is_urgent": False,
     }
-    response = session.post(f"{base}/ingestion/raw-news", json=ingest_payload, timeout=timeout)
+    response = session.post(f"{api}/ingestion/raw-news", json=ingest_payload, timeout=timeout)
     print("ingest", response.status_code)
     response.raise_for_status()
     raw_news_id = response.json()["id"]
 
-    response = session.post(f"{base}/pipeline/process/{raw_news_id}", timeout=timeout)
+    response = session.post(f"{api}/pipeline/process/{raw_news_id}", timeout=timeout)
     print("enqueue", response.status_code)
     response.raise_for_status()
     task_id = response.json()["task_id"]
@@ -87,7 +88,7 @@ def main() -> None:
     task_result = None
     for _ in range(args.poll_seconds):
         time.sleep(1)
-        response = session.get(f"{base}/pipeline/tasks/{task_id}", timeout=timeout)
+        response = session.get(f"{api}/pipeline/tasks/{task_id}", timeout=timeout)
         data = response.json()
         final_state = data["state"]
         task_result = data.get("result")
@@ -99,7 +100,7 @@ def main() -> None:
     if final_state != "SUCCESS":
         raise SystemExit(1)
 
-    response = session.get(f"{base}/feed/me?limit=10", timeout=timeout)
+    response = session.get(f"{api}/feed/me?limit=10", timeout=timeout)
     print("feed", response.status_code)
     response.raise_for_status()
     feed = response.json()
@@ -115,7 +116,7 @@ def main() -> None:
         "viewed": True,
         "watch_time": 10,
     }
-    response = session.post(f"{base}/feed/interactions", json=interaction_payload, timeout=timeout)
+    response = session.post(f"{api}/feed/interactions", json=interaction_payload, timeout=timeout)
     print("interaction", response.status_code)
     response.raise_for_status()
 

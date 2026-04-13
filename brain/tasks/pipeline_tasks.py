@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import logging
 from typing import Optional, Any
@@ -11,11 +12,94 @@ from app.backend.core.celery_app import celery_app
 from app.backend.core.config import settings
 from app.backend.services.ingestion_service import create_raw_news
 from app.backend.services.llm_service import generate_news
-from app.backend.services.media_service import fetch_media_urls
+from app.backend.services.media_service import fetch_media_urls, canonical_image_key
 from app.backend.services.news_api_service import fetch_articles_for_topics
+from app.backend.services.recommender_service import refresh_ai_news_embedding
 from app.backend.db.session import SessionLocal
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_image_urls_payload(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return []
+        try:
+            decoded = json.loads(raw)
+        except json.JSONDecodeError:
+            return []
+        if isinstance(decoded, list):
+            return [str(item).strip() for item in decoded if str(item).strip()]
+
+    return []
+
+
+async def _load_reserved_image_keys(session: AsyncSession, exclude_ai_news_id: int | None) -> set[str]:
+    query = """
+    SELECT image_urls
+    FROM ai_news
+    WHERE image_urls IS NOT NULL
+    """
+    params: dict[str, Any] = {}
+    if exclude_ai_news_id is not None:
+        query += " AND id <> :exclude_ai_news_id"
+        params["exclude_ai_news_id"] = exclude_ai_news_id
+
+    result = await session.execute(text(query), params)
+    reserved: set[str] = set()
+    for row in result.fetchall():
+        payload = row[0] if isinstance(row, tuple) else row.image_urls
+        for url in _extract_image_urls_payload(payload):
+            key = canonical_image_key(url)
+            if key:
+                reserved.add(key)
+    return reserved
+
+
+def _build_unique_fallback_image_url(seed_base: str, index: int) -> str:
+    digest = hashlib.sha1(f"{seed_base}:{index}".encode("utf-8")).hexdigest()[:16]
+    return f"https://picsum.photos/seed/{digest}/1280/720"
+
+
+def _enforce_cross_post_unique_images(
+    media_urls: list[str],
+    reserved_keys: set[str],
+    *,
+    limit: int,
+    seed_base: str,
+) -> list[str]:
+    unique_urls: list[str] = []
+    local_keys: set[str] = set()
+
+    for raw_url in media_urls:
+        url = str(raw_url or "").strip()
+        if not url:
+            continue
+        key = canonical_image_key(url)
+        if not key or key in reserved_keys or key in local_keys:
+            continue
+        unique_urls.append(url)
+        local_keys.add(key)
+        if len(unique_urls) >= limit:
+            return unique_urls
+
+    # Ensure we still return enough media by generating deterministic unique fallbacks.
+    fallback_index = 0
+    max_attempts = max(24, limit * 8)
+    while len(unique_urls) < limit and fallback_index < max_attempts:
+        candidate = _build_unique_fallback_image_url(seed_base, fallback_index)
+        fallback_index += 1
+        key = canonical_image_key(candidate)
+        if not key or key in reserved_keys or key in local_keys:
+            continue
+        unique_urls.append(candidate)
+        local_keys.add(key)
+
+    return unique_urls[:limit]
 
 
 def _normalize_interests_payload(interests: Any) -> dict[str, Any] | None:
@@ -218,24 +302,12 @@ async def _upsert_ai_news_for_persona(
     ).strip().lower()
 
     generated = await _generate_with_quality_loop(raw_row, topic, profession, geo)
-    media_query = " ".join(part for part in [str(raw_row.get("title") or "").strip(), topic] if part).strip()
-    media_urls = await fetch_media_urls(
-        media_query,
-        limit=4,
-        source_url=str(raw_row.get("source_url") or "").strip() or None,
-        source_image_url=str(raw_row.get("image_url") or "").strip() or None,
-    )
-    video_urls: list[str] = []
-    is_sqlite = session.get_bind().dialect.name == "sqlite"
 
     params = {
         "raw_news_id": raw_row["id"],
         "target_persona": target_persona,
         "final_title": generated["final_title"],
         "final_text": generated["final_text"],
-        # ai_news.image_urls is stored as TEXT in both SQLite and PostgreSQL migrations.
-        "image_urls": json.dumps(media_urls, ensure_ascii=False),
-        "video_urls": json.dumps(video_urls, ensure_ascii=False) if is_sqlite else video_urls,
         "category": generated["category"],
         "ai_score": generated["combined_score"],
         "embedding_id": None,
@@ -253,6 +325,37 @@ async def _upsert_ai_news_for_persona(
     existing_result = await session.execute(text(existing_query), params)
     existing_id = existing_result.scalar_one_or_none()
 
+    reserved_image_keys = await _load_reserved_image_keys(session, exclude_ai_news_id=existing_id)
+    media_query = " ".join(
+        part
+        for part in [
+            str(raw_row.get("title") or "").strip(),
+            topic,
+            str(raw_row.get("category") or "").strip().lower() or None,
+            geo,
+            country_code.lower() if country_code else None,
+        ]
+        if part
+    ).strip()
+    media_urls = await fetch_media_urls(
+        media_query,
+        limit=4,
+        source_url=str(raw_row.get("source_url") or "").strip() or None,
+        source_image_url=str(raw_row.get("image_url") or "").strip() or None,
+    )
+    media_urls = _enforce_cross_post_unique_images(
+        media_urls,
+        reserved_image_keys,
+        limit=4,
+        seed_base=f"{raw_row['id']}:{target_persona}",
+    )
+
+    video_urls: list[str] = []
+    is_sqlite = session.get_bind().dialect.name == "sqlite"
+    # For sqlite we store JSON text; for Postgres we use native arrays (list)
+    params["image_urls"] = json.dumps(media_urls, ensure_ascii=False) if is_sqlite else media_urls
+    params["video_urls"] = json.dumps(video_urls, ensure_ascii=False) if is_sqlite else video_urls
+
     if existing_id is not None:
         update_query = """
         UPDATE ai_news
@@ -268,7 +371,18 @@ async def _upsert_ai_news_for_persona(
         RETURNING id
         """
         update_result = await session.execute(text(update_query), {**params, "id": existing_id})
-        return update_result.scalar_one()
+        updated_ai_news_id = update_result.scalar_one()
+        await refresh_ai_news_embedding(
+            session,
+            updated_ai_news_id,
+            title=str(generated.get("final_title") or ""),
+            final_text=str(generated.get("final_text") or ""),
+            category=str(generated.get("category") or None),
+            target_persona=target_persona,
+            raw_text=str(raw_row.get("raw_text") or ""),
+            region=str(raw_row.get("region") or None),
+        )
+        return updated_ai_news_id
 
     insert_query = """
     INSERT INTO ai_news (
@@ -298,7 +412,18 @@ async def _upsert_ai_news_for_persona(
     RETURNING id
     """
     insert_result = await session.execute(text(insert_query), params)
-    return insert_result.scalar_one()
+    ai_news_id = insert_result.scalar_one()
+    await refresh_ai_news_embedding(
+        session,
+        ai_news_id,
+        title=str(generated.get("final_title") or ""),
+        final_text=str(generated.get("final_text") or ""),
+        category=str(generated.get("category") or None),
+        target_persona=target_persona,
+        raw_text=str(raw_row.get("raw_text") or ""),
+        region=str(raw_row.get("region") or None),
+    )
+    return ai_news_id
 
 
 async def _populate_user_feed_for_ai_news(
@@ -550,11 +675,12 @@ async def _process_raw_news_async(
 @celery_app.task(
     name="brain.process_raw_news",
     bind=True,
-    autoretry_for=(ConnectionError, TimeoutError),
+    autoretry_for=(ConnectionError, TimeoutError, Exception),
     retry_backoff=True,
-    retry_backoff_max=60,
+    retry_backoff_max=settings.API_RETRY_MAX_DELAY_SECONDS,
+    retry_backoff_base=2,
     retry_jitter=True,
-    retry_kwargs={"max_retries": 5},
+    max_retries=settings.API_RETRY_MAX_ATTEMPTS,
 )
 def process_raw_news(self, raw_news_id: int, personas: list[dict[str, str | None]] | None = None) -> dict:
     attempt = self.request.retries + 1
@@ -572,17 +698,39 @@ def process_raw_news(self, raw_news_id: int, personas: list[dict[str, str | None
         raise
 
 
-@celery_app.task(name="brain.scheduled_ingestion")
+@celery_app.task(
+    name="brain.scheduled_ingestion",
+    autoretry_for=(ConnectionError, TimeoutError, Exception),
+    retry_backoff=True,
+    retry_backoff_max=settings.API_RETRY_MAX_DELAY_SECONDS,
+    retry_jitter=True,
+    max_retries=2,  # Scheduled tasks - limited retries
+)
 def scheduled_ingestion() -> dict:
     logger.info("scheduled_ingestion tick started")
-    result = asyncio.run(_schedule_ingestion_batch_async())
-    logger.info("scheduled_ingestion tick finished result=%s", result)
-    return result
+    try:
+        result = asyncio.run(_schedule_ingestion_batch_async())
+        logger.info("scheduled_ingestion tick finished result=%s", result)
+        return result
+    except Exception as e:
+        logger.error("scheduled_ingestion failed: %s", e)
+        raise
 
 
-@celery_app.task(name="brain.scheduled_cleanup_ai_products")
+@celery_app.task(
+    name="brain.scheduled_cleanup_ai_products",
+    autoretry_for=(ConnectionError, TimeoutError, Exception),
+    retry_backoff=True,
+    retry_backoff_max=60,
+    retry_jitter=True,
+    max_retries=1,  # Cleanup is low priority
+)
 def scheduled_cleanup_ai_products() -> dict:
     logger.info("scheduled_cleanup_ai_products tick started")
-    result = asyncio.run(_cleanup_ai_products_async())
-    logger.info("scheduled_cleanup_ai_products tick finished result=%s", result)
-    return result
+    try:
+        result = asyncio.run(_cleanup_ai_products_async())
+        logger.info("scheduled_cleanup_ai_products tick finished result=%s", result)
+        return result
+    except Exception as e:
+        logger.error("scheduled_cleanup_ai_products failed: %s", e)
+        raise
