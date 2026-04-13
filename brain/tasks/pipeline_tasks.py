@@ -326,7 +326,17 @@ async def _upsert_ai_news_for_persona(
     existing_id = existing_result.scalar_one_or_none()
 
     reserved_image_keys = await _load_reserved_image_keys(session, exclude_ai_news_id=existing_id)
-    media_query = " ".join(part for part in [str(raw_row.get("title") or "").strip(), topic] if part).strip()
+    media_query = " ".join(
+        part
+        for part in [
+            str(raw_row.get("title") or "").strip(),
+            topic,
+            str(raw_row.get("category") or "").strip().lower() or None,
+            geo,
+            country_code.lower() if country_code else None,
+        ]
+        if part
+    ).strip()
     media_urls = await fetch_media_urls(
         media_query,
         limit=4,

@@ -26,6 +26,55 @@ function mediaUrls(item: FeedItem): string[] {
   return [];
 }
 
+function formatPersonaToken(raw: string): string {
+  const value = raw.trim();
+  if (!value) {
+    return '';
+  }
+
+  if (/^[a-z]{2,3}$/i.test(value)) {
+    return value.toUpperCase();
+  }
+
+  return value
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .split(' ')
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function parsePersonaToc(targetPersona?: string | null, category?: string | null): { headline: string; toc: string[] } {
+  const raw = (targetPersona || '').trim();
+  const parts = raw
+    ? raw.split('|').map((part) => part.trim()).filter(Boolean)
+    : [];
+
+  const tokens = parts.length > 0 ? parts : [(category || 'general').trim()];
+
+  const deduped: string[] = [];
+  const seen = new Set<string>();
+  for (const token of tokens) {
+    const formatted = formatPersonaToken(token);
+    const key = formatted.toLowerCase();
+    if (!formatted || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(formatted);
+  }
+
+  if (deduped.length === 0) {
+    return { headline: 'News', toc: [] };
+  }
+
+  return {
+    headline: deduped[0],
+    toc: deduped,
+  };
+}
+
 function stripToPreview(text: string, maxLength = 180): string {
   const value = text.trim();
   if (value.length <= maxLength) {
@@ -111,8 +160,12 @@ export function BackendFeedPost({
   const urls = useMemo(() => mediaUrls(item), [item]);
   const hasVideo = Array.isArray(item.video_urls) && item.video_urls.length > 0;
   const hasImages = Array.isArray(item.image_urls) && item.image_urls.length > 0;
-  const title = item.final_title?.trim() || item.target_persona?.trim() || item.category?.trim() || 'News item';
-  const author = item.target_persona?.trim() || item.category?.trim() || 'news';
+  const personaMeta = useMemo(
+    () => parsePersonaToc(item.target_persona, item.category),
+    [item.target_persona, item.category],
+  );
+  const title = item.final_title?.trim() || personaMeta.headline || item.category?.trim() || 'News item';
+  const author = personaMeta.headline || item.category?.trim() || 'News';
   const previewText = item.final_text?.trim() || '';
   const commentCount = item.comment_count + commentsList.length;
 
@@ -201,7 +254,7 @@ export function BackendFeedPost({
     window.setTimeout(() => setShowHeartAnimation(false), 900);
   });
 
-  const handleSave = async (event: React.MouseEvent<HTMLButtonElement>) => {
+  const handleSave = async (event: MouseEvent<HTMLButtonElement>) => {
     event.stopPropagation();
     const nextSaved = !isSaved;
     setIsSaved(nextSaved);
@@ -424,7 +477,19 @@ export function BackendFeedPost({
 
       <div className="absolute bottom-0 left-0 w-full p-6 bg-gradient-to-t from-black/80 via-black/40 to-transparent z-30">
         <div className="max-w-[80%] space-y-3">
-          <h3 className="font-bold text-lg text-white">@{author}</h3>
+          <h3 className="font-bold text-lg text-white">{author}</h3>
+          {personaMeta.toc.length > 0 ? (
+            <div className="flex flex-wrap gap-2">
+              {personaMeta.toc.map((topic) => (
+                <span
+                  key={topic}
+                  className="rounded-full border border-white/25 bg-black/35 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-white/90"
+                >
+                  {topic}
+                </span>
+              ))}
+            </div>
+          ) : null}
           <p
             className="text-white/90 text-sm line-clamp-2 cursor-pointer hover:text-white transition-colors"
             onClick={(event) => {
@@ -459,10 +524,22 @@ export function BackendFeedPost({
                 <div className="flex items-center gap-4">
                   <div className="w-12 h-12 bg-zinc-800 rounded-full border border-white/10" />
                   <div>
-                    <h4 className="font-bold text-white">@{author}</h4>
+                    <h4 className="font-bold text-white">{author}</h4>
                     <p className="text-xs text-zinc-500">{t.posted} {relativeLabel(item.created_at, t.now)}</p>
                   </div>
                 </div>
+                {personaMeta.toc.length > 0 ? (
+                  <div className="flex flex-wrap gap-2">
+                    {personaMeta.toc.map((topic) => (
+                      <span
+                        key={`modal-${topic}`}
+                        className="rounded-full border border-white/15 bg-zinc-900 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-zinc-200"
+                      >
+                        {topic}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
                 <div className="prose prose-invert max-w-none">
                   <p className="text-zinc-300 leading-relaxed text-lg whitespace-pre-wrap">
                     {previewText || t.noComments}

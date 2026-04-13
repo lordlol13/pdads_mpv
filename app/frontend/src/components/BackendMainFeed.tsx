@@ -22,6 +22,33 @@ function previewText(item: FeedItem): string {
   return (item.final_title || item.final_text || item.target_persona || item.category || 'News item').trim();
 }
 
+function personaBadge(item: FeedItem): string {
+  const raw = (item.target_persona || '').trim();
+  if (!raw) {
+    return (item.category || 'general').trim();
+  }
+
+  const tokens = raw
+    .split('|')
+    .map((token) => token.trim())
+    .filter(Boolean)
+    .slice(0, 4)
+    .map((token) => {
+      if (/^[a-z]{2,3}$/i.test(token)) {
+        return token.toUpperCase();
+      }
+      return token
+        .replace(/[_-]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .split(' ')
+        .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+        .join(' ');
+    });
+
+  return tokens.join(' • ') || (item.category || 'general').trim();
+}
+
 export function BackendMainFeed({ currentUser, onLogout }: BackendMainFeedProps) {
   const { language, setLanguage, t } = useLanguage();
   const [feedData, setFeedData] = useState<FeedItem[]>([]);
@@ -246,7 +273,7 @@ export function BackendMainFeed({ currentUser, onLogout }: BackendMainFeedProps)
                     </div>
                     <div className="min-w-0 flex-1 space-y-1">
                       <div className="flex items-center justify-between gap-2">
-                        <span className="text-xs uppercase tracking-widest text-white/50">{item.category || item.target_persona || 'general'}</span>
+                        <span className="text-xs uppercase tracking-widest text-white/50">{personaBadge(item)}</span>
                         <span className="text-xs text-white/50">{item.saved ? 'saved' : ''}</span>
                       </div>
                       <p className="font-semibold leading-snug">{previewText(item)}</p>
