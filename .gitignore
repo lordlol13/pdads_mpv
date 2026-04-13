@@ -14,10 +14,9 @@ dist/
 downloads/
 eggs/
 .eggs/
-# Keep Python packaging ignore, but allow frontend src/lib utilities.
 lib/
-!app/frontend/src/lib/
-!app/frontend/src/lib/**
+!app/frontend/lib/
+!app/frontend/lib/**
 lib64/
 parts/
 sdist/
@@ -213,4 +212,3 @@ scripts/run_all.ps1
 # Local env variants (keep only template in git)
 .env.*
 !.env.example
-
