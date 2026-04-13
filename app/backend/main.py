@@ -251,6 +251,7 @@ async def root_readiness():
 
 # API routes
 app.include_router(auth_router, prefix="/api")
+app.include_router(auth_router)  # Also register auth router at root for compatibility with clients calling /auth/*
 app.include_router(ingestion_router, prefix="/api")
 app.include_router(feed_router, prefix="/api")
 app.include_router(pipeline_router, prefix="/api")
