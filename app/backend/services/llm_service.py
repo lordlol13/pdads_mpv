@@ -8,8 +8,16 @@ from typing import TypedDict
 from openai import AsyncOpenAI
 
 from app.backend.core.config import settings
+from app.backend.core.logging import ContextLogger
+from app.backend.services.resilience_service import (
+    retry_async,
+    cache_get,
+    cache_set,
+    check_rate_limit,
+    _llm_limiter,
+)
 
-logger = logging.getLogger(__name__)
+logger = ContextLogger(__name__)
 _GEMINI_BACKOFF_UNTIL: datetime | None = None
 _GEMINI_DEFAULT_BACKOFF_SECONDS = 180
 
@@ -680,6 +688,16 @@ def _build_deepseek_client() -> tuple[AsyncOpenAI | None, str | None]:
     return None, None
 
 
+def _build_openai_client() -> tuple[AsyncOpenAI | None, str | None]:
+    if settings.OPENAI_API_KEY:
+        return (
+            AsyncOpenAI(api_key=settings.OPENAI_API_KEY),
+            settings.OPENAI_MODEL,
+        )
+
+    return None, None
+
+
 def _gemini_generation_available() -> bool:
     global _GEMINI_BACKOFF_UNTIL
 
@@ -761,70 +779,113 @@ async def _generate_with_gemini(
     rewrite_round: int,
 ) -> dict[str, str | float] | None:
     if not _gemini_generation_available():
+        logger.debug("Gemini not available (rate limited or no API key)")
         return None
 
-    try:
-        import google.generativeai as genai
+    # Rate limit check
+    allowed = await check_rate_limit(
+        f"llm:gemini:{target_persona}",
+        limiter=_llm_limiter,
+        limit=settings.LLM_RATE_LIMIT_PER_MINUTE,
+        window_seconds=60,
+    )
+    if not allowed:
+        logger.warning("Gemini rate limit exceeded, skipping")
+        return None
 
-        configure_fn = getattr(genai, "configure", None)
-        model_cls = getattr(genai, "GenerativeModel", None)
-        if not callable(configure_fn) or model_cls is None:
-            return None
+    # Check cache first
+    cache_key = (title, target_persona, profession, user_geo)
+    cached = await cache_get("llm:gemini", *cache_key)
+    if cached is not None:
+        logger.debug("Gemini cache hit")
+        return cached
 
-        configure_fn(api_key=settings.GEMINI_API_KEY)
-        gemini_model = model_cls(settings.GEMINI_MODEL)
-        prompt = json.dumps(
-            {
-                "task": "generate_personalized_news_rewrite",
-                "constraints": {
-                    "format": "strict_json",
-                    "required_keys": [
-                        "final_title",
-                        "final_text",
-                        "ai_score",
-                        "category",
-                        "target_persona",
-                    ],
-                    "paragraphs": "3-5",
-                    "words": {
-                        "min": settings.PIPELINE_TEXT_MIN_WORDS,
-                        "max": settings.PIPELINE_TEXT_MAX_WORDS if settings.PIPELINE_TEXT_MAX_WORDS > 0 else None,
+    async def _call_gemini():
+        try:
+            import google.generativeai as genai
+
+            configure_fn = getattr(genai, "configure", None)
+            model_cls = getattr(genai, "GenerativeModel", None)
+            if not callable(configure_fn) or model_cls is None:
+                return None
+
+            configure_fn(api_key=settings.GEMINI_API_KEY)
+            gemini_model = model_cls(settings.GEMINI_MODEL)
+            prompt = json.dumps(
+                {
+                    "task": "generate_personalized_news_rewrite",
+                    "constraints": {
+                        "format": "strict_json",
+                        "required_keys": [
+                            "final_title",
+                            "final_text",
+                            "ai_score",
+                            "category",
+                            "target_persona",
+                        ],
+                        "paragraphs": "3-5",
+                        "words": {
+                            "min": settings.PIPELINE_TEXT_MIN_WORDS,
+                            "max": settings.PIPELINE_TEXT_MAX_WORDS if settings.PIPELINE_TEXT_MAX_WORDS > 0 else None,
+                        },
+                        "output_language": "uz",
+                        "output_script": "latin",
+                        "style": "conversational_empathy",
+                        "personalization_rules": [
+                            "if user interest entity has positive outcome, congratulate naturally",
+                            "if user interest entity has negative outcome, express concise empathy",
+                            "end text with user-relevant concrete fact",
+                        ],
+                        "no_markers": ["Lid:", "Yanglik:", "Новость:"],
                     },
-                    "output_language": "uz",
-                    "output_script": "latin",
-                    "style": "conversational_empathy",
-                    "personalization_rules": [
-                        "if user interest entity has positive outcome, congratulate naturally",
-                        "if user interest entity has negative outcome, express concise empathy",
-                        "end text with user-relevant concrete fact",
-                    ],
-                    "no_markers": ["Lid:", "Yanglik:", "Новость:"],
+                    "payload": {
+                        "title": title,
+                        "raw_text": raw_text,
+                        "category": category,
+                        "target_persona": target_persona,
+                        "region": region,
+                        "profession": profession,
+                        "user_geo": user_geo,
+                        "rewrite_round": rewrite_round,
+                    },
                 },
-                "payload": {
-                    "title": title,
-                    "raw_text": raw_text,
-                    "category": category,
-                    "target_persona": target_persona,
-                    "region": region,
-                    "profession": profession,
-                    "user_geo": user_geo,
-                    "rewrite_round": rewrite_round,
-                },
-            },
-            ensure_ascii=False,
-        )
+                ensure_ascii=False,
+            )
 
-        response = await asyncio.to_thread(gemini_model.generate_content, prompt)
-        content = _strip_json_code_fence(getattr(response, "text", "") or "{}")
-        data = json.loads(content)
-        if not isinstance(data, dict):
-            return None
-        return data
-    except Exception as exc:
-        if _mark_gemini_backoff_if_needed(exc):
-            logger.warning("Gemini generation deferred due to provider rate limit")
-        else:
-            logger.exception("Gemini generation failed")
+            response = await asyncio.to_thread(gemini_model.generate_content, prompt)
+            content = _strip_json_code_fence(getattr(response, "text", "") or "{}")
+            data = json.loads(content)
+            if not isinstance(data, dict):
+                return None
+            return data
+        except Exception as exc:
+            if _mark_gemini_backoff_if_needed(exc):
+                logger.warning("Gemini generation deferred due to provider rate limit")
+            else:
+                logger.exception("Gemini generation failed")
+            raise
+
+    try:
+        result = await retry_async(
+            _call_gemini,
+            max_attempts=settings.API_RETRY_MAX_ATTEMPTS,
+            base_delay_seconds=settings.API_RETRY_BASE_DELAY_SECONDS,
+            max_delay_seconds=settings.API_RETRY_MAX_DELAY_SECONDS,
+            retry_on_exceptions=(Exception,),
+        )
+        
+        if result:
+            # Cache successful result
+            await cache_set(
+                "llm:gemini",
+                settings.CACHE_LLM_RESULTS_TTL_HOURS,
+                result,
+                *cache_key,
+            )
+        return result
+    
+    except Exception as e:
+        logger.error(f"Gemini generation failed after retries: {e}")
         return None
 
 
@@ -839,6 +900,17 @@ async def generate_news(
     user_geo: str | None = None,
     rewrite_round: int = 1,
 ) -> GeneratedNews:
+    """
+    Generate personalized news with retry, fallback, and caching.
+    
+    Flow:
+    1. Try OpenAI ChatGPT (with retry & cache)
+    2. Try Gemini (with retry & cache)
+    3. If fails and fallback enabled, try DeepSeek (with retry & cache)
+    4. If all fail, check cache for stale result
+    4. Fall back to mock generation
+    """
+    
     fallback = _compose_generated_news(
         final_title_raw=title,
         final_text_raw=(raw_text or "")[:1400],
@@ -852,7 +924,8 @@ async def generate_news(
         geo=user_geo or region,
     )
 
-    gemini_payload = await _generate_with_gemini(
+    # Try OpenAI first
+    openai_payload = await _generate_with_openai(
         title=title,
         raw_text=raw_text,
         category=category,
@@ -862,14 +935,14 @@ async def generate_news(
         user_geo=user_geo,
         rewrite_round=rewrite_round,
     )
-    if gemini_payload is not None:
-        model_score = float(gemini_payload.get("ai_score") or gemini_payload.get("gemini_score") or fallback["ai_score"])
+    if openai_payload is not None:
+        model_score = float(openai_payload.get("ai_score") or fallback["ai_score"])
         return _compose_generated_news(
-            final_title_raw=str(gemini_payload.get("final_title") or fallback["final_title"]),
-            final_text_raw=str(gemini_payload.get("final_text") or fallback["final_text"]),
+            final_title_raw=str(openai_payload.get("final_title") or fallback["final_title"]),
+            final_text_raw=str(openai_payload.get("final_text") or fallback["final_text"]),
             model_score_raw=model_score,
-            category_raw=str(gemini_payload.get("category") or fallback["category"]),
-            target_persona_raw=str(gemini_payload.get("target_persona") or fallback["target_persona"]),
+            category_raw=str(openai_payload.get("category") or fallback["category"]),
+            target_persona_raw=str(openai_payload.get("target_persona") or fallback["target_persona"]),
             title=title,
             raw_text=raw_text,
             target_persona=target_persona,
@@ -877,28 +950,186 @@ async def generate_news(
             geo=user_geo or region,
         )
 
-    client, model_name = _build_deepseek_client()
-    if client is None or model_name is None:
-        return fallback
-
-    prompt = (
-        "Siz yangiliklarni qayta yozadigan analitik muharrirsiz. "
-        "Faqat JSON qaytaring: final_title, final_text, ai_score, category, target_persona. "
-        "final_text 3-5 abzatsli, ravon va markerlarsiz bolsin ('Lid:', 'Yanglik:', 'Novost:' yoq). "
-        "Kodlash artefaktlari va '[+123 chars]' kabi chiqindilarni ishlatmang. "
-        f"Matn hajmi kamida {settings.PIPELINE_TEXT_MIN_WORDS} soz bo'lsin. "
-        + (
-            f"Maksimal hajm {settings.PIPELINE_TEXT_MAX_WORDS} sozdan oshmasin. "
-            if settings.PIPELINE_TEXT_MAX_WORDS > 0
-            else "Yuqori chegara yoq. "
+    # OpenAI-only mode: if OpenAI is unavailable, try cached OpenAI; otherwise return mock.
+    cache_key = (title, target_persona, profession, user_geo)
+    cached_openai = await cache_get("llm:openai", *cache_key)
+    if cached_openai:
+        logger.info("OpenAI unavailable, using cached OpenAI result")
+        return _compose_generated_news(
+            final_title_raw=str(cached_openai.get("final_title") or fallback["final_title"]),
+            final_text_raw=str(cached_openai.get("final_text") or fallback["final_text"]),
+            model_score_raw=float(cached_openai.get("ai_score") or fallback["ai_score"]),
+            category_raw=str(cached_openai.get("category") or fallback["category"]),
+            target_persona_raw=str(cached_openai.get("target_persona") or fallback["target_persona"]),
+            title=title,
+            raw_text=raw_text,
+            target_persona=target_persona,
+            profession=profession,
+            geo=user_geo or region,
         )
-        + "Matnni doim ozbek tilida (lotin yozuvida) yozing. "
-        + "Matn foydalanuvchi qiziqishi, kasbi va geokontekstiga moslashtirilgan bolsin. "
-        + "Agar foydalanuvchi qiziqadigan jamoa/yunalish bo'yicha natija ijobiy bo'lsa tabriklang, salbiy bo'lsa qisqa hamdardlik bildiring. "
-        + "Matn oxirida foydalanuvchiga bevosita tegishli bitta aniq fakt bo'lsin."
+
+    logger.warning("OpenAI unavailable, returning mock generation")
+    return fallback
+
+
+async def _generate_with_openai(
+    *,
+    title: str,
+    raw_text: str,
+    category: str | None,
+    target_persona: str,
+    region: str | None,
+    profession: str | None,
+    user_geo: str | None,
+    rewrite_round: int,
+) -> dict[str, str | float] | None:
+    """Generate with OpenAI ChatGPT as primary LLM, with retry and cache."""
+
+    client, model_name = _build_openai_client()
+    if client is None or model_name is None:
+        logger.debug("OpenAI not configured")
+        return None
+
+    allowed = await check_rate_limit(
+        f"llm:openai:{target_persona}",
+        limiter=_llm_limiter,
+        limit=settings.LLM_RATE_LIMIT_PER_MINUTE,
+        window_seconds=60,
     )
+    if not allowed:
+        logger.warning("OpenAI rate limit exceeded")
+        return None
+
+    cache_key = (title, target_persona, profession, user_geo)
+    cached = await cache_get("llm:openai", *cache_key)
+    if cached is not None:
+        logger.debug("OpenAI cache hit")
+        return cached
+
+    async def _call_openai():
+        system_prompt = (
+            "Siz yangiliklarni qayta yozadigan analitik muharrirsiz. "
+            "Faqat JSON qaytaring: final_title, final_text, ai_score, category, target_persona. "
+            "final_text 3-5 abzatsli, ravon va markerlarsiz bolsin ('Lid:', 'Yanglik:', 'Novost:' yoq). "
+            "Kodlash artefaktlari va '[+123 chars]' kabi chiqindilarni ishlatmang. "
+            f"Matn hajmi kamida {settings.PIPELINE_TEXT_MIN_WORDS} soz bo'lsin. "
+            + (
+                f"Maksimal hajm {settings.PIPELINE_TEXT_MAX_WORDS} sozdan oshmasin. "
+                if settings.PIPELINE_TEXT_MAX_WORDS > 0
+                else "Yuqori chegara yoq. "
+            )
+            + "Matnni doim ozbek tilida (lotin yozuvida) yozing. "
+            + "Matn foydalanuvchi qiziqishi, kasbi va geokontekstiga moslashtirilgan bolsin. "
+            + "Agar foydalanuvchi qiziqadigan jamoa/yunalish bo'yicha natija ijobiy bo'lsa tabriklang, salbiy bo'lsa qisqa hamdardlik bildiring. "
+            + "Matn oxirida foydalanuvchiga bevosita tegishli bitta aniq fakt bo'lsin."
+        )
+
+        response = await client.chat.completions.create(
+            model=model_name,
+            temperature=0.3,
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {
+                            "title": title,
+                            "raw_text": raw_text,
+                            "category": category,
+                            "target_persona": target_persona,
+                            "region": region,
+                            "profession": profession,
+                            "user_geo": user_geo,
+                            "rewrite_round": rewrite_round,
+                        },
+                        ensure_ascii=False,
+                    ),
+                },
+            ],
+        )
+
+        content = response.choices[0].message.content or "{}"
+        data = json.loads(content)
+        return data if isinstance(data, dict) else None
 
     try:
+        data = await retry_async(
+            _call_openai,
+            max_attempts=settings.API_RETRY_MAX_ATTEMPTS,
+            base_delay_seconds=settings.API_RETRY_BASE_DELAY_SECONDS,
+            max_delay_seconds=settings.API_RETRY_MAX_DELAY_SECONDS,
+            retry_on_exceptions=(Exception,),
+        )
+        if not data:
+            return None
+
+        await cache_set(
+            "llm:openai",
+            settings.CACHE_LLM_RESULTS_TTL_HOURS,
+            data,
+            *cache_key,
+        )
+        return data
+    except Exception as e:
+        logger.error(f"OpenAI generation failed: {e}")
+        return None
+
+
+async def _generate_with_deepseek(
+    *,
+    title: str,
+    raw_text: str,
+    category: str | None,
+    target_persona: str,
+    region: str | None,
+    profession: str | None,
+    user_geo: str | None,
+    rewrite_round: int,
+) -> GeneratedNews | None:
+    """Generate with DeepSeek as fallback, with retry and cache."""
+    
+    client, model_name = _build_deepseek_client()
+    if client is None or model_name is None:
+        logger.debug("DeepSeek not configured")
+        return None
+
+    # Rate limit check
+    allowed = await check_rate_limit(
+        f"llm:deepseek:{target_persona}",
+        limiter=_llm_limiter,
+        limit=settings.LLM_RATE_LIMIT_PER_MINUTE,
+        window_seconds=60,
+    )
+    if not allowed:
+        logger.warning("DeepSeek rate limit exceeded")
+        return None
+
+    # Check cache
+    cache_key = (title, target_persona, profession, user_geo)
+    cached = await cache_get("llm:deepseek", *cache_key)
+    if cached is not None:
+        logger.debug("DeepSeek cache hit")
+        return cached
+
+    async def _call_deepseek():
+        prompt = (
+            "Siz yangiliklarni qayta yozadigan analitik muharrirsiz. "
+            "Faqat JSON qaytaring: final_title, final_text, ai_score, category, target_persona. "
+            "final_text 3-5 abzatsli, ravon va markerlarsiz bolsin ('Lid:', 'Yanglik:', 'Novost:' yoq). "
+            "Kodlash artefaktlari va '[+123 chars]' kabi chiqindilarni ishlatmang. "
+            f"Matn hajmi kamida {settings.PIPELINE_TEXT_MIN_WORDS} soz bo'lsin. "
+            + (
+                f"Maksimal hajm {settings.PIPELINE_TEXT_MAX_WORDS} sozdan oshmasin. "
+                if settings.PIPELINE_TEXT_MAX_WORDS > 0
+                else "Yuqori chegara yoq. "
+            )
+            + "Matnni doim ozbek tilida (lotin yozuvida) yozing. "
+            + "Matn foydalanuvchi qiziqishi, kasbi va geokontekstiga moslashtirilgan bolsin. "
+            + "Agar foydalanuvchi qiziqadigan jamoa/yunalish bo'yicha natija ijobiy bo'lsa tabriklang, salbiy bo'lsa qisqa hamdardlik bildiring. "
+            + "Matn oxirida foydalanuvchiga bevosita tegishli bitta aniq fakt bo'lsin."
+        )
+
         response = await client.chat.completions.create(
             model=model_name,
             temperature=0.3,
@@ -925,11 +1156,38 @@ async def generate_news(
         )
         content = response.choices[0].message.content or "{}"
         data = json.loads(content)
-        model_score = float(data.get("ai_score") or fallback["ai_score"])
-        return _compose_generated_news(
+        return data
+
+    try:
+        data = await retry_async(
+            _call_deepseek,
+            max_attempts=settings.API_RETRY_MAX_ATTEMPTS,
+            base_delay_seconds=settings.API_RETRY_BASE_DELAY_SECONDS,
+            max_delay_seconds=settings.API_RETRY_MAX_DELAY_SECONDS,
+            retry_on_exceptions=(Exception,),
+        )
+
+        if not data:
+            return None
+
+        # Create fallback for compose
+        fallback = _compose_generated_news(
+            final_title_raw=title,
+            final_text_raw=(raw_text or "")[:1400],
+            model_score_raw=7.2,
+            category_raw=category or "general",
+            target_persona_raw=target_persona or "general",
+            title=title,
+            raw_text=raw_text,
+            target_persona=target_persona,
+            profession=profession,
+            geo=user_geo or region,
+        )
+
+        result = _compose_generated_news(
             final_title_raw=str(data.get("final_title") or fallback["final_title"]),
             final_text_raw=str(data.get("final_text") or fallback["final_text"]),
-            model_score_raw=model_score,
+            model_score_raw=float(data.get("ai_score") or fallback["ai_score"]),
             category_raw=str(data.get("category") or fallback["category"]),
             target_persona_raw=str(data.get("target_persona") or fallback["target_persona"]),
             title=title,
@@ -938,9 +1196,20 @@ async def generate_news(
             profession=profession,
             geo=user_geo or region,
         )
-    except Exception:
-        logger.exception("DeepSeek generation failed, falling back to mock output")
-        return fallback
+
+        # Cache successful result
+        await cache_set(
+            "llm:deepseek",
+            settings.CACHE_LLM_RESULTS_TTL_HOURS,
+            data,
+            *cache_key,
+        )
+
+        return result
+
+    except Exception as e:
+        logger.error(f"DeepSeek generation failed: {e}")
+        return None
 
 
 def _strip_json_code_fence(content: str) -> str:

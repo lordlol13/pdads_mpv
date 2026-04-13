@@ -1,59 +1,125 @@
-import asyncio
+"""
+Health check and monitoring endpoints.
 
-import redis.asyncio as redis
-from fastapi import APIRouter
-from sqlalchemy import text
+Provides information about system health, component status, and metrics.
+"""
 
-from app.backend.core.celery_app import celery_app
-from app.backend.core.config import settings
-from app.backend.db.session import SessionLocal
+from fastapi import APIRouter, Depends, status
+from logging import getLogger
 
-router = APIRouter(tags=["health"])
+from app.backend.core.health import (
+    get_system_health,
+    SystemHealth,
+    MetricsData,
+    ExtendedMetricsData,
+    RecommendationMetrics,
+    PipelineMetrics,
+    get_extended_metrics,
+    get_recommendation_metrics,
+    get_pipeline_metrics,
+    metrics,
+)
+from app.backend.core.errors import (
+    success_response,
+    error_response,
+    ErrorCode,
+)
+
+logger = getLogger(__name__)
+router = APIRouter(tags=["monitoring"], prefix="/health")
 
 
-@router.get("/health")
-def health_check():
-    return {"status": "ok"}
+@router.get(
+    "/live",
+    status_code=status.HTTP_200_OK,
+    summary="Liveness probe",
+    description="Simple health check for Kubernetes/orchestrators. Returns immediately.",
+)
+def liveness_probe():
+    """Liveness probe - application is running."""
+    return success_response({"status": "alive"})
 
 
-@router.get("/health/dependencies")
-async def health_dependencies_check():
-    db_ok = False
-    redis_ok = False
-    celery_ok = False
-    details: dict[str, str] = {}
+@router.get(
+    "/ready",
+    status_code=status.HTTP_200_OK,
+    summary="Readiness probe",
+    description="Checks if service is ready to accept traffic.",
+)
+async def readiness_probe():
+    """Readiness probe - service is ready to handle requests."""
+    health = await get_system_health()
+    
+    if health.status == "unhealthy":
+        return error_response(
+            code=ErrorCode.SERVICE_UNAVAILABLE,
+            message="Service is not ready - critical components unhealthy",
+            details={"components": [c.dict() for c in health.components]},
+        )
+    
+    return success_response({"status": "ready", "components": len(health.components)})
 
-    try:
-        async with SessionLocal() as session:
-            result = await session.execute(text("SELECT 1"))
-            db_ok = result.scalar_one() == 1
-    except Exception as exc:
-        details["database"] = str(exc)
 
-    try:
-        redis_client = redis.from_url(settings.REDIS_URL, decode_responses=True)
-        redis_ok = bool(await redis_client.ping())
-        await redis_client.aclose()
-    except Exception as exc:
-        details["redis"] = str(exc)
+@router.get(
+    "/system",
+    response_model=SystemHealth,
+    status_code=status.HTTP_200_OK,
+    summary="System health status",
+    description="Detailed health status of all system components.",
+)
+async def system_health():
+    """
+    Get detailed system health status.
+    
+    Checks:
+    - Database connectivity
+    - Redis connectivity
+    - External APIs (News API, LLM services)
+    - Celery task queue
+    
+    Returns component health with response times and details.
+    """
+    return await get_system_health()
 
-    try:
-        inspect = celery_app.control.inspect(timeout=1.0)
-        ping_result = await asyncio.to_thread(inspect.ping)
-        celery_ok = bool(ping_result)
-        if not celery_ok:
-            details["celery"] = "No Celery workers responded to ping"
-    except Exception as exc:
-        details["celery"] = str(exc)
 
-    dependencies = {
-        "database": "up" if db_ok else "down",
-        "redis": "up" if redis_ok else "down",
-        "celery_worker": "up" if celery_ok else "down",
-    }
+@router.get(
+    "/metrics",
+    response_model=ExtendedMetricsData,
+    status_code=status.HTTP_200_OK,
+    summary="Application metrics",
+    description="Combined API, recommendation, and pipeline metrics.",
+)
+async def application_metrics():
+    """
+    Get application metrics snapshot.
+    
+    Metrics include:
+    - API runtime metrics (requests, errors, cache rate)
+    - Recommendation metrics (CTR, time spent, recommendation accuracy)
+    - Pipeline metrics (failed tasks, latency, retry count)
+    """
+    return await get_extended_metrics(timeframe_hours=24)
 
-    overall = "ok" if all([db_ok, redis_ok, celery_ok]) else "degraded"
-    payload = {"status": overall, "dependencies": dependencies}
-    if details:
-        payload["details"] = details
-    return payload
+
+@router.get(
+    "/metrics/recommendations",
+    response_model=RecommendationMetrics,
+    status_code=status.HTTP_200_OK,
+    summary="Recommendation metrics",
+    description="CTR, time spent, and recommendation accuracy over the last 24h.",
+)
+async def recommendation_metrics():
+    """Get recommendation quality metrics."""
+    return await get_recommendation_metrics(timeframe_hours=24)
+
+
+@router.get(
+    "/metrics/pipeline",
+    response_model=PipelineMetrics,
+    status_code=status.HTTP_200_OK,
+    summary="Pipeline monitoring metrics",
+    description="Failed tasks, latency, retry count and queue status over the last 24h.",
+)
+async def pipeline_metrics():
+    """Get pipeline reliability and latency metrics."""
+    return await get_pipeline_metrics(timeframe_hours=24)

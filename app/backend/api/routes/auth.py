@@ -1,11 +1,15 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.backend.api.dependencies import get_current_user, get_db_session
 from app.backend.core.config import settings
 from app.backend.schemas.auth import (
+    AuthForgotPasswordRequest,
+    AuthForgotPasswordResponse,
     AuthCheckAvailabilityRequest,
     AuthCheckAvailabilityResponse,
+    OAuthProvidersResponse,
     AuthLoginRequest,
     AuthRegisterCompleteRequest,
     AuthRegisterRequest,
@@ -13,6 +17,7 @@ from app.backend.schemas.auth import (
     AuthRegisterStartResponse,
     AuthVerifyCodeRequest,
     AuthVerifyCodeResponse,
+    AuthResetPasswordRequest,
     TokenResponse,
     UserPublic,
 )
@@ -23,9 +28,18 @@ from app.backend.services.auth_service import (
     check_username_exists,
     complete_verified_registration,
     create_registration_verification,
+    create_password_reset_request,
     issue_access_token,
     register_user,
+    reset_password_with_code,
     verify_registration_code,
+)
+from app.backend.services.oauth_service import (
+    begin_oauth_login,
+    build_oauth_error_redirect,
+    build_oauth_success_redirect,
+    get_enabled_oauth_providers,
+    handle_oauth_callback,
 )
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -64,7 +78,7 @@ async def register_start(
             detail="Email delivery is not configured. Contact support or enable AUTH_DEBUG_RETURN_CODE for testing.",
         )
 
-    debug_code = data["code"] if settings.AUTH_DEBUG_RETURN_CODE and (not sent) else None
+    debug_code = data["code"] if settings.AUTH_DEBUG_RETURN_CODE else None
 
     return AuthRegisterStartResponse(
         verification_id=data["verification_id"],
@@ -121,6 +135,47 @@ async def login(payload: AuthLoginRequest, session: AsyncSession = Depends(get_d
     user = await authenticate_user(session, payload.identifier, payload.password)
     token = issue_access_token(user)
     return TokenResponse(access_token=token, expires_in_minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
+
+
+@router.get("/oauth/providers", response_model=OAuthProvidersResponse)
+async def oauth_providers():
+    return OAuthProvidersResponse(providers=get_enabled_oauth_providers())
+
+
+@router.get("/oauth/{provider}/login")
+async def oauth_login(provider: str, request: Request):
+    return await begin_oauth_login(request, provider)
+
+
+@router.get("/oauth/{provider}/callback", name="oauth_callback")
+async def oauth_callback(
+    provider: str,
+    request: Request,
+    session: AsyncSession = Depends(get_db_session),
+):
+    try:
+        access_token, _ = await handle_oauth_callback(request, session, provider)
+        return RedirectResponse(url=build_oauth_success_redirect(access_token, provider), status_code=302)
+    except HTTPException as exc:
+        message = str(exc.detail or "OAuth authentication failed")
+        return RedirectResponse(url=build_oauth_error_redirect(message, provider), status_code=302)
+
+
+@router.post("/password/forgot", response_model=AuthForgotPasswordResponse)
+async def forgot_password(payload: AuthForgotPasswordRequest, session: AsyncSession = Depends(get_db_session)):
+    sent = await create_password_reset_request(session, email=payload.email)
+    return AuthForgotPasswordResponse(sent=sent)
+
+
+@router.post("/password/reset")
+async def reset_password(payload: AuthResetPasswordRequest, session: AsyncSession = Depends(get_db_session)):
+    await reset_password_with_code(
+        session,
+        email=payload.email,
+        code=payload.code,
+        new_password=payload.new_password,
+    )
+    return {"success": True}
 
 
 @router.get("/me", response_model=UserPublic)

@@ -34,6 +34,10 @@ class AuthCheckAvailabilityResponse(BaseModel):
     email_exists: bool | None = None
 
 
+class OAuthProvidersResponse(BaseModel):
+    providers: list[str] = Field(default_factory=list)
+
+
 class AuthRegisterStartRequest(BaseModel):
     username: str = Field(min_length=3, max_length=100)
     email: str = Field(min_length=5, max_length=255)
@@ -92,6 +96,20 @@ class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     expires_in_minutes: int
+
+
+class AuthForgotPasswordRequest(BaseModel):
+    email: str = Field(min_length=5, max_length=255)
+
+
+class AuthForgotPasswordResponse(BaseModel):
+    sent: bool
+
+
+class AuthResetPasswordRequest(BaseModel):
+    email: str = Field(min_length=5, max_length=255)
+    code: str = Field(min_length=4, max_length=16)
+    new_password: str = Field(min_length=8, max_length=128)
 
 
 class UserPublic(BaseModel):

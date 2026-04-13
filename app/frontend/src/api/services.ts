@@ -1,91 +1,75 @@
-import { apiClient } from './client';
+import { apiRequest, clearAuthToken, setAuthToken } from './client';
 import {
-  CommentCreateRequest,
+  CheckAvailabilityResponse,
+  OAuthProvidersResponse,
   CommentItem,
   CommentLikeToggleResponse,
-  CheckAvailabilityRequest,
-  CheckAvailabilityResponse,
   FeedItem,
-  InteractionCreateRequest,
   InteractionResponse,
-  LoginRequest,
-  RegisterCompleteRequest,
-  RegisterRequest,
-  SavedToggleRequest,
-  SavedToggleResponse,
-  RegisterStartRequest,
   RegisterStartResponse,
+  SavedToggleResponse,
   TokenResponse,
-  User,
-  VerifyCodeRequest,
+  UserPublic,
   VerifyCodeResponse,
 } from '../types';
 
 export const authService = {
-  checkAvailability: async (data: CheckAvailabilityRequest): Promise<CheckAvailabilityResponse> => {
-    const response = await apiClient.post('/auth/check-availability', data);
-    return response.data;
+  getOAuthProviders: () =>
+    apiRequest<OAuthProvidersResponse>('/auth/oauth/providers', { method: 'GET', auth: false }),
+
+  checkAvailability: (payload: { username?: string; email?: string }) =>
+    apiRequest<CheckAvailabilityResponse>('/auth/check-availability', { method: 'POST', body: payload, auth: false }),
+
+  registerStart: (payload: { username: string; email: string; password: string }) =>
+    apiRequest<RegisterStartResponse>('/auth/register/start', { method: 'POST', body: payload, auth: false }),
+
+  verifyCode: (payload: { verification_id: string; code: string }) =>
+    apiRequest<VerifyCodeResponse>('/auth/register/verify', { method: 'POST', body: payload, auth: false }),
+
+  registerComplete: (payload: {
+    verification_id: string;
+    interests: string[];
+    custom_interests: string[];
+    profession?: string | null;
+    country_code?: string | null;
+    country_name?: string | null;
+    city?: string | null;
+    region_code?: string | null;
+  }) => apiRequest<UserPublic>('/auth/register/complete', { method: 'POST', body: payload, auth: false }),
+
+  login: async (payload: { identifier: string; password: string }): Promise<TokenResponse> => {
+    const response = await apiRequest<TokenResponse>('/auth/login', {
+      method: 'POST',
+      body: payload,
+      auth: false,
+    });
+    setAuthToken(response.access_token);
+    return response;
   },
 
-  registerStart: async (data: RegisterStartRequest): Promise<RegisterStartResponse> => {
-    const response = await apiClient.post('/auth/register/start', data);
-    return response.data;
-  },
+  getMe: () => apiRequest<UserPublic>('/auth/me'),
 
-  verifyCode: async (data: VerifyCodeRequest): Promise<VerifyCodeResponse> => {
-    const response = await apiClient.post('/auth/register/verify', data);
-    return response.data;
-  },
-
-  registerComplete: async (data: RegisterCompleteRequest): Promise<User> => {
-    const response = await apiClient.post('/auth/register/complete', data);
-    return response.data;
-  },
-
-  register: async (data: RegisterRequest): Promise<User> => {
-    const response = await apiClient.post('/auth/register', data);
-    return response.data;
-  },
-
-  login: async (data: LoginRequest): Promise<TokenResponse> => {
-    const response = await apiClient.post('/auth/login', data);
-    return response.data;
-  },
-
-  getMe: async (): Promise<User> => {
-    const response = await apiClient.get('/auth/me');
-    return response.data;
+  logout: () => {
+    clearAuthToken();
   },
 };
 
 export const newsService = {
-  getFeed: async (limit = 50): Promise<FeedItem[]> => {
-    const response = await apiClient.get('/feed/me', { params: { limit } });
-    return response.data;
-  },
+  getFeed: (limit = 50) => apiRequest<FeedItem[]>('/feed/me', { params: { limit } }),
 
-  react: async (payload: InteractionCreateRequest): Promise<InteractionResponse> => {
-    const response = await apiClient.post('/feed/interactions', payload);
-    return response.data;
-  },
+  search: (query: string, limit = 50) => apiRequest<FeedItem[]>('/feed/search', { params: { q: query, limit } }),
 
-  toggleSaved: async (payload: SavedToggleRequest): Promise<SavedToggleResponse> => {
-    const response = await apiClient.post('/feed/saved/toggle', payload);
-    return response.data;
-  },
+  react: (payload: { user_id: number; ai_news_id: number; liked?: boolean; viewed?: boolean; watch_time?: number | null }) =>
+    apiRequest<InteractionResponse>('/feed/interactions', { method: 'POST', body: payload }),
 
-  getComments: async (aiNewsId: number): Promise<CommentItem[]> => {
-    const response = await apiClient.get(`/feed/comments/${aiNewsId}`);
-    return response.data;
-  },
+  toggleSaved: (payload: { ai_news_id: number }) =>
+    apiRequest<SavedToggleResponse>('/feed/saved/toggle', { method: 'POST', body: payload }),
 
-  createComment: async (payload: CommentCreateRequest): Promise<CommentItem> => {
-    const response = await apiClient.post('/feed/comments', payload);
-    return response.data;
-  },
+  getComments: (aiNewsId: number) => apiRequest<CommentItem[]>(`/feed/comments/${aiNewsId}`),
 
-  toggleCommentLike: async (commentId: number): Promise<CommentLikeToggleResponse> => {
-    const response = await apiClient.post(`/feed/comments/${commentId}/like-toggle`);
-    return response.data;
-  },
+  createComment: (payload: { ai_news_id: number; parent_comment_id?: number | null; content: string }) =>
+    apiRequest<CommentItem>('/feed/comments', { method: 'POST', body: payload }),
+
+  toggleCommentLike: (commentId: number) =>
+    apiRequest<CommentLikeToggleResponse>(`/feed/comments/${commentId}/like-toggle`, { method: 'POST' }),
 };

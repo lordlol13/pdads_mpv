@@ -6,6 +6,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.backend.db.sql_helpers import sql_timestamp_now
+from app.backend.services.recommender_service import rank_feed_rows, refresh_user_embedding, ensure_user_embedding
 
 
 _SOCIAL_TABLES_READY_DIALECTS: set[str] = set()
@@ -345,6 +346,36 @@ async def _ensure_social_tables(session: AsyncSession) -> None:
     _SOCIAL_TABLES_READY_DIALECTS.add(dialect)
 
 
+async def _log_feed_impressions(session: AsyncSession, *, user_id: int, rows: list[dict[str, Any]]) -> None:
+    """Persist served feed positions for CTR/accuracy analytics."""
+    if not rows:
+        return
+
+    now_sql = sql_timestamp_now(session)
+    for index, row in enumerate(rows, start=1):
+        ai_news_id = int(row.get("ai_news_id") or 0)
+        if ai_news_id <= 0:
+            continue
+
+        await session.execute(
+            text(
+                f"""
+                INSERT INTO feed_feature_log (user_id, ai_news_id, reason, feature_value, rank_position, created_at)
+                VALUES (:user_id, :ai_news_id, :reason, :feature_value, :rank_position, {now_sql})
+                """
+            ),
+            {
+                "user_id": user_id,
+                "ai_news_id": ai_news_id,
+                "reason": "feed_served",
+                "feature_value": float(row.get("rank_score") or 0.0),
+                "rank_position": index,
+            },
+        )
+
+    await session.commit()
+
+
 async def get_user_feed(session: AsyncSession, user_id: int, limit: int = 50) -> list[dict[str, Any]]:
     await _ensure_social_tables(session)
     query_limit = max(int(limit or 0), 1) * 6
@@ -412,6 +443,25 @@ async def get_user_feed(session: AsyncSession, user_id: int, limit: int = 50) ->
             COUNT(*) AS comment_count
         FROM feed_comments c
         GROUP BY c.ai_news_id
+    ),
+    latest_interactions_global AS (
+        SELECT
+            i.user_id,
+            i.ai_news_id,
+            i.liked,
+            ROW_NUMBER() OVER (
+                PARTITION BY i.user_id, i.ai_news_id
+                ORDER BY i.created_at DESC, i.id DESC
+            ) AS rn
+        FROM interactions i
+    ),
+    like_counts AS (
+        SELECT
+            ai_news_id,
+            COUNT(*) FILTER (WHERE liked = TRUE) AS like_count
+        FROM latest_interactions_global
+        WHERE rn = 1
+        GROUP BY ai_news_id
     )
     SELECT
         uf.id AS user_feed_id,
@@ -426,8 +476,10 @@ async def get_user_feed(session: AsyncSession, user_id: int, limit: int = 50) ->
         an.image_urls,
         an.video_urls,
         an.category,
+        an.embedding_vector,
         an.vector_status,
         li.liked,
+        COALESCE(lc.like_count, 0) AS like_count,
         CASE
             WHEN sn.id IS NULL THEN FALSE
             ELSE TRUE
@@ -458,37 +510,61 @@ async def get_user_feed(session: AsyncSession, user_id: int, limit: int = 50) ->
         AND sn.ai_news_id = uf.ai_news_id
     LEFT JOIN comment_counts cc
         ON cc.ai_news_id = uf.ai_news_id
+    LEFT JOIN like_counts lc
+        ON lc.ai_news_id = uf.ai_news_id
     WHERE uf.user_id = :user_id
-        AND NOT (COALESCE(li.viewed, FALSE) = TRUE AND sn.id IS NULL)
+        AND (
+            :exclude_viewed = FALSE
+            OR NOT (COALESCE(li.viewed, FALSE) = TRUE AND sn.id IS NULL)
+        )
     ORDER BY rank_score DESC, uf.id DESC
     LIMIT :query_limit
     """
-    async def _load_rows() -> list[dict[str, Any]]:
-        result = await session.execute(text(query), {"user_id": user_id, "query_limit": query_limit})
+    async def _load_rows(exclude_viewed: bool) -> list[dict[str, Any]]:
+        result = await session.execute(
+            text(query),
+            {
+                "user_id": user_id,
+                "query_limit": query_limit,
+                "exclude_viewed": exclude_viewed,
+            },
+        )
         return [dict(row) for row in result.mappings().all()]
 
-    rows = await _load_rows()
+    rows = await _load_rows(True)
     if not rows:
         inserted = await _backfill_user_feed_if_empty(session, user_id=user_id, user_topics=user_topics)
         if inserted > 0:
-            rows = await _load_rows()
+            rows = await _load_rows(True)
 
-    if not user_topics:
-        return _dedupe_feed_rows(rows, limit)
+    # Safety fallback: do not return empty feed solely because all items were marked viewed.
+    if not rows:
+        rows = await _load_rows(False)
 
-    filtered: list[dict[str, Any]] = []
-    for row in rows:
-        if bool(row.get("saved")):
-            filtered.append(row)
-            continue
-        if _persona_matches_topics(row.get("target_persona"), user_topics):
-            filtered.append(row)
+    user_embedding = await ensure_user_embedding(session, user_id)
 
-    if not filtered and rows:
-        # Keep feed non-empty for narrow/new interests when no persona match is available yet.
-        return _dedupe_feed_rows(rows, limit)
+    if user_topics:
+        filtered: list[dict[str, Any]] = []
+        for row in rows:
+            if bool(row.get("saved")):
+                filtered.append(row)
+                continue
+            if _persona_matches_topics(row.get("target_persona"), user_topics):
+                filtered.append(row)
 
-    return _dedupe_feed_rows(filtered, limit)
+        if filtered:
+            rows = filtered
+
+    ranked_rows = rank_feed_rows(rows, user_embedding=user_embedding, limit=limit, user_topics=user_topics)
+    deduped_rows = _dedupe_feed_rows(ranked_rows, limit)
+
+    try:
+        await _log_feed_impressions(session, user_id=user_id, rows=deduped_rows)
+    except Exception:
+        # Metrics logging must not break feed serving.
+        await session.rollback()
+
+    return deduped_rows
 
 
 async def record_interaction(session: AsyncSession, payload: dict[str, Any]) -> dict[str, Any]:
@@ -507,6 +583,12 @@ async def record_interaction(session: AsyncSession, payload: dict[str, Any]) -> 
     result = await session.execute(text(query), payload)
     await session.commit()
     row = result.mappings().first()
+    user_id = int(payload.get("user_id") or 0)
+    if user_id > 0:
+        try:
+            await refresh_user_embedding(session, user_id)
+        except Exception:
+            pass
     return dict(row) if row is not None else {"id": -1, "status": "created"}
 
 
@@ -532,6 +614,10 @@ async def toggle_saved_news(session: AsyncSession, user_id: int, ai_news_id: int
             {"id": existing_id},
         )
         await session.commit()
+        try:
+            await refresh_user_embedding(session, user_id)
+        except Exception:
+            pass
         return False
 
     now_sql = sql_timestamp_now(session)
@@ -545,6 +631,10 @@ async def toggle_saved_news(session: AsyncSession, user_id: int, ai_news_id: int
         {"user_id": user_id, "ai_news_id": ai_news_id},
     )
     await session.commit()
+    try:
+        await refresh_user_embedding(session, user_id)
+    except Exception:
+        pass
     return True
 
 

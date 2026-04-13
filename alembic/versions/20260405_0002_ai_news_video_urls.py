@@ -1,4 +1,4 @@
-"""add video_urls to ai_news
+﻿"""add video_urls to ai_news
 
 Revision ID: 20260405_0002
 Revises: 20260405_0001
