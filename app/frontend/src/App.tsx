@@ -13,6 +13,7 @@ import { RegisterForm } from "./components/RegisterForm";
 import { VerificationStep } from "./components/VerificationStep";
 import { ProfileStep } from "./components/ProfileStep";
 import { SuccessStep } from "./components/SuccessStep";
+import { ForgotPasswordModal } from "./components/ForgotPasswordModal";
 import { InteractiveSpaceBackground } from "./components/InteractiveSpaceBackground";
 import { BackendMainFeed } from "./components/BackendMainFeed";
 import { AuthFormData, AuthStep, UserPublic } from "./types";
@@ -56,6 +57,7 @@ function AppContent() {
   const [registerError, setRegisterError] = useState<string | null>(null);
   const [verificationError, setVerificationError] = useState<string | null>(null);
   const [profileError, setProfileError] = useState<string | null>(null);
+  const [forgotPasswordOpen, setForgotPasswordOpen] = useState(false);
   const { t } = useLanguage();
 
   useEffect(() => {
@@ -256,6 +258,24 @@ function AppContent() {
     }
   };
 
+  const handleResendVerificationCode = async () => {
+    const verificationId = formData.verificationId || (() => {
+      const raw = localStorage.getItem(PENDING_VERIFICATION_KEY);
+      if (!raw) return "";
+      try {
+        return (JSON.parse(raw) as { verificationId?: string }).verificationId ?? "";
+      } catch {
+        return "";
+      }
+    })();
+
+    if (!verificationId) {
+      throw new Error("Verification session not found.");
+    }
+
+    await authService.resendCode({ verification_id: verificationId });
+  };
+
   const handleCompleteProfile = async () => {
     setIsSubmitting(true);
     setProfileError(null);
@@ -288,6 +308,18 @@ function AppContent() {
   const handleSuccessComplete = () => {
     setIsLoggedIn(true);
     setIsRegistering(false);
+  };
+
+  const handleSendForgotPasswordCode = async (email: string) => {
+    await authService.forgotPassword({ email });
+  };
+
+  const handleResetPassword = async (payload: { email: string; code: string; newPassword: string }) => {
+    await authService.resetPassword({
+      email: payload.email,
+      code: payload.code,
+      new_password: payload.newPassword,
+    });
   };
 
   const handleLogout = () => {
@@ -341,6 +373,7 @@ function AppContent() {
                 key="login"
                 onToggleMode={handleToggleMode}
                 onSubmit={handleLogin}
+                onForgotPassword={() => setForgotPasswordOpen(true)}
                 isLoading={isSubmitting}
                 error={loginError}
                 defaultEmail={formData.email}
@@ -362,6 +395,7 @@ function AppContent() {
                 email={formData.email}
                 verificationId={formData.verificationId}
                 onVerify={handleVerifyCode}
+                onResend={handleResendVerificationCode}
                 onBack={prevStep}
                 direction={direction}
                 isLoading={isSubmitting}
@@ -384,6 +418,13 @@ function AppContent() {
           </AnimatePresence>
         </div>
       </AuthLayout>
+      <ForgotPasswordModal
+        open={forgotPasswordOpen}
+        defaultEmail={formData.email}
+        onClose={() => setForgotPasswordOpen(false)}
+        onSendCode={handleSendForgotPasswordCode}
+        onResetPassword={handleResetPassword}
+      />
     </div>
   );
 }
@@ -395,4 +436,3 @@ export default function App() {
     </LanguageProvider>
   );
 }
-

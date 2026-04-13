@@ -9,6 +9,8 @@ from app.backend.schemas.auth import (
     AuthForgotPasswordResponse,
     AuthCheckAvailabilityRequest,
     AuthCheckAvailabilityResponse,
+    AuthResendVerificationRequest,
+    AuthResendVerificationResponse,
     OAuthProvidersResponse,
     AuthLoginRequest,
     AuthRegisterCompleteRequest,
@@ -31,6 +33,7 @@ from app.backend.services.auth_service import (
     create_password_reset_request,
     issue_access_token,
     register_user,
+    resend_registration_code,
     reset_password_with_code,
     verify_registration_code,
 )
@@ -94,6 +97,15 @@ async def register_verify(
 ):
     result = await verify_registration_code(session, payload.verification_id, payload.code)
     return AuthVerifyCodeResponse(**result)
+
+
+@router.post("/register/resend", response_model=AuthResendVerificationResponse)
+async def register_resend(
+    payload: AuthResendVerificationRequest,
+    session: AsyncSession = Depends(get_db_session),
+):
+    result = await resend_registration_code(session, payload.verification_id)
+    return AuthResendVerificationResponse(**result)
 
 
 @router.post("/register/complete", response_model=UserPublic)

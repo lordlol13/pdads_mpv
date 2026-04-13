@@ -147,7 +147,7 @@ app.add_middleware(
 if not settings.DEBUG:
     app.add_middleware(
         TrustedHostMiddleware,
-        allowed_hosts=["pdads.local", "*.pdads.local"],
+        allowed_hosts=settings.trusted_hosts,
     )
 
 # =====================================================================

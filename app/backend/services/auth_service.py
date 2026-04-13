@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.backend.core.config import settings
 from app.backend.core.logging import ContextLogger
 from app.backend.core.security import create_access_token, hash_password, verify_password
-from app.backend.services.email_service import send_password_reset_code
+from app.backend.services.email_service import send_password_reset_code, send_verification_code
 from app.backend.services.recommender_service import refresh_user_embedding
 
 
@@ -782,6 +782,61 @@ async def verify_registration_code(session: AsyncSession, verification_id: str, 
     )
     await session.commit()
     return {"verification_id": verification_id, "verified": True}
+
+
+async def resend_registration_code(session: AsyncSession, verification_id: str) -> dict[str, Any]:
+    await _ensure_registration_table(session)
+
+    result = await session.execute(
+        text(
+            """
+            SELECT id, email, consumed_at
+            FROM registration_verifications
+            WHERE id = :verification_id
+            LIMIT 1
+            """
+        ),
+        {"verification_id": verification_id.strip()},
+    )
+    row = result.mappings().first()
+
+    if row is None or row.get("consumed_at") is not None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Verification session not found")
+
+    code = f"{secrets.randbelow(1000000):06d}"
+    code_hash = _hash_verification_code(verification_id, code)
+    expires_at = _utcnow_naive() + timedelta(minutes=settings.AUTH_VERIFICATION_CODE_TTL_MINUTES)
+
+    await session.execute(
+        text(
+            """
+            UPDATE registration_verifications
+            SET verification_code_hash = :verification_code_hash,
+                code_expires_at = :code_expires_at,
+                is_verified = FALSE,
+                attempt_count = 0,
+                updated_at = :updated_at
+            WHERE id = :verification_id
+            """
+        ),
+        {
+            "verification_code_hash": code_hash,
+            "code_expires_at": expires_at,
+            "updated_at": _utcnow_naive(),
+            "verification_id": verification_id,
+        },
+    )
+    await session.commit()
+
+    email = str(row.get("email") or "").strip().lower()
+    sent = send_verification_code(email, code)
+
+    return {
+        "verification_id": verification_id,
+        "expires_in_seconds": settings.AUTH_VERIFICATION_CODE_TTL_MINUTES * 60,
+        "sent": sent,
+        "debug_code": code if settings.AUTH_DEBUG_RETURN_CODE else None,
+    }
 
 
 async def complete_verified_registration(

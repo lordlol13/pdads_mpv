@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import { Bookmark, ChevronDown, ChevronLeft, Globe, Home, Moon, RefreshCw, Search, Settings, Sun, User } from 'lucide-react';
 
@@ -333,7 +333,9 @@ export function BackendMainFeed({ currentUser, onLogout }: BackendMainFeedProps)
             ) : (
               <>
                 <div className="flex flex-col items-center gap-4">
-                  <div className={`w-24 h-24 rounded-full border-4 ${theme === 'dark' ? 'bg-zinc-900 border-white/5' : 'bg-white border-zinc-200'}`} />
+                  <div className={`h-24 w-24 overflow-hidden rounded-full border-4 ${theme === 'dark' ? 'bg-zinc-900 border-white/5' : 'bg-white border-zinc-200'}`}>
+                    <img src="/PR.ADS.png" alt="PR.ADS" className="h-full w-full object-cover" />
+                  </div>
                   <div className="text-center space-y-1">
                     <h2 className="text-2xl font-bold">{currentUser?.username || 'User'}</h2>
                     <p className="text-zinc-500 text-sm">{currentUser?.email || currentUser?.location || '@user'}</p>
@@ -475,3 +477,5 @@ export function BackendMainFeed({ currentUser, onLogout }: BackendMainFeedProps)
     </div>
   );
 }
+
+

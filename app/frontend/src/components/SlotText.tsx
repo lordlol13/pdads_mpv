@@ -1,4 +1,4 @@
-import { motion, AnimatePresence } from "motion/react";
+﻿import { motion, AnimatePresence } from "motion/react";
 
 interface SlotTextProps {
   text: string;
@@ -52,3 +52,4 @@ export function SlotText({ text, className }: SlotTextProps) {
     </span>
   );
 }
+

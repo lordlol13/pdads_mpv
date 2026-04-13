@@ -1,20 +1,37 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+﻿# PR.ADS Frontend
 
-# Run and deploy your AI Studio app
+Frontend app path: `app/frontend`.
 
-This contains everything you need to run your app locally.
+## Local run
 
-View your app in AI Studio: https://ai.studio/apps/de38b0ff-3d40-45c4-9804-31dee3b78793
+```bash
+npm install
+npm run dev
+```
 
-## Run Locally
+Default local URL: `http://localhost:5173`.
 
-**Prerequisites:**  Node.js
+## Build
 
+```bash
+npm run build
+npm run preview
+```
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+## Required env
+
+Create `.env` in `app/frontend`:
+
+```bash
+VITE_API_BASE_URL=https://<your-railway-backend-domain>/api
+```
+
+Use `/api` only when backend is reverse-proxied on the same host.
+
+## OAuth buttons
+
+OAuth buttons are enabled from backend response:
+
+- `GET /api/auth/oauth/providers`
+
+If provider credentials are missing in backend env, the button is disabled.

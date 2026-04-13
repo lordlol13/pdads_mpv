@@ -66,14 +66,14 @@ def _get_client(provider: str):
 
 
 def build_oauth_success_redirect(access_token: str, provider: str) -> str:
-    base = (settings.OAUTH_FRONTEND_SUCCESS_URL or "http://localhost:3000").strip()
+    base = (settings.OAUTH_FRONTEND_SUCCESS_URL or "http://localhost:5173").strip()
     token_part = quote(access_token, safe="")
     provider_part = quote(provider, safe="")
     return f"{base}#access_token={token_part}&provider={provider_part}"
 
 
 def build_oauth_error_redirect(error_message: str, provider: str) -> str:
-    base = (settings.OAUTH_FRONTEND_ERROR_URL or settings.OAUTH_FRONTEND_SUCCESS_URL or "http://localhost:3000").strip()
+    base = (settings.OAUTH_FRONTEND_ERROR_URL or settings.OAUTH_FRONTEND_SUCCESS_URL or "http://localhost:5173").strip()
     message_part = quote(error_message, safe="")
     provider_part = quote(provider, safe="")
     return f"{base}#oauth_error={message_part}&provider={provider_part}"

@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useMemo } from "react";
+﻿import { useState, useRef, useEffect, useMemo } from "react";
 import { motion, useAnimation, AnimatePresence } from "motion/react";
 import { Search, Plus, X, MapPin, Briefcase, Globe, ChevronDown, ChevronLeft } from "lucide-react";
 import { Input } from "@/components/ui/input";
@@ -10,6 +10,7 @@ import { Country, City } from "country-state-city";
 import { useLanguage } from "../context/LanguageContext";
 
 interface ProfileStepProps {
+  key?: string | number;
   formData: AuthFormData;
   updateFormData: (data: Partial<AuthFormData>) => void;
   onSubmitProfile: () => Promise<void> | void;
@@ -312,3 +313,7 @@ export function ProfileStep({ formData, updateFormData, onSubmitProfile, onBack,
     </motion.div>
   );
 }
+
+
+
+

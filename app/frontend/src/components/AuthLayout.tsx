@@ -1,4 +1,4 @@
-import { motion, AnimatePresence } from "motion/react";
+﻿import { motion, AnimatePresence } from "motion/react";
 import { ReactNode } from "react";
 import { SlotText } from "./SlotText";
 import { SocialButtons } from "./SocialButtons";
@@ -46,9 +46,9 @@ export function AuthLayout({ children, showLeftPanel, isRegistering, onToggleMod
               <div className="space-y-8 max-w-md relative z-10">
                 <div className="flex items-center gap-3">
                   <div className="w-12 h-12 bg-white rounded-xl flex items-center justify-center shadow-lg shadow-white/10 overflow-hidden">
-                    <img src="/input_file_1.png" alt="news cloud logo" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                    <img src="/PR.ADS.png" alt="PR.ADS logo" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
                   </div>
-                  <h1 className="text-2xl font-bold tracking-tight">news cloud</h1>
+                  <h1 className="text-2xl font-bold tracking-tight">PR.ADS</h1>
                 </div>
                 
                 <div className="space-y-4">
@@ -136,3 +136,4 @@ export function AuthLayout({ children, showLeftPanel, isRegistering, onToggleMod
     </div>
   );
 }
+

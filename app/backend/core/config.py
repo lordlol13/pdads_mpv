@@ -35,8 +35,8 @@ class Settings(BaseSettings):
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
     SESSION_SECRET_KEY: str = ""
 
-    OAUTH_FRONTEND_SUCCESS_URL: str = "http://localhost:3000"
-    OAUTH_FRONTEND_ERROR_URL: str = "http://localhost:3000"
+    OAUTH_FRONTEND_SUCCESS_URL: str = "http://localhost:5173"
+    OAUTH_FRONTEND_ERROR_URL: str = "http://localhost:5173"
 
     GOOGLE_OAUTH_CLIENT_ID: str = ""
     GOOGLE_OAUTH_CLIENT_SECRET: str = ""
@@ -69,6 +69,7 @@ class Settings(BaseSettings):
         "http://127.0.0.1:8000,http://localhost:8000"
     )
     CORS_ALLOW_ORIGIN_REGEX: str = ""
+    TRUSTED_HOSTS: str = "*"
 
     PIPELINE_MAX_ATTEMPTS: int = 1
     PIPELINE_TARGET_SCORE: float = 8.0
@@ -141,6 +142,13 @@ class Settings(BaseSettings):
         parts = re.split(r"[,;\r\n]+", raw)
         values = [item.strip() for item in parts if item and item.strip()]
         return values or ["http://127.0.0.1:8000"]
+
+    @property
+    def trusted_hosts(self) -> list[str]:
+        raw = (self.TRUSTED_HOSTS or "").strip()
+        parts = re.split(r"[,;\r\n]+", raw)
+        values = [item.strip() for item in parts if item and item.strip()]
+        return values or ["*"]
 
     @model_validator(mode="after")
     def _normalize_runtime_urls(self) -> "Settings":

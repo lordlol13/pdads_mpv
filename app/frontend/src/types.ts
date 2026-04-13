@@ -52,6 +52,13 @@ export interface VerifyCodeResponse {
   verified: boolean;
 }
 
+export interface AuthResendVerificationResponse {
+  verification_id: string;
+  expires_in_seconds: number;
+  sent: boolean;
+  debug_code?: string | null;
+}
+
 export interface CheckAvailabilityResponse {
   username_exists?: boolean | null;
   email_exists?: boolean | null;

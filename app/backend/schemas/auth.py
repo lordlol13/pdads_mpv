@@ -60,6 +60,17 @@ class AuthVerifyCodeResponse(BaseModel):
     verified: bool
 
 
+class AuthResendVerificationRequest(BaseModel):
+    verification_id: str = Field(min_length=8, max_length=128)
+
+
+class AuthResendVerificationResponse(BaseModel):
+    verification_id: str
+    expires_in_seconds: int
+    sent: bool
+    debug_code: str | None = None
+
+
 class AuthRegisterCompleteRequest(BaseModel):
     verification_id: str = Field(min_length=8, max_length=128)
     interests: list[str] = Field(default_factory=list)

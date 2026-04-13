@@ -1,6 +1,7 @@
 import { apiRequest, clearAuthToken, setAuthToken } from './client';
 import {
   CheckAvailabilityResponse,
+  AuthResendVerificationResponse,
   OAuthProvidersResponse,
   CommentItem,
   CommentLikeToggleResponse,
@@ -26,6 +27,9 @@ export const authService = {
   verifyCode: (payload: { verification_id: string; code: string }) =>
     apiRequest<VerifyCodeResponse>('/auth/register/verify', { method: 'POST', body: payload, auth: false }),
 
+  resendCode: (payload: { verification_id: string }) =>
+    apiRequest<AuthResendVerificationResponse>('/auth/register/resend', { method: 'POST', body: payload, auth: false }),
+
   registerComplete: (payload: {
     verification_id: string;
     interests: string[];
@@ -46,6 +50,12 @@ export const authService = {
     setAuthToken(response.access_token);
     return response;
   },
+
+  forgotPassword: (payload: { email: string }) =>
+    apiRequest<{ sent: boolean }>('/auth/password/forgot', { method: 'POST', body: payload, auth: false }),
+
+  resetPassword: (payload: { email: string; code: string; new_password: string }) =>
+    apiRequest<{ success: boolean }>('/auth/password/reset', { method: 'POST', body: payload, auth: false }),
 
   getMe: () => apiRequest<UserPublic>('/auth/me'),
 

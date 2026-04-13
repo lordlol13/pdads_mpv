@@ -187,7 +187,7 @@ def _strip_likely_english_sentences(text: str) -> str:
     return " ".join(filtered).strip()
 
 
-def _ensure_uzbek_title(value: str, fallback_title: str) -> str:
+def _ensure_uzbek_title(value: str, fallback_title: str, source_text: str | None = None) -> str:
     title = str(value or "").strip()
     source = title or str(fallback_title or "").strip()
     source = re.sub(r"^\s*\[ai\]\s*", "", source, flags=re.IGNORECASE).strip()
@@ -208,7 +208,101 @@ def _ensure_uzbek_title(value: str, fallback_title: str) -> str:
     if len(source) > 160:
         source = source[:157].rstrip() + "..."
 
+    # If the title still looks generic/template-like, infer a newsroom headline from source context.
+    if source.lower() in {"top story", "dolzarb xabar", "news", "headline"}:
+        inferred = _infer_news_headline_from_source(" ".join([fallback_title or "", source_text or ""]).strip())
+        if inferred:
+            return inferred
+
     return source
+
+
+def _extract_leading_subject(value: str) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip(" .,:;!-")
+    if not text:
+        return ""
+
+    parts = re.split(
+        r"\b(?:won|wins|beats?|defeats?|victory|champion(?:s)?|pobeda|vyigral|yutdi|g'olib)\b",
+        text,
+        maxsplit=1,
+        flags=re.IGNORECASE,
+    )
+    head = parts[0].strip(" -,:;!")
+    if not head:
+        return ""
+
+    words = [word for word in re.split(r"\s+", head) if word]
+    return " ".join(words[:5]).strip()
+
+
+def _infer_news_headline_from_source(source_title: str) -> str:
+    raw = _clean_text_artifacts(source_title)
+    if not raw:
+        return ""
+
+    lowered = raw.lower()
+    subject = _extract_leading_subject(raw)
+    if not subject:
+        subject = re.sub(r"[^\w\s\-]", "", raw).strip().split(" ")[0:3]
+        subject = " ".join(subject).strip()
+
+    world_cup_markers = (
+        "world cup",
+        "чемпионат мира",
+        "чм",
+        "jahon chempionati",
+    )
+    win_markers = (
+        "won",
+        "wins",
+        "victory",
+        "champion",
+        "champions",
+        "pobeda",
+        "vyigral",
+        "g'olib",
+        "g'alaba",
+        "yutdi",
+    )
+
+    if subject and any(marker in lowered for marker in world_cup_markers) and any(marker in lowered for marker in win_markers):
+        language = _detect_language_hint(raw)
+        if language == "ru":
+            return f"{subject} победитель чемпионата мира"
+        if language == "uz":
+            return f"{subject} jahon chempionati g'olibi"
+        return f"{subject} wins the World Cup"
+
+    first_sentence = re.split(r"(?<=[.!?])\s+", raw)[0].strip()
+    first_sentence = re.sub(r"^[\"'“”‘’\-\s]+", "", first_sentence)
+    first_sentence = re.sub(r"\s+", " ", first_sentence)
+    return first_sentence[:120].strip(" -,:;") if first_sentence else ""
+
+
+def _extract_news_topics_for_toc(title: str, raw_text: str, category: str | None = None) -> list[str]:
+    source = _clean_text_artifacts(" ".join([title or "", raw_text or ""]))
+    if not source:
+        fallback = str(category or "").strip()
+        return [fallback] if fallback else []
+
+    chunks = re.split(r"[.!?;\n\r]+", source)
+    phrases: list[str] = []
+    for chunk in chunks:
+        normalized = re.sub(r"\s+", " ", chunk).strip(" -,:;")
+        if len(normalized) < 8:
+            continue
+        words = [w for w in normalized.split(" ") if w]
+        if len(words) > 8:
+            normalized = " ".join(words[:8]).strip()
+        if normalized and normalized.lower() not in {p.lower() for p in phrases}:
+            phrases.append(normalized)
+        if len(phrases) >= 6:
+            break
+
+    if not phrases and category:
+        phrases.append(str(category).strip())
+    return phrases
 
 
 def _split_into_paragraphs(text: str) -> list[str]:
@@ -667,7 +761,7 @@ def _compose_generated_news(
     profession: str | None,
     geo: str | None,
 ) -> GeneratedNews:
-    final_title = _ensure_uzbek_title(final_title_raw, title)
+    final_title = _ensure_uzbek_title(final_title_raw, title, raw_text)
     structured_text = _ensure_structured_personal_text(
         final_text_raw,
         title=final_title,
@@ -897,6 +991,9 @@ def _normalize_openai_model_name(model_name: str | None) -> str:
 def _persona_profile_for_prompt(
     *,
     target_persona: str,
+    title: str,
+    raw_text: str,
+    category: str | None,
     profession: str | None,
     user_geo: str | None,
     region: str | None,
@@ -912,6 +1009,11 @@ def _persona_profile_for_prompt(
     readable_topics: list[str] = []
     for part in parts:
         token = re.sub(r"\s+", " ", part).strip()
+        if token and token not in readable_topics:
+            readable_topics.append(token)
+
+    for topic in _extract_news_topics_for_toc(title=title, raw_text=raw_text, category=category):
+        token = re.sub(r"\s+", " ", topic).strip()
         if token and token not in readable_topics:
             readable_topics.append(token)
 
@@ -969,6 +1071,9 @@ def _build_editorial_user_payload(
 ) -> dict[str, object]:
     persona = _persona_profile_for_prompt(
         target_persona=target_persona,
+        title=title,
+        raw_text=raw_text,
+        category=category,
         profession=profession,
         user_geo=user_geo,
         region=region,

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+﻿import { useEffect, useRef } from "react";
 
 interface Star {
   x: number;
@@ -180,3 +180,4 @@ export function InteractiveSpaceBackground() {
     />
   );
 }
+

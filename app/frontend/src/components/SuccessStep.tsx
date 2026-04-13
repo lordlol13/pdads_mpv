@@ -1,4 +1,4 @@
-import { motion } from "motion/react";
+﻿import { motion } from "motion/react";
 import { CheckCircle2 } from "lucide-react";
 import ReactConfetti from "react-confetti";
 import { useEffect, useState } from "react";
@@ -6,7 +6,7 @@ import { useLanguage } from "../context/LanguageContext";
 
 interface SuccessStepProps {
   onComplete?: () => void;
-  key?: string;
+  key?: string | number;
 }
 
 export function SuccessStep({ onComplete }: SuccessStepProps) {
@@ -89,3 +89,4 @@ export function SuccessStep({ onComplete }: SuccessStepProps) {
     </motion.div>
   );
 }
+

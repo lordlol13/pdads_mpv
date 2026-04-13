@@ -1,4 +1,4 @@
-import { motion } from "motion/react";
+﻿import { motion } from "motion/react";
 import { AuthStep } from "@/src/types";
 
 interface ProgressBarProps {
@@ -52,3 +52,4 @@ export function ProgressBar({ currentStep }: ProgressBarProps) {
     </motion.div>
   );
 }
+

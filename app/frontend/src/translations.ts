@@ -1,8 +1,7 @@
-export type Language = "uz" | "ru" | "en";
+﻿export type Language = "uz" | "ru" | "en";
 
 export const translations = {
   uz: {
-    // Auth
     login: "Kirish",
     register: "Ro'yxatdan o'tish",
     email: "Email manzili",
@@ -32,8 +31,6 @@ export const translations = {
     profession: "Kasbingiz",
     completeProfile: "Profilni yakunlash",
     forgotPassword: "Parolni unutdingizmi?",
-    
-    // Feed
     likes: "Layklar",
     comments: "Izohlar",
     save: "Saqlash",
@@ -42,15 +39,11 @@ export const translations = {
     addComment: "Izoh qoldiring...",
     reply: "Javob berish",
     noComments: "Hozircha izohlar yo'q",
-    
-    // Navigation
     home: "Asosiy",
     search: "Qidiruv",
     profile: "Profil",
     explore: "Kashf qilish",
     searchPlaceholder: "Yangiliklar, mavzular yoki foydalanuvchilarni qidiring...",
-    
-    // Profile
     posts: "Postlar",
     followers: "Obunachilar",
     following: "Obunalar",
@@ -66,9 +59,12 @@ export const translations = {
     refresh: "Yangilash",
     hoursAgo: "soat oldin",
     now: "hozir",
+    feedEmptyTitle: "Lenta hozircha bo'sh",
+    feedEmptyText: "Ingestion/pipeline ishga tushiring va lentani yangilang.",
+    searchNoResults: "Natija topilmadi.",
+    noSavedPosts: "Hali saqlangan postlar yo'q",
   },
   ru: {
-    // Auth
     login: "Войти",
     register: "Регистрация",
     email: "Email адрес",
@@ -87,19 +83,17 @@ export const translations = {
     interests: "Интересы",
     finish: "Завершить",
     success: "Успешно!",
-    redirecting: "Перенаправление в панель управления...",
+    redirecting: "Перенаправление в ленту...",
     joinFuture: "Присоединяйтесь к будущему",
     welcomeBack: "С возвращением",
-    platformDesc: "Самая передовая платформа для современных разработчиков и творческих умов.",
-    orContinueWith: "Или продолжите с помощью",
+    platformDesc: "Современная платформа для разработчиков и создателей контента.",
+    orContinueWith: "Или продолжите с",
     continueWithGoogle: "Продолжить через Google",
     continueWithApple: "Продолжить через Apple",
     continueWithMicrosoft: "Продолжить через Microsoft",
     profession: "Профессия",
     completeProfile: "Завершить профиль",
     forgotPassword: "Забыли пароль?",
-    
-    // Feed
     likes: "Лайки",
     comments: "Комментарии",
     save: "Сохранить",
@@ -108,20 +102,16 @@ export const translations = {
     addComment: "Оставить комментарий...",
     reply: "Ответить",
     noComments: "Пока нет комментариев",
-    
-    // Navigation
     home: "Главная",
     search: "Поиск",
     profile: "Профиль",
-    explore: "Исследовать",
+    explore: "Поиск",
     searchPlaceholder: "Поиск новостей, тем или пользователей...",
-    
-    // Profile
     posts: "Посты",
     followers: "Подписчики",
     following: "Подписки",
     settings: "Настройки",
-    savedPosts: "Сохраненные",
+    savedPosts: "Сохраненное",
     language: "Язык",
     theme: "Тема",
     accountSettings: "Настройки аккаунта",
@@ -132,9 +122,12 @@ export const translations = {
     refresh: "Обновить",
     hoursAgo: "часов назад",
     now: "сейчас",
+    feedEmptyTitle: "Лента пока пустая",
+    feedEmptyText: "Запустите ingestion/pipeline и обновите ленту.",
+    searchNoResults: "Ничего не найдено.",
+    noSavedPosts: "Пока нет сохраненных постов",
   },
   en: {
-    // Auth
     login: "Login",
     register: "Register",
     email: "Email address",
@@ -154,8 +147,8 @@ export const translations = {
     finish: "Finish",
     success: "Success!",
     redirecting: "Redirecting to dashboard...",
-    joinFuture: "Join the future of",
-    welcomeBack: "Welcome back to",
+    joinFuture: "Join the future",
+    welcomeBack: "Welcome back",
     platformDesc: "The most advanced platform for modern developers and creative minds.",
     orContinueWith: "Or continue with",
     continueWithGoogle: "Continue with Google",
@@ -164,8 +157,6 @@ export const translations = {
     profession: "Profession",
     completeProfile: "Complete Profile",
     forgotPassword: "Forgot password?",
-    
-    // Feed
     likes: "Likes",
     comments: "Comments",
     save: "Save",
@@ -174,15 +165,11 @@ export const translations = {
     addComment: "Add a comment...",
     reply: "Reply",
     noComments: "No comments yet",
-    
-    // Navigation
     home: "Home",
     search: "Search",
     profile: "Profile",
     explore: "Explore",
     searchPlaceholder: "Search for news, topics, or users...",
-    
-    // Profile
     posts: "Posts",
     followers: "Followers",
     following: "Following",
@@ -198,5 +185,9 @@ export const translations = {
     refresh: "Refresh",
     hoursAgo: "hours ago",
     now: "now",
-  }
+    feedEmptyTitle: "Feed is empty",
+    feedEmptyText: "Run ingestion/pipeline and refresh feed.",
+    searchNoResults: "No results found.",
+    noSavedPosts: "No saved posts yet",
+  },
 };

@@ -1,7 +1,20 @@
 import { TokenResponse } from '../types';
 
-const API_BASE = '/api';
+const API_BASE = (import.meta.env.VITE_API_BASE_URL || '/api').replace(/\/+$/, '');
 const TOKEN_KEY = 'token';
+
+export function buildApiUrl(path: string, params?: RequestOptions['params']): string {
+  const url = new URL(`${API_BASE}${path}`, window.location.origin);
+  if (params) {
+    for (const [key, value] of Object.entries(params)) {
+      if (value === null || value === undefined || value === '') {
+        continue;
+      }
+      url.searchParams.set(key, String(value));
+    }
+  }
+  return url.toString();
+}
 
 export function getAuthToken(): string | null {
   return localStorage.getItem(TOKEN_KEY);
@@ -23,19 +36,6 @@ type RequestOptions = {
   params?: Record<string, string | number | boolean | null | undefined>;
 };
 
-function buildUrl(path: string, params?: RequestOptions['params']): string {
-  const url = new URL(`${API_BASE}${path}`, window.location.origin);
-  if (params) {
-    for (const [key, value] of Object.entries(params)) {
-      if (value === null || value === undefined || value === '') {
-        continue;
-      }
-      url.searchParams.set(key, String(value));
-    }
-  }
-  return url.toString();
-}
-
 export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const headers: Record<string, string> = {
     Accept: 'application/json',
@@ -52,7 +52,7 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
     }
   }
 
-  const response = await fetch(buildUrl(path, options.params), {
+  const response = await fetch(buildApiUrl(path, options.params), {
     method: options.method ?? 'GET',
     headers,
     body: options.body !== undefined ? JSON.stringify(options.body) : undefined,

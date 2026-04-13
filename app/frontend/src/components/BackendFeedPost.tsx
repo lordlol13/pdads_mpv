@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
+﻿import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Bookmark, ChevronLeft, ChevronRight, Heart, MessageCircle, Play, Send, Share2 } from 'lucide-react';
 import { useDoubleTap } from 'use-double-tap';
@@ -8,6 +8,7 @@ import { useLanguage } from '../context/LanguageContext';
 import { CommentItem, FeedItem } from '../types';
 
 interface BackendFeedPostProps {
+  key?: string | number;
   item: FeedItem;
   isActive: boolean;
   currentUserId: number;
@@ -45,34 +46,63 @@ function formatPersonaToken(raw: string): string {
     .join(' ');
 }
 
-function parsePersonaToc(targetPersona?: string | null, category?: string | null): { headline: string; toc: string[] } {
-  const raw = (targetPersona || '').trim();
-  const parts = raw
-    ? raw.split('|').map((part) => part.trim()).filter(Boolean)
-    : [];
+function parseNewsToc(
+  finalTitle?: string | null,
+  finalText?: string | null,
+  category?: string | null,
+): { headline: string; toc: string[] } {
+  const normalizedTitle = (finalTitle || '').replace(/\s+/g, ' ').trim();
+  const normalizedText = (finalText || '').replace(/\s+/g, ' ').trim();
+  const fallbackHeadline = formatPersonaToken((category || 'News').trim()) || 'News';
 
-  const tokens = parts.length > 0 ? parts : [(category || 'general').trim()];
+  const headline = normalizedTitle || fallbackHeadline;
+  const source = `${normalizedTitle}. ${normalizedText}`.trim();
+  if (!source) {
+    return { headline, toc: [] };
+  }
+
+  const stopwords = new Set([
+    'the', 'and', 'for', 'with', 'that', 'this', 'from', 'into', 'after', 'before',
+    'about', 'were', 'was', 'have', 'has', 'had', 'will', 'news', 'update',
+  ]);
+
+  const candidates = source
+    .split(/[.,;:!?()\[\]{}"'\n\r]+/g)
+    .map((chunk) => chunk.trim())
+    .filter((chunk) => chunk.length >= 4 && chunk.length <= 48);
 
   const deduped: string[] = [];
   const seen = new Set<string>();
-  for (const token of tokens) {
-    const formatted = formatPersonaToken(token);
-    const key = formatted.toLowerCase();
-    if (!formatted || seen.has(key)) {
+
+  for (const chunk of candidates) {
+    const words = chunk
+      .split(/\s+/g)
+      .map((word) => word.replace(/[^\p{L}\p{N}\-]/gu, '').trim())
+      .filter(Boolean);
+
+    if (words.length === 0 || words.length > 7) {
       continue;
     }
+
+    const meaningful = words.filter((word) => !stopwords.has(word.toLowerCase()));
+    if (meaningful.length < 2) {
+      continue;
+    }
+
+    const topic = meaningful.map(formatPersonaToken).join(' ').trim();
+    const key = topic.toLowerCase();
+    if (!topic || seen.has(key)) {
+      continue;
+    }
+
     seen.add(key);
-    deduped.push(formatted);
+    deduped.push(topic);
+    if (deduped.length >= 4) {
+      break;
+    }
   }
 
-  if (deduped.length === 0) {
-    return { headline: 'News', toc: [] };
-  }
-
-  return {
-    headline: deduped[0],
-    toc: deduped,
-  };
+  return { headline, toc: deduped };
 }
 
 function stripToPreview(text: string, maxLength = 180): string {
@@ -161,8 +191,8 @@ export function BackendFeedPost({
   const hasVideo = Array.isArray(item.video_urls) && item.video_urls.length > 0;
   const hasImages = Array.isArray(item.image_urls) && item.image_urls.length > 0;
   const personaMeta = useMemo(
-    () => parsePersonaToc(item.target_persona, item.category),
-    [item.target_persona, item.category],
+    () => parseNewsToc(item.final_title, item.final_text, item.category),
+    [item.final_title, item.final_text, item.category],
   );
   const title = item.final_title?.trim() || personaMeta.headline || item.category?.trim() || 'News item';
   const author = personaMeta.headline || item.category?.trim() || 'News';
@@ -323,7 +353,7 @@ export function BackendFeedPost({
   };
 
   const topMediaUrl = urls[currentImageIndex] || urls[0] || '';
-  const shareUrl = `${window.location.origin}/app/home?ai_news_id=${item.ai_news_id}`;
+  const shareUrl = `${window.location.origin}/?ai_news_id=${item.ai_news_id}`;
 
   return (
     <div className="relative w-full h-full bg-transparent flex items-center justify-center overflow-hidden snap-start">
@@ -676,6 +706,7 @@ export function BackendFeedPost({
 }
 
 interface CommentThreadProps {
+  key?: string | number;
   comment: CommentItem;
   onToggleLike: (commentId: number) => void;
   depth?: number;
@@ -710,3 +741,7 @@ function CommentThread({ comment, onToggleLike, depth = 0 }: CommentThreadProps)
     </div>
   );
 }
+
+
+
+

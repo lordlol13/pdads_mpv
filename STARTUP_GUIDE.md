@@ -1,4 +1,4 @@
-# 🚀 Запуск полного Pipeline PD.ADS MVP
+# 🚀 Запуск полного Pipeline PR.ADS MVP
 
 ## ⚡ Быстрый старт (WINDOWS)
 
