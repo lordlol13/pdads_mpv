@@ -33,7 +33,7 @@ from app.backend.core.errors import (
     error_response,
     ErrorCode,
 )
-from app.backend.core.health import metrics
+from app.backend.core.health import metrics, get_system_health
 from app.backend.core.logging import ContextLogger
 
 # Initialize structured logger
@@ -230,6 +230,24 @@ async def track_metrics(request: Request, call_next):
 
 # Health & monitoring endpoints (highest priority)
 app.include_router(health_router, prefix="/api")
+
+# Compatibility endpoints for platforms expecting root-level health checks
+@app.get("/health")
+def root_liveness():
+    """Compatibility liveness endpoint (keeps orchestration probes happy)."""
+    return JSONResponse(status_code=status.HTTP_200_OK, content={"status": "alive"})
+
+
+@app.get("/ready")
+async def root_readiness():
+    """Compatibility readiness endpoint that mirrors `/api/health/ready`."""
+    health = await get_system_health()
+    if health.status == "unhealthy":
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={"status": "unhealthy", "components": [c.dict() for c in health.components]},
+        )
+    return JSONResponse(status_code=status.HTTP_200_OK, content={"status": "ready", "components": len(health.components)})
 
 # API routes
 app.include_router(auth_router, prefix="/api")
