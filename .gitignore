@@ -212,3 +212,4 @@ scripts/run_all.ps1
 # Local env variants (keep only template in git)
 .env.*
 !.env.example
+.env.example
