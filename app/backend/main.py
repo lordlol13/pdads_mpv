@@ -16,7 +16,6 @@ import time
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
-from starlette.middleware.proxy_headers import ProxyHeadersMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
@@ -57,8 +56,15 @@ app = FastAPI(
 # Middleware Stack
 # =====================================================================
 
-# Respect X-Forwarded-* headers from Railway/Proxy so OAuth redirect_uri uses https://
-app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
+# Respect X-Forwarded-* headers from Railway/Proxy so OAuth redirect_uri uses https://.
+# Some Starlette versions may not ship ProxyHeadersMiddleware; uvicorn --proxy-headers
+# still handles this, so keep it optional to avoid startup crashes.
+try:
+    from starlette.middleware.proxy_headers import ProxyHeadersMiddleware  # type: ignore
+
+    app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
+except Exception:
+    logger.warning("ProxyHeadersMiddleware unavailable; rely on uvicorn --proxy-headers instead")
 
 # Add request correlation ID
 @app.middleware("http")
