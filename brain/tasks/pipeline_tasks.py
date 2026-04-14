@@ -314,6 +314,44 @@ async def _upsert_ai_news_for_persona(
         "vector_status": "pending",
     }
 
+    # Prevent creating near-duplicate ai_news: check title and text collisions
+    is_sqlite = session.get_bind().dialect.name == "sqlite"
+    candidate_title = str(params.get("final_title") or "").strip()
+    candidate_text = str(params.get("final_text") or "").strip()
+    candidate_image = None
+    if isinstance(media_urls, list) and media_urls:
+        candidate_image = str(media_urls[0] or "").strip()
+
+    if candidate_title or candidate_text or candidate_image:
+        if is_sqlite:
+            dup_query = """
+            SELECT id FROM ai_news
+            WHERE (final_title = :final_title)
+               OR (substr(final_text,1,200) = substr(:final_text,1,200))
+               OR (image_urls IS NOT NULL AND image_urls LIKE '%' || :candidate_image || '%')
+            LIMIT 1
+            """
+            dup_params = {"final_title": candidate_title, "final_text": candidate_text, "candidate_image": candidate_image or ""}
+        else:
+            dup_query = """
+            SELECT id FROM ai_news
+            WHERE LOWER(TRIM(final_title)) = LOWER(TRIM(:final_title))
+               OR LOWER(SUBSTR(final_text,1,200)) = LOWER(SUBSTR(:final_text,1,200))
+               OR (image_urls IS NOT NULL AND image_urls::text ILIKE '%' || :candidate_image || '%')
+            LIMIT 1
+            """
+            dup_params = {"final_title": candidate_title, "final_text": candidate_text, "candidate_image": candidate_image or ""}
+
+        try:
+            dup_result = await session.execute(text(dup_query), dup_params)
+            dup_id = dup_result.scalar_one_or_none()
+            if dup_id is not None:
+                # Duplicate detected; return existing id instead of inserting a new row
+                return int(dup_id)
+        except Exception:
+            # If duplicate check fails, continue with insert; don't block ingestion
+            pass
+
     existing_query = """
     SELECT id
     FROM ai_news
@@ -576,19 +614,34 @@ async def _schedule_ingestion_batch_async() -> dict[str, Any]:
 
 async def _cleanup_ai_products_async() -> dict[str, Any]:
     async with SessionLocal() as session:
-        query = """
+        # Delete generated AI products older than configured retention
+        ai_query = """
         DELETE FROM ai_news
         WHERE created_at < NOW() - make_interval(days => :retention_days)
         """
-        result = await session.execute(
-            text(query),
+        result_ai = await session.execute(
+            text(ai_query),
             {"retention_days": settings.AI_PRODUCT_RETENTION_DAYS},
         )
+
+        # Delete raw_news older than configured raw retention (this will cascade to ai_news if FK set)
+        raw_query = """
+        DELETE FROM raw_news
+        WHERE created_at < NOW() - make_interval(days => :raw_retention_days)
+        """
+        result_raw = await session.execute(
+            text(raw_query),
+            {"raw_retention_days": settings.RAW_NEWS_RETENTION_DAYS},
+        )
+
         await session.commit()
-        deleted = int(result.rowcount or 0)
+        deleted_ai = int(result_ai.rowcount or 0)
+        deleted_raw = int(result_raw.rowcount or 0)
         return {
-            "deleted_ai_news": deleted,
-            "retention_days": settings.AI_PRODUCT_RETENTION_DAYS,
+            "deleted_ai_news": deleted_ai,
+            "deleted_raw_news": deleted_raw,
+            "ai_retention_days": settings.AI_PRODUCT_RETENTION_DAYS,
+            "raw_retention_days": settings.RAW_NEWS_RETENTION_DAYS,
         }
 
 

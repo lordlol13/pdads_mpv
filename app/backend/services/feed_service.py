@@ -1,5 +1,6 @@
 import json
 import re
+from hashlib import sha256
 from typing import Any
 
 from sqlalchemy import text
@@ -7,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.backend.db.sql_helpers import sql_timestamp_now
 from app.backend.services.recommender_service import rank_feed_rows, refresh_user_embedding, ensure_user_embedding
+from app.backend.services.media_service import canonical_image_key
 
 
 _SOCIAL_TABLES_READY_DIALECTS: set[str] = set()
@@ -72,27 +74,79 @@ def _normalize_title_key(value: str | None) -> str:
     return re.sub(r"\s+", " ", title)
 
 
+def _normalize_text_key(value: str | None) -> str:
+    if not value:
+        return ""
+    raw = str(value or "")
+    # lower, remove punctuation, collapse whitespace
+    cleaned = re.sub(r"[^\w\s]", "", raw.lower())
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned[:1000]
+
+
 def _dedupe_feed_rows(rows: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
     if not rows:
         return []
 
-    by_key: dict[str, dict[str, Any]] = {}
+    kept_rows: list[dict[str, Any]] = []
+    sig_to_idx: dict[str, int] = {}
+    idx_to_sigs: dict[int, set[str]] = {}
 
-    for row in rows:
+    def _make_signatures(row: dict[str, Any]) -> list[str]:
+        sigs: list[str] = []
         raw_news_id = int(row.get("raw_news_id") or 0)
         if raw_news_id > 0:
-            dedupe_key = f"raw:{raw_news_id}"
-        else:
-            title_key = _normalize_title_key(row.get("final_title"))
-            if not title_key:
-                dedupe_key = f"ai:{int(row.get('ai_news_id') or 0)}"
-            else:
-                dedupe_key = f"title:{title_key}"
+            sigs.append(f"raw:{raw_news_id}")
 
-        existing = by_key.get(dedupe_key)
-        if existing is None:
-            by_key[dedupe_key] = row
+        title_key = _normalize_title_key(row.get("final_title"))
+        if title_key:
+            sigs.append(f"title:{title_key}")
+
+        text_norm = _normalize_text_key(row.get("final_text"))
+        if text_norm:
+            text_hash = sha256(text_norm[:500].encode("utf-8")).hexdigest()[:16]
+            sigs.append(f"text:{text_hash}")
+
+        image_urls = row.get("image_urls")
+        first_image = None
+        if isinstance(image_urls, list) and image_urls:
+            first_image = image_urls[0]
+        elif isinstance(image_urls, str) and image_urls.strip():
+            try:
+                parsed = json.loads(image_urls)
+                if isinstance(parsed, list) and parsed:
+                    first_image = parsed[0]
+                else:
+                    first_image = image_urls.strip()
+            except Exception:
+                first_image = image_urls.strip()
+
+        if first_image:
+            img_key = canonical_image_key(first_image)
+            if img_key:
+                sigs.append(f"img:{img_key}")
+
+        # Fallback to ai_news id
+        ai_news_id = int(row.get("ai_news_id") or 0)
+        if not sigs:
+            sigs.append(f"ai:{ai_news_id}")
+        return sigs
+
+    for row in rows:
+        sigs = _make_signatures(row)
+        collisions = {sig_to_idx[s] for s in sigs if s in sig_to_idx}
+
+        if not collisions:
+            idx = len(kept_rows)
+            kept_rows.append(row)
+            idx_to_sigs[idx] = set(sigs)
+            for s in sigs:
+                sig_to_idx[s] = idx
             continue
+
+        # For simplicity, compare to the first colliding kept row.
+        existing_idx = next(iter(collisions))
+        existing = kept_rows[existing_idx]
 
         current_rank = float(row.get("rank_score") or 0.0)
         existing_rank = float(existing.get("rank_score") or 0.0)
@@ -120,9 +174,18 @@ def _dedupe_feed_rows(rows: list[dict[str, Any]], limit: int) -> list[dict[str, 
         )
 
         if should_replace:
-            by_key[dedupe_key] = row
+            # remove old signatures
+            for s in idx_to_sigs.get(existing_idx, set()):
+                sig_to_idx.pop(s, None)
 
-    deduped = list(by_key.values())
+            # replace row in place
+            kept_rows[existing_idx] = row
+            idx_to_sigs[existing_idx] = set(sigs)
+            for s in sigs:
+                sig_to_idx[s] = existing_idx
+        # else: skip adding this row (inferior duplicate)
+
+    deduped = list(kept_rows)
     deduped.sort(
         key=lambda item: (
             bool(item.get("saved")),
@@ -356,7 +419,6 @@ async def _log_feed_impressions(session: AsyncSession, *, user_id: int, rows: li
         ai_news_id = int(row.get("ai_news_id") or 0)
         if ai_news_id <= 0:
             continue
-
         await session.execute(
             text(
                 f"""
@@ -372,6 +434,30 @@ async def _log_feed_impressions(session: AsyncSession, *, user_id: int, rows: li
                 "rank_position": index,
             },
         )
+
+        # Record an impression as a 'viewed' interaction so the same item is not re-served to the user
+        try:
+            await session.execute(
+                text(
+                    f"""
+                    INSERT INTO interactions (user_id, ai_news_id, liked, viewed, watch_time, created_at)
+                    SELECT :user_id, :ai_news_id, NULL, TRUE, NULL, {now_sql}
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM interactions i
+                        WHERE i.user_id = :user_id
+                          AND i.ai_news_id = :ai_news_id
+                          AND COALESCE(i.viewed, FALSE) = TRUE
+                    )
+                    """
+                ),
+                {
+                    "user_id": user_id,
+                    "ai_news_id": ai_news_id,
+                },
+            )
+        except Exception:
+            # Silently ignore impression->interaction failures to avoid breaking feed serving
+            pass
 
     await session.commit()
 

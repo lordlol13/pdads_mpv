@@ -46,8 +46,8 @@ LOW_QUALITY_IMAGE_TERMS = (
     "sprite",
 )
 
-MIN_PUBLIC_IMAGE_WIDTH = 800
-MIN_PUBLIC_IMAGE_HEIGHT = 450
+MIN_PUBLIC_IMAGE_WIDTH = 1024
+MIN_PUBLIC_IMAGE_HEIGHT = 576
 MIN_PUBLIC_IMAGE_AREA = MIN_PUBLIC_IMAGE_WIDTH * MIN_PUBLIC_IMAGE_HEIGHT
 
 NEWS_IMAGE_BLOCKLIST_TERMS = (
@@ -525,11 +525,13 @@ def _rank_image_urls(
         if source_domain and source_domain in parsed.netloc.lower():
             score += 60.0
         if _looks_like_news_photo(url):
-            score += 25.0
+            score += 30.0
 
         width_hint, height_hint = _extract_dimension_hints(url)
         if width_hint is not None:
-            if width_hint >= 1280:
+            if width_hint >= 1600:
+                score += 18.0
+            elif width_hint >= 1280:
                 score += 14.0
             elif width_hint >= 1024:
                 score += 10.0
@@ -538,7 +540,9 @@ def _rank_image_urls(
             elif width_hint >= 720:
                 score += 2.0
         if height_hint is not None:
-            if height_hint >= 720:
+            if height_hint >= 900:
+                score += 8.0
+            elif height_hint >= 720:
                 score += 6.0
             elif height_hint >= 480:
                 score += 3.0
