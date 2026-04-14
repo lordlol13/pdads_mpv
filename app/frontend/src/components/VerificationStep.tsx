@@ -9,7 +9,7 @@ interface VerificationStepProps {
   email: string;
   verificationId: string;
   onVerify: (code: string) => Promise<void> | void;
-  onResend?: () => Promise<void> | void;
+  onResend?: () => Promise<{ sent: boolean; debug_code?: string | null } | void> | void;
   onBack?: () => void;
   direction?: number;
   isLoading?: boolean;
@@ -94,10 +94,18 @@ export function VerificationStep({
     setResendInfo(null);
     setResending(true);
     try {
-      await onResend();
+      const result = await onResend();
       setCode(Array(6).fill(""));
       inputs.current[0]?.focus();
-      setResendInfo("Code sent. Check your email.");
+      if (result && typeof result === "object" && "sent" in result && result.sent === false) {
+        const debugCode =
+          "debug_code" in result && typeof result.debug_code === "string" && result.debug_code.trim()
+            ? ` Debug code: ${result.debug_code}`
+            : "";
+        setResendInfo(`Email delivery failed.${debugCode}`);
+      } else {
+        setResendInfo("Code sent. Check your email.");
+      }
     } catch (err) {
       setResendInfo(err instanceof Error ? err.message : "Unable to resend code.");
     } finally {

@@ -286,7 +286,7 @@ function AppContent() {
       throw new Error("Verification session not found.");
     }
 
-    await authService.resendCode({ verification_id: verificationId });
+    return await authService.resendCode({ verification_id: verificationId });
   };
 
   const handleCompleteProfile = async () => {

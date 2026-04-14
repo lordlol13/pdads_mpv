@@ -205,6 +205,7 @@ async def general_exception_handler(request: Request, exc: Exception):
     
     logger.exception(
         "Unhandled exception",
+        correlation_id=correlation_id,
         exception_type=exc.__class__.__name__,
     )
     
