@@ -12,6 +12,7 @@ Provides REST API for:
 from pathlib import Path
 from logging import getLogger
 import time
+import os
 
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -132,18 +133,25 @@ async def add_correlation_id_and_logging(request: Request, call_next):
 
 
 
-# CORS configuration
-cors_origins = settings.cors_allow_origins
-allow_credentials = "*" not in cors_origins
+# CORS configuration — prefer explicit origins from env to avoid '*' with credentials.
+# Read comma-separated origins from `CORS_ALLOW_ORIGINS` env var when provided,
+# otherwise fall back to production frontend origins.
+origins = os.getenv("CORS_ALLOW_ORIGINS", "")
+
+if origins:
+    origins_list = [o.strip() for o in origins.split(",")]
+else:
+    origins_list = [
+        "https://pdads-mpv.vercel.app",
+        "https://pdads-9k54z5t3c-lordlol13s-projects.vercel.app",
+    ]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=cors_origins,
-    allow_origin_regex=settings.CORS_ALLOW_ORIGIN_REGEX or None,
-    allow_credentials=allow_credentials,
+    allow_origins=origins_list,
+    allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["*", "X-Correlation-ID"],
-    max_age=86400,  # 1 day
+    allow_headers=["*"],
 )
 
 app.add_middleware(
