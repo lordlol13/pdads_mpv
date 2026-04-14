@@ -194,7 +194,18 @@ async def app_exception_handler(request: Request, exc: AppException):
         status=exc.status_code,
     )
     
-    return JSONResponse(status_code=exc.status_code, content=detail)
+    response = JSONResponse(status_code=exc.status_code, content=detail)
+    # Ensure CORS headers on error responses so browsers see consistent headers
+    origin = request.headers.get("origin")
+    if origin and origin in origins_list:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+    else:
+        # Fallback to first allowed origin to avoid using '*'
+        if origins_list:
+            response.headers["Access-Control-Allow-Origin"] = origins_list[0]
+            response.headers["Access-Control-Allow-Credentials"] = "true"
+    return response
 
 
 @app.exception_handler(Exception)
@@ -224,10 +235,20 @@ async def general_exception_handler(request: Request, exc: Exception):
         correlation_id=correlation_id,
     )
     
-    return JSONResponse(
+    response = JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content=detail,
     )
+    # Add CORS headers to ensure browser receives them on internal errors
+    origin = request.headers.get("origin")
+    if origin and origin in origins_list:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+    else:
+        if origins_list:
+            response.headers["Access-Control-Allow-Origin"] = origins_list[0]
+            response.headers["Access-Control-Allow-Credentials"] = "true"
+    return response
 
 # =====================================================================
 # Request Metrics Tracking
