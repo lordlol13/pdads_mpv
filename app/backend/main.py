@@ -55,6 +55,11 @@ app = FastAPI(
 # =====================================================================
 # Middleware Stack
 # =====================================================================
+# NOTE: Starlette processes add_middleware() calls in LIFO order — the last
+# middleware added becomes the outermost layer and therefore runs first on
+# every incoming request.  CORS *must* be outermost so that preflight OPTIONS
+# requests are answered before any other middleware (e.g. auth, session) can
+# reject them.  Therefore CORSMiddleware is added LAST below.
 
 # Respect X-Forwarded-* headers from Railway/Proxy so OAuth redirect_uri uses https://.
 # Some Starlette versions may not ship ProxyHeadersMiddleware; uvicorn --proxy-headers
@@ -66,12 +71,26 @@ try:
 except Exception:
     logger.warning("ProxyHeadersMiddleware unavailable; rely on uvicorn --proxy-headers instead")
 
-# Add request correlation ID
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=settings.SESSION_SECRET_KEY,
+    same_site="lax",
+    https_only=not settings.DEBUG,
+)
+
+# Trusted hosts (security)
+if not settings.DEBUG:
+    app.add_middleware(
+        TrustedHostMiddleware,
+        allowed_hosts=settings.trusted_hosts,
+    )
+
+# Add request correlation ID and structured logging
 @app.middleware("http")
 async def add_correlation_id_and_logging(request: Request, call_next):
     """
     Add correlation ID to all requests and set up request/response logging.
-    
+
     Propagates correlation ID through:
     - request.state for local access
     - X-Correlation-ID header in response
@@ -79,7 +98,7 @@ async def add_correlation_id_and_logging(request: Request, call_next):
     """
     correlation_id = request.headers.get("X-Correlation-ID") or str(uuid.uuid4())
     request.state.correlation_id = correlation_id
-    
+
     # Set correlation ID in logger context
     logger.set_correlation_id(correlation_id)
     logger.set_context(
@@ -87,28 +106,27 @@ async def add_correlation_id_and_logging(request: Request, call_next):
         path=request.url.path,
         client_host=request.client.host if request.client else None,
     )
-    
+
     start_time = time.time()
-    
+
     try:
         response = await call_next(request)
     except Exception as exc:
         # Log unhandled exceptions before they're caught by exception handlers
         duration = (time.time() - start_time) * 1000  # ms
         logger.error(
-            f"Request failed with exception",
+            "Request failed with exception",
             duration_ms=duration,
             status=500,
             exception_type=exc.__class__.__name__,
         )
         raise
-    
+
     # Calculate response time
     duration_ms = (time.time() - start_time) * 1000
-    
+
     # Log request/response
     if response.status_code >= 500:
-        log_level = "error"
         logger.error(
             f"{request.method} {request.url.path}",
             status=response.status_code,
@@ -125,14 +143,16 @@ async def add_correlation_id_and_logging(request: Request, call_next):
             f"{request.method} {request.url.path} - {response.status_code}",
             duration_ms=f"{duration_ms:.2f}",
         )
-    
+
     response.headers["X-Correlation-ID"] = correlation_id
     response.headers["X-Response-Time"] = f"{duration_ms:.2f}ms"
     return response
 
 
-
-# CORS configuration
+# CORS configuration — added LAST so it becomes the outermost middleware layer
+# and intercepts every request (including OPTIONS preflight) before anything else.
+# allow_credentials must be False when the wildcard origin "*" is used; it can
+# be True only when explicit origins are listed (required for cookie-based auth).
 cors_origins = settings.cors_allow_origins
 allow_credentials = "*" not in cors_origins
 
@@ -145,20 +165,6 @@ app.add_middleware(
     allow_headers=["*", "X-Correlation-ID"],
     max_age=86400,  # 1 day
 )
-
-app.add_middleware(
-    SessionMiddleware,
-    secret_key=settings.SESSION_SECRET_KEY,
-    same_site="lax",
-    https_only=not settings.DEBUG,
-)
-
-# Trusted hosts (security)
-if not settings.DEBUG:
-    app.add_middleware(
-        TrustedHostMiddleware,
-        allowed_hosts=settings.trusted_hosts,
-    )
 
 # =====================================================================
 # Exception Handlers
@@ -288,6 +294,17 @@ async def startup():
         extra={
             "environment": settings.APP_ENV,
             "debug": settings.DEBUG,
+        },
+    )
+    # Log CORS configuration so it is visible in Railway deploy logs for debugging.
+    _cors_origins = settings.cors_allow_origins
+    _allow_creds = "*" not in _cors_origins
+    logger.info(
+        "CORS configuration",
+        extra={
+            "allow_origins": _cors_origins,
+            "allow_credentials": _allow_creds,
+            "allow_origin_regex": settings.CORS_ALLOW_ORIGIN_REGEX or None,
         },
     )
 
