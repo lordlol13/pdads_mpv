@@ -50,7 +50,8 @@ class Settings(BaseSettings):
     AUTH_DEBUG_RETURN_CODE: bool = True
 
     SMTP_HOST: str = ""
-    SMTP_PORT: int = 587
+    # Railway UI sometimes sets empty string for "cleared" variables; tolerate it.
+    SMTP_PORT: int | str = 587
     SMTP_USERNAME: str = ""
     SMTP_PASSWORD: str = ""
     SMTP_FROM_EMAIL: str = "noreply@pdads.local"
@@ -154,6 +155,16 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def _normalize_runtime_urls(self) -> "Settings":
         self.DATABASE_URL = self._normalize_database_url(self.DATABASE_URL)
+        return self
+
+    @model_validator(mode="after")
+    def _coerce_ports(self) -> "Settings":
+        if isinstance(self.SMTP_PORT, str):
+            raw = self.SMTP_PORT.strip()
+            if not raw:
+                self.SMTP_PORT = 587
+            else:
+                self.SMTP_PORT = int(raw)
         return self
 
     @model_validator(mode="after")
