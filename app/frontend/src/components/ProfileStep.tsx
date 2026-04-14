@@ -117,7 +117,7 @@ export function ProfileStep({ formData, updateFormData, onSubmitProfile, onBack,
       className="space-y-8 relative"
     >
       <div className="space-y-2">
-        <h2 className="text-3xl font-bold tracking-tight">{t.profile}</h2>
+        <h2 className="text-xl md:text-3xl font-bold tracking-tight">{t.profile}</h2>
         <p className="text-zinc-500">{t.alreadyHaveAccount}</p>
       </div>
 

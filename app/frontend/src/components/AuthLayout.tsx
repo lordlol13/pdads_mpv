@@ -104,7 +104,7 @@ export function AuthLayout({ children, showLeftPanel, isRegistering, onToggleMod
             layout: { duration: 0.8, ease: [0.4, 0, 0.2, 1] },
             opacity: { duration: 0.4 }
           }}
-          className={`flex-1 flex flex-col p-8 lg:p-16 bg-white/5 relative z-10 ${!showLeftPanel ? 'w-full' : ''}`}
+          className={`flex-1 flex flex-col p-4 md:p-8 lg:p-16 bg-white/5 relative z-10 ${!showLeftPanel ? 'w-full' : ''}`}
         >
           <div className="w-full max-w-xl mx-auto flex flex-col h-full">
             {/* Content Area */}

@@ -1038,23 +1038,37 @@ def _build_editorial_system_prompt(*, language_hint: str, min_words: int, max_wo
     else:
         language_rule = "Write in the natural language of the source text."
 
+    # Prefer richer article length by default: 250-500 words.
+    effective_min = max(int(min_words or 0), 250)
     if max_words > 0:
-        length_rule = f"Length: {min_words}-{max_words} words."
+        effective_max = max(int(max_words or 0), effective_min)
     else:
-        length_rule = f"Length: at least {min_words} words."
+        effective_max = 500
+    length_rule = f"Length: {effective_min}-{effective_max} words."
 
+    # New, stricter journalist prompt: produce publication-quality article body while
+    # returning ONLY a single JSON object. The `final_text` should be a natural
+    # multi-paragraph article following the exact editorial structure below.
     return (
-        "You are a senior newsroom editor and feature journalist. "
-        "Return ONLY strict JSON with keys: final_title, final_text, ai_score, category, target_persona. "
+        "You are a professional journalist and analytical news writer. "
+        "Return ONLY a single JSON object (no extra text) with keys: final_title, final_text, ai_score, category, target_persona. "
         f"{length_rule} "
         f"{language_rule} "
-        "Write in a vivid, publication-quality style: clear lead, narrative flow, and precise facts. "
-        "No markdown, no bullet lists, no template labels like Lid/Headline/Novost/Yangilik. "
-        "Personalization rule: explicitly connect the story to the user's favorite team/topic/persona. "
-        "If their side loses or context is negative, show concise empathy first, then give objective analysis. "
-        "If positive, provide brief congratulations and context. "
-        "Always include 2-4 concrete facts that matter to the user (players, stats, timeline, next match/event). "
-        "Do not invent facts; if a detail is uncertain, say it is not confirmed."
+        "STYLE: Write in an engaging, professional journalistic style — informative, slightly emotional but objective. "
+        "Use storytelling elements and smooth transitions. Avoid bullet lists, numbered sections, markdown, or template labels. "
+        "STRUCTURE (the `final_text` field must follow these natural paragraphs in order): "
+        "Intro: a 2–3 sentence hook that summarizes the news and emotional/contextual angle; "
+        "Main story: detailed explanation of what happened and why, with clear chronology and causes; "
+        "Key figures & stats: a paragraph with 2–4 concrete numbers or stats integrated into prose; "
+        "Comparison: one paragraph comparing relevant actors/teams/alternatives; "
+        "Extra insights: one paragraph with context, trends, or historical perspective; "
+        "Impact on the reader's interest: one paragraph explaining what this means specifically for the target persona; "
+        "Conclusion: one short forward-looking sentence about what may happen next. "
+        "PERSONALIZATION: adapt the narrative to the `target_persona` provided; mention user-relevant impacts naturally in the text. "
+        "FACTS: do not invent facts. If a detail is unconfirmed, explicitly say it is unconfirmed. "
+        "OUTPUT RULES: `final_title` — a concise, punchy headline (do not repeat the headline verbatim as the first line of `final_text`); "
+        "`final_text` — the article body following the STRUCTURE above and the length constraints; "
+        "`ai_score` — numeric estimate 0..10 of quality/confidence; `category` and `target_persona` — strings."
     )
 
 
@@ -1101,16 +1115,25 @@ def _build_editorial_user_payload(
 
 
 def _build_openai_client() -> tuple[AsyncOpenAI | None, str | None]:
-    if settings.OPENAI_API_KEY:
-        model_name = _normalize_openai_model_name(settings.OPENAI_MODEL)
-        if model_name != settings.OPENAI_MODEL:
-            logger.info("Normalized OPENAI_MODEL from '%s' to '%s'", settings.OPENAI_MODEL, model_name)
-        return (
-            AsyncOpenAI(api_key=settings.OPENAI_API_KEY),
-            model_name,
-        )
+    if not settings.OPENAI_API_KEY:
+        return None, None
 
-    return None, None
+    # Determine requested model. If an explicit `OPENAI_MODEL` is provided via
+    # env, use it. If none is set, allow switching to a heavier default only
+    # when `LLM_ENABLE_HEAVY_MODEL` is true (guard against accidental heavy
+    # model usage in production). Default safe model is gpt-4.1-mini.
+    requested_model = (settings.OPENAI_MODEL or "").strip()
+    if not requested_model:
+        if getattr(settings, "LLM_ENABLE_HEAVY_MODEL", False):
+            requested_model = getattr(settings, "OPENAI_MODEL_DEFAULT_HEAVY", "gpt-4o-mini")
+        else:
+            requested_model = "gpt-4.1-mini"
+
+    model_name = _normalize_openai_model_name(requested_model)
+    if model_name != requested_model:
+        logger.info("Normalized OPENAI_MODEL from '%s' to '%s'", requested_model, model_name)
+
+    return AsyncOpenAI(api_key=settings.OPENAI_API_KEY), model_name
 
 
 def _gemini_generation_available() -> bool:
@@ -1226,7 +1249,11 @@ async def _generate_with_gemini(
 
             configure_fn(api_key=settings.GEMINI_API_KEY)
             gemini_model = model_cls(settings.GEMINI_MODEL)
-            language_hint = _detect_language_hint(title, raw_text, target_persona, user_geo, region)
+            forced_lang = (getattr(settings, "EDITORIAL_FORCE_LANGUAGE", "") or "").strip().lower()
+            if forced_lang:
+                language_hint = forced_lang
+            else:
+                language_hint = _detect_language_hint(title, raw_text, target_persona, user_geo, region)
             system_prompt = _build_editorial_system_prompt(
                 language_hint=language_hint,
                 min_words=int(settings.PIPELINE_TEXT_MIN_WORDS or 170),
@@ -1404,13 +1431,18 @@ async def _generate_with_openai(
         logger.debug("OpenAI cache hit")
         return cached
 
-    async def _call_openai():
-        language_hint = _detect_language_hint(title, raw_text, target_persona, user_geo, region)
-        system_prompt = _build_editorial_system_prompt(
-            language_hint=language_hint,
-            min_words=int(settings.PIPELINE_TEXT_MIN_WORDS or 170),
-            max_words=int(settings.PIPELINE_TEXT_MAX_WORDS or 0),
-        )
+        async def _call_openai():
+            forced_lang = (getattr(settings, "EDITORIAL_FORCE_LANGUAGE", "") or "").strip().lower()
+            if forced_lang:
+                language_hint = forced_lang
+            else:
+                language_hint = _detect_language_hint(title, raw_text, target_persona, user_geo, region)
+
+            system_prompt = _build_editorial_system_prompt(
+                language_hint=language_hint,
+                min_words=int(settings.PIPELINE_TEXT_MIN_WORDS or 170),
+                max_words=int(settings.PIPELINE_TEXT_MAX_WORDS or 0),
+            )
         payload = _build_editorial_user_payload(
             title=title,
             raw_text=raw_text,
@@ -1498,13 +1530,18 @@ async def _generate_with_deepseek(
         logger.debug("DeepSeek cache hit")
         return cached
 
-    async def _call_deepseek():
-        language_hint = _detect_language_hint(title, raw_text, target_persona, user_geo, region)
-        prompt = _build_editorial_system_prompt(
-            language_hint=language_hint,
-            min_words=int(settings.PIPELINE_TEXT_MIN_WORDS or 170),
-            max_words=int(settings.PIPELINE_TEXT_MAX_WORDS or 0),
-        )
+        async def _call_deepseek():
+            forced_lang = (getattr(settings, "EDITORIAL_FORCE_LANGUAGE", "") or "").strip().lower()
+            if forced_lang:
+                language_hint = forced_lang
+            else:
+                language_hint = _detect_language_hint(title, raw_text, target_persona, user_geo, region)
+
+            prompt = _build_editorial_system_prompt(
+                language_hint=language_hint,
+                min_words=int(settings.PIPELINE_TEXT_MIN_WORDS or 170),
+                max_words=int(settings.PIPELINE_TEXT_MAX_WORDS or 0),
+            )
         payload = _build_editorial_user_payload(
             title=title,
             raw_text=raw_text,

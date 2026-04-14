@@ -435,7 +435,7 @@ export function BackendFeedPost({
         {hasVideo && !isPlaying ? (
           <div className="absolute inset-0 flex items-center justify-center bg-black/20">
             <motion.div initial={{ scale: 0.5, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}>
-              <Play className="w-20 h-20 text-white fill-white opacity-80" />
+              <Play className="w-16 h-16 md:w-20 md:h-20 text-white fill-white opacity-80" />
             </motion.div>
           </div>
         ) : null}
@@ -448,13 +448,13 @@ export function BackendFeedPost({
               exit={{ opacity: 0 }}
               className="absolute inset-0 flex items-center justify-center pointer-events-none z-50"
             >
-              <Heart className="w-32 h-32 text-red-500 fill-red-500 shadow-2xl" />
+              <Heart className="w-20 h-20 md:w-32 md:h-32 text-red-500 fill-red-500 shadow-2xl" />
             </motion.div>
           ) : null}
         </AnimatePresence>
       </div>
 
-      <div className="absolute right-2 sm:right-4 bottom-32 flex flex-col gap-4 sm:gap-6 z-40">
+      <div className="absolute right-2 sm:right-4 bottom-20 md:bottom-32 flex flex-col gap-4 sm:gap-6 z-40">
         <div className="flex flex-col items-center gap-1">
           <button
             onClick={(event) => {
@@ -505,7 +505,7 @@ export function BackendFeedPost({
         </div>
       </div>
 
-      <div className="absolute bottom-0 left-0 w-full p-6 bg-gradient-to-t from-black/80 via-black/40 to-transparent z-30">
+      <div className="absolute bottom-0 left-0 w-full p-4 md:p-6 bg-gradient-to-t from-black/80 via-black/40 to-transparent z-30">
         <div className="max-w-[80%] space-y-3">
           <h3 className="font-bold text-lg text-white">{author}</h3>
           {personaMeta.toc.length > 0 ? (
@@ -547,7 +547,7 @@ export function BackendFeedPost({
               animate={{ y: 0 }}
               exit={{ y: '100%' }}
               transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-              className="absolute bottom-0 left-0 w-full bg-zinc-950 rounded-t-[32px] p-8 z-[70] border-t border-white/5"
+              className="absolute bottom-0 left-0 w-full bg-zinc-950 rounded-t-[24px] md:rounded-t-[32px] p-4 md:p-8 z-[70] border-t border-white/5"
             >
               <div className="w-12 h-1.5 bg-zinc-700 rounded-full mx-auto mb-8" />
               <div className="space-y-6">
@@ -571,7 +571,7 @@ export function BackendFeedPost({
                   </div>
                 ) : null}
                 <div className="prose prose-invert max-w-none">
-                  <p className="text-zinc-300 leading-relaxed text-lg whitespace-pre-wrap">
+                  <p className="text-zinc-300 leading-relaxed text-base md:text-lg whitespace-pre-wrap">
                     {previewText || t.noComments}
                   </p>
                 </div>
@@ -602,7 +602,7 @@ export function BackendFeedPost({
               animate={{ y: 0 }}
               exit={{ y: '100%' }}
               transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-              className="absolute bottom-0 left-0 w-full h-[70vh] bg-zinc-950 rounded-t-[32px] flex flex-col z-[90] border-t border-white/5"
+              className="absolute bottom-0 left-0 w-full h-[60vh] md:h-[70vh] bg-zinc-950 rounded-t-[24px] md:rounded-t-[32px] flex flex-col z-[90] border-t border-white/5"
             >
               <div className="p-4 border-b border-white/5 flex flex-col items-center">
                 <div className="w-12 h-1.5 bg-zinc-700 rounded-full mb-4" />
@@ -627,7 +627,7 @@ export function BackendFeedPost({
                 ))}
               </div>
 
-              <div className="p-6 border-t border-white/5 bg-black/40 backdrop-blur-xl">
+              <div className="p-4 md:p-6 border-t border-white/5 bg-black/40 backdrop-blur-xl">
                 <div className="flex items-center gap-3 bg-zinc-900 rounded-2xl px-4 py-2">
                   <input
                     type="text"
@@ -664,7 +664,7 @@ export function BackendFeedPost({
               animate={{ y: 0 }}
               exit={{ y: '100%' }}
               transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-              className="absolute bottom-0 left-0 w-full bg-zinc-950 rounded-t-[32px] p-8 z-[110] border-t border-white/5"
+              className="absolute bottom-0 left-0 w-full bg-zinc-950 rounded-t-[24px] md:rounded-t-[32px] p-4 md:p-8 z-[110] border-t border-white/5"
             >
               <div className="w-12 h-1.5 bg-zinc-700 rounded-full mx-auto mb-8" />
               <div className="space-y-6">

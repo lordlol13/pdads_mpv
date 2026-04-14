@@ -42,7 +42,7 @@ export function LoginForm({
       <form className="space-y-8" onSubmit={handleSubmit}>
         <div className="space-y-2">
           {/* branding removed from inside the form; kept only on AuthLayout left panel */}
-          <h2 className="text-3xl font-bold tracking-tight">{t.login}</h2>
+          <h2 className="text-xl md:text-3xl font-bold tracking-tight">{t.login}</h2>
           <p className="text-zinc-500">{t.alreadyHaveAccount}</p>
         </div>
 
