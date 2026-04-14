@@ -147,6 +147,9 @@ class Settings(BaseSettings):
             item = (part or "").strip()
             if not item:
                 continue
+            # Normalize common dashboard inputs: remove surrounding quotes.
+            if (item.startswith('"') and item.endswith('"')) or (item.startswith("'") and item.endswith("'")):
+                item = item[1:-1].strip()
             # Normalize common dashboard inputs: remove trailing slashes.
             item = item.rstrip("/")
             values.append(item)
