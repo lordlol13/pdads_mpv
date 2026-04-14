@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.backend.api.dependencies import get_current_user, get_db_session
@@ -21,6 +21,10 @@ from app.backend.services.feed_service import (
     toggle_saved_news,
 )
 
+from app.backend.core.logging import ContextLogger
+
+logger = ContextLogger(__name__)
+
 router = APIRouter(prefix="/feed", tags=["feed"])
 
 
@@ -30,13 +34,19 @@ def _current_user_id(current_user: dict) -> int:
 
 @router.get("/me", response_model=list[FeedItem])
 async def my_feed(
+    request: Request,
     limit: int = Query(default=50, ge=1, le=200),
     current_user: dict = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ):
-    user_id = _current_user_id(current_user)
-    items = await get_user_feed(session, user_id, limit)
-    return [FeedItem(**item) for item in items]
+    try:
+        user_id = _current_user_id(current_user)
+        items = await get_user_feed(session, user_id, limit)
+        return [FeedItem(**item) for item in items]
+    except Exception as exc:
+        correlation_id = getattr(request.state, "correlation_id", None)
+        logger.exception("GET /api/feed/me crashed", correlation_id=correlation_id, exception_type=exc.__class__.__name__)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error") from exc
 
 
 @router.get("/search", response_model=list[FeedItem])
