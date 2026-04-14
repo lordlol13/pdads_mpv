@@ -302,6 +302,108 @@ async def _backfill_user_feed_if_empty(session: AsyncSession, *, user_id: int, u
     return inserted
 
 
+async def _top_up_user_feed(session: AsyncSession, *, user_id: int, user_topics: list[str], needed: int) -> int:
+    """Insert up to `needed` additional ai_news into `user_feed` for the given user.
+
+    Uses recent `ai_news` rows not yet present in `user_feed` and matching the
+    user's topics. Returns number of rows inserted.
+    """
+    if needed <= 0:
+        return 0
+
+    # load recent candidates not already in user's feed
+    candidates_result = await session.execute(
+        text(
+            """
+            SELECT id, ai_score, target_persona, raw_news_id
+            FROM ai_news
+            WHERE id NOT IN (SELECT ai_news_id FROM user_feed WHERE user_id = :user_id)
+            ORDER BY created_at DESC, id DESC
+            LIMIT 400
+            """
+        ),
+        {"user_id": user_id},
+    )
+    candidates = [dict(row) for row in candidates_result.mappings().all()]
+    if not candidates:
+        return 0
+
+    selected: list[dict[str, Any]] = []
+    selected_ids: set[int] = set()
+    selected_raw_news_ids: set[int] = set()
+
+    normalized_topics = _normalize_topics(user_topics)
+    if normalized_topics:
+        for row in candidates:
+            ai_news_id = int(row.get("id") or 0)
+            if not ai_news_id or ai_news_id in selected_ids:
+                continue
+
+            raw_news_id = int(row.get("raw_news_id") or 0)
+            if raw_news_id and raw_news_id in selected_raw_news_ids:
+                continue
+
+            persona = str(row.get("target_persona") or "").strip().lower()
+            if not _persona_matches_topics(persona, normalized_topics):
+                continue
+
+            selected_ids.add(ai_news_id)
+            if raw_news_id:
+                selected_raw_news_ids.add(raw_news_id)
+            selected.append({"ai_news_id": ai_news_id, "ai_score": float(row.get("ai_score") or 0.0)})
+            if len(selected) >= needed:
+                break
+
+    if len(selected) < needed:
+        for row in candidates:
+            ai_news_id = int(row.get("id") or 0)
+            if not ai_news_id or ai_news_id in selected_ids:
+                continue
+
+            raw_news_id = int(row.get("raw_news_id") or 0)
+            if raw_news_id and raw_news_id in selected_raw_news_ids:
+                continue
+
+            selected_ids.add(ai_news_id)
+            if raw_news_id:
+                selected_raw_news_ids.add(raw_news_id)
+            selected.append({"ai_news_id": ai_news_id, "ai_score": float(row.get("ai_score") or 0.0)})
+            if len(selected) >= needed:
+                break
+
+    if not selected:
+        return 0
+
+    now_sql = sql_timestamp_now(session)
+    inserted = 0
+    for item in selected[:needed]:
+        result = await session.execute(
+            text(
+                f"""
+                INSERT INTO user_feed (user_id, ai_news_id, ai_score, created_at)
+                SELECT :user_id, :ai_news_id, :ai_score, {now_sql}
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM user_feed uf
+                    WHERE uf.user_id = :user_id
+                      AND uf.ai_news_id = :ai_news_id
+                )
+                """
+            ),
+            {
+                "user_id": user_id,
+                "ai_news_id": item["ai_news_id"],
+                "ai_score": item["ai_score"],
+            },
+        )
+        inserted += int(getattr(result, "rowcount", 0) or 0)
+
+    if inserted > 0:
+        await session.commit()
+
+    return inserted
+
+
 async def _ensure_social_tables(session: AsyncSession) -> None:
     dialect = session.get_bind().dialect.name
     if dialect in _SOCIAL_TABLES_READY_DIALECTS:
@@ -622,6 +724,35 @@ async def get_user_feed(session: AsyncSession, user_id: int, limit: int = 50) ->
         inserted = await _backfill_user_feed_if_empty(session, user_id=user_id, user_topics=user_topics)
         if inserted > 0:
             rows = await _load_rows(True)
+
+    # If the user's feed is running low, try to top-up from existing `ai_news`.
+    try:
+        current_count = len(rows or [])
+        if current_count < int(limit or 50):
+            needed = int(limit or 50) - current_count
+            if needed > 0:
+                try:
+                    added = await _top_up_user_feed(session, user_id=user_id, user_topics=user_topics, needed=needed)
+                    if added > 0:
+                        rows = await _load_rows(True)
+                except Exception:
+                    # don't let top-up failures break feed serving
+                    pass
+
+            # If we still have few items, enqueue scheduled ingestion to generate more items
+            if (len(rows or []) < int(limit or 50)):
+                try:
+                    # import the celery task lazily to avoid import cycles
+                    from brain.tasks.pipeline_tasks import scheduled_ingestion as _scheduled_ingestion_task
+                    # schedule background ingestion to replenish ai_news/user_feed
+                    try:
+                        _scheduled_ingestion_task.delay()
+                    except Exception:
+                        # If delay fails (no celery), ignore
+                        pass
+                except Exception:
+                    # If task import fails, ignore
+                    pass
 
     # Safety fallback: do not return empty feed solely because all items were marked viewed.
     if not rows:
