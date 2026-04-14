@@ -234,7 +234,7 @@ export function BackendMainFeed({ currentUser, onLogout }: BackendMainFeedProps)
             className={`h-full overflow-y-auto p-6 pt-20 space-y-6 ${theme === 'dark' ? 'bg-black' : 'bg-zinc-50'}`}
           >
             <div className="space-y-2">
-              <h2 className="text-3xl font-bold">{t.explore}</h2>
+              <h2 className="text-xl md:text-3xl font-bold">{t.explore}</h2>
               <p className="text-sm text-white/60">{t.searchPlaceholder}</p>
             </div>
             <div className="relative">

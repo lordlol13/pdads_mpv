@@ -23,6 +23,11 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str = ""
     OPENAI_MODEL: str = "gpt-4.1-mini"
     OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-small"
+    # Optional heavy model defaults and safety guard: do NOT enable heavy model in
+    # production unless `LLM_ENABLE_HEAVY_MODEL=true` is explicitly set in env.
+    OPENAI_MODEL_DEFAULT_HEAVY: str = "gpt-4o"
+    LLM_ENABLE_HEAVY_MODEL: bool = False
+    INTERNAL_API_KEY: str = ""
     GROQ_API_KEY: str = ""
     GROQ_MODEL: str = "llama-3.3-70b-versatile"
     DEEPSEEK_API_KEY: str = ""
@@ -87,6 +92,10 @@ class Settings(BaseSettings):
     PIPELINE_TEXT_MIN_WORDS: int = 170
     PIPELINE_TEXT_MAX_WORDS: int = 0
     PIPELINE_TEXT_MAX_CHARS: int = 0
+
+    # Force editorial language for generated articles (set to 'uz', 'ru', or 'en').
+    # Empty string disables forcing and lets the system detect language from source.
+    EDITORIAL_FORCE_LANGUAGE: str = "uz"
 
     EMBEDDING_DIMENSION: int = 256
     RECOMMENDER_USER_HISTORY_LIMIT: int = 20

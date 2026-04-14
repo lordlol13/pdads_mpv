@@ -136,7 +136,7 @@ export function VerificationStep({
       </div>
 
       <div className="space-y-2">
-        <h2 className="text-3xl font-bold tracking-tight">{t.verifyEmail}</h2>
+        <h2 className="text-xl md:text-3xl font-bold tracking-tight">{t.verifyEmail}</h2>
         <p className="text-zinc-500">
           {t.verifyDesc} <span className="font-medium text-zinc-200">{email || "your email"}</span>
         </p>
@@ -154,7 +154,7 @@ export function VerificationStep({
               value={digit}
               onChange={(event) => handleChange(index, event.target.value)}
               onKeyDown={(event) => handleKeyDown(index, event)}
-              className={`h-14 w-12 rounded-xl border-2 bg-zinc-900 text-center text-2xl font-bold transition-all duration-200 focus:outline-none sm:h-16 sm:w-14 ${
+              className={`h-10 w-9 rounded-xl border-2 bg-zinc-900 text-center text-xl font-bold transition-all duration-200 focus:outline-none md:h-14 md:w-12 md:text-2xl sm:h-16 sm:w-14 ${
                 status === "error"
                   ? "border-red-500 text-red-500"
                   : status === "success"

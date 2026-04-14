@@ -753,6 +753,10 @@ async def get_user_feed(session: AsyncSession, user_id: int, limit: int = 50) ->
                 except Exception:
                     # If task import fails, ignore
                     pass
+    except Exception:
+        # If any unexpected error occurred during top-up or scheduling, ignore
+        # to avoid breaking feed serving.
+        pass
 
     # Safety fallback: do not return empty feed solely because all items were marked viewed.
     if not rows:
