@@ -1,6 +1,20 @@
 import { TokenResponse } from '../types';
 
-const API_BASE = (import.meta.env.VITE_API_BASE_URL || '/api').replace(/\/+$/, '');
+// Production hosts — used as fallbacks when VITE_API_BASE_URL is not set in env
+const PROD_FRONTEND_ORIGIN = 'https://pdads-mpv.vercel.app';
+const PROD_API_BASE = 'https://pdadsmpv-production.up.railway.app/api';
+
+const rawEnvBase = import.meta.env.VITE_API_BASE_URL || '';
+const envBase = rawEnvBase ? rawEnvBase.replace(/\/+$, '') : '';
+
+const API_BASE = (() => {
+  if (envBase) return envBase;
+  if (typeof window !== 'undefined' && window.location?.origin === PROD_FRONTEND_ORIGIN) {
+    return PROD_API_BASE;
+  }
+  return '/api';
+})();
+
 const TOKEN_KEY = 'token';
 
 export function buildApiUrl(path: string, params?: RequestOptions['params']): string {
