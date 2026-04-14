@@ -299,6 +299,11 @@ async def startup():
             "debug": settings.DEBUG,
         },
     )
+    logger.info(
+        "CORS configured",
+        cors_allow_origins=settings.cors_allow_origins,
+        cors_allow_origin_regex=settings.CORS_ALLOW_ORIGIN_REGEX or None,
+    )
 
 
 @app.on_event("shutdown")

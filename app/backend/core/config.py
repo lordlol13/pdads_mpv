@@ -142,7 +142,14 @@ class Settings(BaseSettings):
         raw = (self.CORS_ALLOW_ORIGINS or "").strip()
         # Accept comma/semicolon/newline separated values from hosting dashboards.
         parts = re.split(r"[,;\r\n]+", raw)
-        values = [item.strip() for item in parts if item and item.strip()]
+        values: list[str] = []
+        for part in parts:
+            item = (part or "").strip()
+            if not item:
+                continue
+            # Normalize common dashboard inputs: remove trailing slashes.
+            item = item.rstrip("/")
+            values.append(item)
         return values or ["http://127.0.0.1:8000"]
 
     @property
