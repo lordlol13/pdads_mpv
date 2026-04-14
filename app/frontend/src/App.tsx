@@ -124,9 +124,21 @@ function AppContent() {
         email?: string;
         name?: string;
         password?: string;
+        storedAt?: number;
       };
 
       if (!pending.verificationId) {
+        return;
+      }
+
+      // Only auto-continue verification if pending data is recent.
+      // TTL should match server-side AUTH_VERIFICATION_CODE_TTL_MINUTES (default 10).
+      const TTL_MINUTES = 10;
+      const storedAt = pending.storedAt ?? 0;
+      const now = Date.now();
+      if (!storedAt || now - storedAt > TTL_MINUTES * 60_000) {
+        // expired or no timestamp -> clear stale pending and start from beginning
+        localStorage.removeItem(PENDING_VERIFICATION_KEY);
         return;
       }
 
@@ -206,6 +218,7 @@ function AppContent() {
           email,
           name,
           password,
+          storedAt: Date.now(),
         })
       );
       setIsRegistering(true);
