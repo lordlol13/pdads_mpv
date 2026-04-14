@@ -5,7 +5,7 @@ const PROD_FRONTEND_ORIGIN = 'https://pdads-mpv.vercel.app';
 const PROD_API_BASE = 'https://pdadsmpv-production.up.railway.app/api';
 
 const rawEnvBase = import.meta.env.VITE_API_BASE_URL || '';
-const envBase = rawEnvBase ? rawEnvBase.replace(/\/+$, '') : '';
+const envBase = rawEnvBase ? rawEnvBase.replace(/\/+$/, '') : '';
 
 const API_BASE = (() => {
   if (envBase) return envBase;
