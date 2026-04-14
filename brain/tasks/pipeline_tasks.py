@@ -12,7 +12,12 @@ from app.backend.core.celery_app import celery_app
 from app.backend.core.config import settings
 from app.backend.services.ingestion_service import create_raw_news
 from app.backend.services.llm_service import generate_news
-from app.backend.services.media_service import fetch_media_urls, canonical_image_key
+from app.backend.services.media_service import (
+    fetch_media_urls,
+    canonical_image_key,
+    visual_image_key,
+    extract_image_dimensions,
+)
 from app.backend.services.news_api_service import fetch_articles_for_topics
 from app.backend.services.recommender_service import refresh_ai_news_embedding
 from app.backend.db.session import SessionLocal
@@ -100,6 +105,54 @@ def _enforce_cross_post_unique_images(
         local_keys.add(key)
 
     return unique_urls[:limit]
+
+
+def _collapse_quality_variants(urls: list[str], prefer_indices: tuple[int, int] = (2, 3)) -> list[str]:
+    """Collapse multiple URLs that are the same image in different qualities.
+
+    Groups URLs by their visual key (size/quality placeholders). For groups
+    with multiple variants, prefer a variant that appears at one of the
+    `prefer_indices` positions in the original list (0-based), otherwise
+    pick the variant with the largest parsed area (width*height). If no
+    dimensions are available, pick the last variant (highest original index).
+    """
+    if not urls:
+        return []
+
+    groups_order: list[str] = []
+    groups: dict[str, list[dict[str, Any]]] = {}
+
+    for idx, url in enumerate(urls):
+        vkey = visual_image_key(url) or canonical_image_key(url) or str(url)
+        if vkey not in groups:
+            groups[vkey] = []
+            groups_order.append(vkey)
+
+        w, h = extract_image_dimensions(url)
+        area = (w or 0) * (h or 0) if (w and h) else None
+        groups[vkey].append({"idx": idx, "url": url, "w": w, "h": h, "area": area})
+
+    result: list[str] = []
+    for vkey in groups_order:
+        entries = groups[vkey]
+        # Prefer entries that are at preferred indices
+        preferred = [e for e in entries if e["idx"] in prefer_indices]
+        chosen = None
+        if preferred:
+            chosen = max(preferred, key=lambda e: e.get("area") or 0)
+        else:
+            # choose by max area if available
+            entries_with_area = [e for e in entries if e.get("area")]
+            if entries_with_area:
+                chosen = max(entries_with_area, key=lambda e: e.get("area") or 0)
+            else:
+                # fallback: choose last (most likely highest-quality variant)
+                chosen = max(entries, key=lambda e: e.get("idx") or 0)
+
+        if chosen:
+            result.append(chosen["url"])
+
+    return result
 
 
 def _normalize_interests_payload(interests: Any) -> dict[str, Any] | None:
@@ -387,6 +440,13 @@ async def _upsert_ai_news_for_persona(
         limit=4,
         seed_base=f"{raw_row['id']}:{target_persona}",
     )
+    # Collapse multiple quality variants of the same image into a single best-quality URL.
+    # Prefer items that appear at positions 3 or 4 (0-based indices 2 or 3) when present.
+    try:
+        media_urls = _collapse_quality_variants(media_urls, prefer_indices=(2, 3))
+    except Exception:
+        # If quality collapse fails for any reason, fall back to original media_urls
+        pass
 
     video_urls: list[str] = []
     is_sqlite = session.get_bind().dialect.name == "sqlite"

@@ -490,6 +490,26 @@ def canonical_image_key(url: str | None) -> str:
     return _canonical_image_key(value)
 
 
+def visual_image_key(url: str | None) -> str:
+    """Public wrapper to get a visual key for an image URL.
+
+    The visual key normalizes size/quality bits in paths and query
+    parameters so different-quality variants map to the same key.
+    """
+    value = str(url or "").strip()
+    if not value:
+        return ""
+    return _visual_image_key(value)
+
+
+def extract_image_dimensions(url: str | None) -> tuple[int | None, int | None]:
+    """Expose internal dimension extraction to callers.
+
+    Returns (width, height) where either may be None if not parseable.
+    """
+    return _extract_dimension_hints(str(url or "").strip())
+
+
 def _visual_image_key(url: str) -> str:
     parsed = urlparse(str(url or "").strip().lower())
     host = parsed.netloc.removeprefix("www.")
