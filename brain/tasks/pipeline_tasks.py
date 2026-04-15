@@ -345,6 +345,7 @@ async def _upsert_ai_news_for_persona(
     session: AsyncSession,
     raw_row: dict[str, Any],
     persona_context: dict[str, str | None],
+    generated: dict[str, Any] | None = None,
 ) -> int:
     topic = str(persona_context.get("topic") or "general").strip().lower()
     profession = str(persona_context.get("profession") or "").strip().lower() or None
@@ -354,7 +355,9 @@ async def _upsert_ai_news_for_persona(
         persona_context.get("label") or _build_target_persona_label(topic, profession, geo, country_code)
     ).strip().lower()
 
-    generated = await _generate_with_quality_loop(raw_row, topic, profession, geo)
+    # Allow caller to provide a pre-generated payload (to enable concurrent LLM calls).
+    if generated is None:
+        generated = await _generate_with_quality_loop(raw_row, topic, profession, geo)
 
     params = {
         "raw_news_id": raw_row["id"],
@@ -371,9 +374,10 @@ async def _upsert_ai_news_for_persona(
     is_sqlite = session.get_bind().dialect.name == "sqlite"
     candidate_title = str(params.get("final_title") or "").strip()
     candidate_text = str(params.get("final_text") or "").strip()
-    candidate_image = None
-    if isinstance(media_urls, list) and media_urls:
-        candidate_image = str(media_urls[0] or "").strip()
+    # Use the original raw row image as a candidate for duplicate detection.
+    # `media_urls` is computed later; using `raw_row` keeps duplicate check deterministic
+    # and avoids referencing an undefined variable.
+    candidate_image = str(raw_row.get("image_url") or "").strip()
 
     if candidate_title or candidate_text or candidate_image:
         if is_sqlite:
@@ -734,9 +738,22 @@ async def _process_raw_news_async(
                 return {"status": "failed", "reason": "raw_news_not_found", "raw_news_id": raw_news_id}
 
             cohort_personas = personas or await _load_cohort_personas(session)
-            ai_news_ids: list[int] = []
+
+            # Pre-generate content for all personas concurrently to parallelize LLM calls.
+            gen_tasks: list[asyncio.Task] = []
             for persona_context in cohort_personas:
-                ai_news_id = await _upsert_ai_news_for_persona(session, raw_row, persona_context)
+                topic = str(persona_context.get("topic") or "general").strip().lower()
+                profession = str(persona_context.get("profession") or "").strip().lower() or None
+                geo = str(persona_context.get("geo") or "").strip().lower() or None
+                gen_tasks.append(asyncio.create_task(_generate_with_quality_loop(raw_row, topic, profession, geo)))
+
+            generated_results: list[dict[str, Any]] = []
+            if gen_tasks:
+                generated_results = await asyncio.gather(*gen_tasks)
+
+            ai_news_ids: list[int] = []
+            for persona_context, generated in zip(cohort_personas, generated_results):
+                ai_news_id = await _upsert_ai_news_for_persona(session, raw_row, persona_context, generated=generated)
                 ai_news_ids.append(ai_news_id)
                 score_result = await session.execute(
                     text("SELECT ai_score FROM ai_news WHERE id = :id"),

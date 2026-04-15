@@ -173,7 +173,7 @@ async def oauth_callback(
     except HTTPException as exc:
         message = str(exc.detail or "OAuth authentication failed")
         return RedirectResponse(url=build_oauth_error_redirect(message, provider), status_code=302)
-    except Exception as exc:
+    except Exception:
         correlation_id = getattr(request.state, "correlation_id", None)
         logger.exception("OAuth callback crashed", correlation_id=correlation_id, provider=provider)
         message = "OAuth server error"

@@ -126,6 +126,15 @@ class Settings(BaseSettings):
     LLM_FALLBACK_RETURN_CACHED: bool = True
     NEWS_API_FALLBACK_TO_RSS: bool = True
 
+    # Concurrency controls
+    LLM_CONCURRENCY: int = 2
+
+    # Celery tuning (can be overridden via env)
+    CELERY_WORKER_CONCURRENCY: int = 2
+    CELERY_PREFETCH_MULTIPLIER: int = 1
+    CELERY_MAX_TASKS_PER_CHILD: int = 100
+    CELERY_TASK_TIME_LIMIT: int = 300
+
     YOUTUBE_API_KEY: str = ""
     YOUTUBE_REGION_CODE: str = "UZ"
     VIDEO_TEMPLATE_URLS: str = ""

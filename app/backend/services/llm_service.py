@@ -1,7 +1,6 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
 import json
-import logging
 import re
 from typing import TypedDict
 
@@ -20,6 +19,26 @@ from app.backend.services.resilience_service import (
 logger = ContextLogger(__name__)
 _GEMINI_BACKOFF_UNTIL: datetime | None = None
 _GEMINI_DEFAULT_BACKOFF_SECONDS = 180
+
+# Per-event-loop semaphore to limit concurrent external LLM requests
+_LLM_SEMAPHORE: asyncio.Semaphore | None = None
+_LLM_SEMAPHORE_LOOP_ID: int | None = None
+
+def _get_llm_semaphore() -> asyncio.Semaphore | None:
+    """Return an asyncio.Semaphore bound to the current running loop.
+
+    This avoids awaiting a semaphore created on a different loop.
+    """
+    global _LLM_SEMAPHORE, _LLM_SEMAPHORE_LOOP_ID
+    try:
+        loop_id = id(asyncio.get_running_loop())
+    except RuntimeError:
+        return None
+
+    if _LLM_SEMAPHORE is None or _LLM_SEMAPHORE_LOOP_ID != loop_id:
+        _LLM_SEMAPHORE = asyncio.Semaphore(int(settings.LLM_CONCURRENCY or 2))
+        _LLM_SEMAPHORE_LOOP_ID = loop_id
+    return _LLM_SEMAPHORE
 
 ENGLISH_TITLE_STOPWORDS = {
     "the",
@@ -1136,6 +1155,70 @@ def _build_openai_client() -> tuple[AsyncOpenAI | None, str | None]:
     return AsyncOpenAI(api_key=settings.OPENAI_API_KEY), model_name
 
 
+async def _openai_call_core(
+    client: AsyncOpenAI,
+    model_name: str,
+    title: str,
+    raw_text: str,
+    category: str | None,
+    target_persona: str,
+    region: str | None,
+    profession: str | None,
+    user_geo: str | None,
+    rewrite_round: int,
+) -> dict[str, str | float] | None:
+    """Core OpenAI call extracted to module-level to avoid fragile closures."""
+    forced_lang = (getattr(settings, "EDITORIAL_FORCE_LANGUAGE", "") or "").strip().lower()
+    if forced_lang:
+        language_hint = forced_lang
+    else:
+        language_hint = _detect_language_hint(title, raw_text, target_persona, user_geo, region)
+
+    system_prompt = _build_editorial_system_prompt(
+        language_hint=language_hint,
+        min_words=int(settings.PIPELINE_TEXT_MIN_WORDS or 170),
+        max_words=int(settings.PIPELINE_TEXT_MAX_WORDS or 0),
+    )
+
+    payload = _build_editorial_user_payload(
+        title=title,
+        raw_text=raw_text,
+        category=category,
+        target_persona=target_persona,
+        region=region,
+        profession=profession,
+        user_geo=user_geo,
+        rewrite_round=rewrite_round,
+    )
+
+    sem = _get_llm_semaphore()
+    if sem is not None:
+        async with sem:
+            response = await client.chat.completions.create(
+                model=model_name,
+                temperature=0.45,
+                response_format={"type": "json_object"},
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+                ],
+            )
+    else:
+        response = await client.chat.completions.create(
+            model=model_name,
+            temperature=0.45,
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+            ],
+        )
+
+    content = response.choices[0].message.content or "{}"
+    data = json.loads(content)
+    return data if isinstance(data, dict) else None
+
+
 def _gemini_generation_available() -> bool:
     global _GEMINI_BACKOFF_UNTIL
 
@@ -1277,7 +1360,12 @@ async def _generate_with_gemini(
                 ensure_ascii=False,
             )
 
-            response = await asyncio.to_thread(gemini_model.generate_content, prompt)
+            sem = _get_llm_semaphore()
+            if sem is not None:
+                async with sem:
+                    response = await asyncio.to_thread(gemini_model.generate_content, prompt)
+            else:
+                response = await asyncio.to_thread(gemini_model.generate_content, prompt)
             content = _strip_json_code_fence(getattr(response, "text", "") or "{}")
             data = json.loads(content)
             if not isinstance(data, dict):
@@ -1431,49 +1519,21 @@ async def _generate_with_openai(
         logger.debug("OpenAI cache hit")
         return cached
 
-        async def _call_openai():
-            forced_lang = (getattr(settings, "EDITORIAL_FORCE_LANGUAGE", "") or "").strip().lower()
-            if forced_lang:
-                language_hint = forced_lang
-            else:
-                language_hint = _detect_language_hint(title, raw_text, target_persona, user_geo, region)
-
-            system_prompt = _build_editorial_system_prompt(
-                language_hint=language_hint,
-                min_words=int(settings.PIPELINE_TEXT_MIN_WORDS or 170),
-                max_words=int(settings.PIPELINE_TEXT_MAX_WORDS or 0),
-            )
-        payload = _build_editorial_user_payload(
-            title=title,
-            raw_text=raw_text,
-            category=category,
-            target_persona=target_persona,
-            region=region,
-            profession=profession,
-            user_geo=user_geo,
-            rewrite_round=rewrite_round,
-        )
-
-        response = await client.chat.completions.create(
-            model=model_name,
-            temperature=0.45,
-            response_format={"type": "json_object"},
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {
-                    "role": "user",
-                    "content": json.dumps(payload, ensure_ascii=False),
-                },
-            ],
-        )
-
-        content = response.choices[0].message.content or "{}"
-        data = json.loads(content)
-        return data if isinstance(data, dict) else None
-
+    # Use a module-level core function to avoid fragile closures and ensure
+    # the callable passed to retry_async is stable across event-loop boundaries.
     try:
         data = await retry_async(
-            _call_openai,
+            _openai_call_core,
+            client,
+            model_name,
+            title,
+            raw_text,
+            category,
+            target_persona,
+            region,
+            profession,
+            user_geo,
+            rewrite_round,
             max_attempts=settings.API_RETRY_MAX_ATTEMPTS,
             base_delay_seconds=settings.API_RETRY_BASE_DELAY_SECONDS,
             max_delay_seconds=settings.API_RETRY_MAX_DELAY_SECONDS,
@@ -1490,7 +1550,7 @@ async def _generate_with_openai(
         )
         return data
     except Exception as e:
-        logger.error(f"OpenAI generation failed: {e}")
+        logger.exception(f"OpenAI generation failed: {e}")
         return None
 
 
@@ -1528,20 +1588,47 @@ async def _generate_with_deepseek(
     cached = await cache_get("llm:deepseek", *cache_key)
     if cached is not None:
         logger.debug("DeepSeek cache hit")
-        return cached
+        # cached is expected to be the raw payload dict
+        data = cached
+        # Compose into GeneratedNews for compatibility with callers
+        fallback = _compose_generated_news(
+            final_title_raw=title,
+            final_text_raw=(raw_text or "")[:1400],
+            model_score_raw=7.2,
+            category_raw=category or "general",
+            target_persona_raw=target_persona or "general",
+            title=title,
+            raw_text=raw_text,
+            target_persona=target_persona,
+            profession=profession,
+            geo=user_geo or region,
+        )
+        return _compose_generated_news(
+            final_title_raw=str(data.get("final_title") or fallback["final_title"]),
+            final_text_raw=str(data.get("final_text") or fallback["final_text"]),
+            model_score_raw=float(data.get("ai_score") or fallback["ai_score"]),
+            category_raw=str(data.get("category") or fallback["category"]),
+            target_persona_raw=str(data.get("target_persona") or fallback["target_persona"]),
+            title=title,
+            raw_text=raw_text,
+            target_persona=target_persona,
+            profession=profession,
+            geo=user_geo or region,
+        )
 
-        async def _call_deepseek():
-            forced_lang = (getattr(settings, "EDITORIAL_FORCE_LANGUAGE", "") or "").strip().lower()
-            if forced_lang:
-                language_hint = forced_lang
-            else:
-                language_hint = _detect_language_hint(title, raw_text, target_persona, user_geo, region)
+    async def _call_deepseek():
+        forced_lang = (getattr(settings, "EDITORIAL_FORCE_LANGUAGE", "") or "").strip().lower()
+        if forced_lang:
+            language_hint = forced_lang
+        else:
+            language_hint = _detect_language_hint(title, raw_text, target_persona, user_geo, region)
 
-            prompt = _build_editorial_system_prompt(
-                language_hint=language_hint,
-                min_words=int(settings.PIPELINE_TEXT_MIN_WORDS or 170),
-                max_words=int(settings.PIPELINE_TEXT_MAX_WORDS or 0),
-            )
+        prompt = _build_editorial_system_prompt(
+            language_hint=language_hint,
+            min_words=int(settings.PIPELINE_TEXT_MIN_WORDS or 170),
+            max_words=int(settings.PIPELINE_TEXT_MAX_WORDS or 0),
+        )
+
         payload = _build_editorial_user_payload(
             title=title,
             raw_text=raw_text,
@@ -1553,18 +1640,34 @@ async def _generate_with_deepseek(
             rewrite_round=rewrite_round,
         )
 
-        response = await client.chat.completions.create(
-            model=model_name,
-            temperature=0.45,
-            response_format={"type": "json_object"},
-            messages=[
-                {"role": "system", "content": prompt},
-                {
-                    "role": "user",
-                    "content": json.dumps(payload, ensure_ascii=False),
-                },
-            ],
-        )
+        sem = _get_llm_semaphore()
+        if sem is not None:
+            async with sem:
+                response = await client.chat.completions.create(
+                    model=model_name,
+                    temperature=0.45,
+                    response_format={"type": "json_object"},
+                    messages=[
+                        {"role": "system", "content": prompt},
+                        {
+                            "role": "user",
+                            "content": json.dumps(payload, ensure_ascii=False),
+                        },
+                    ],
+                )
+        else:
+            response = await client.chat.completions.create(
+                model=model_name,
+                temperature=0.45,
+                response_format={"type": "json_object"},
+                messages=[
+                    {"role": "system", "content": prompt},
+                    {
+                        "role": "user",
+                        "content": json.dumps(payload, ensure_ascii=False),
+                    },
+                ],
+            )
         content = response.choices[0].message.content or "{}"
         data = json.loads(content)
         return data
@@ -1581,7 +1684,7 @@ async def _generate_with_deepseek(
         if not data:
             return None
 
-        # Create fallback for compose
+        # Compose result
         fallback = _compose_generated_news(
             final_title_raw=title,
             final_text_raw=(raw_text or "")[:1400],

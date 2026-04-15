@@ -10,7 +10,6 @@ Provides REST API for:
 """
 
 from pathlib import Path
-from logging import getLogger
 import time
 import os
 
@@ -31,7 +30,6 @@ from app.backend.api.routes.llm import router as llm_router
 from app.backend.core.config import settings
 from app.backend.core.errors import (
     AppException,
-    to_http_exception,
     error_response,
     ErrorCode,
 )
@@ -98,7 +96,7 @@ async def add_correlation_id_and_logging(request: Request, call_next):
         # Log unhandled exceptions before they're caught by exception handlers
         duration = (time.time() - start_time) * 1000  # ms
         logger.error(
-            f"Request failed with exception",
+            "Request failed with exception",
             duration_ms=duration,
             status=500,
             exception_type=exc.__class__.__name__,
@@ -110,7 +108,6 @@ async def add_correlation_id_and_logging(request: Request, call_next):
     
     # Log request/response
     if response.status_code >= 500:
-        log_level = "error"
         logger.error(
             f"{request.method} {request.url.path}",
             status=response.status_code,
@@ -333,6 +330,8 @@ async def startup():
 async def shutdown():
     """Application shutdown hook."""
     from app.backend.services.resilience_service import shutdown_resilience
-    
+    from app.backend.services.http_client import close_async_clients
+
     await shutdown_resilience()
+    await close_async_clients()
     logger.info("Application shutdown complete")

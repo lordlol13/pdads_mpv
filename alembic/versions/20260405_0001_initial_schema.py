@@ -30,8 +30,6 @@ def upgrade() -> None:
     bind = op.get_bind()
     is_sqlite = bind.dialect.name == 'sqlite'
     now_func = "CURRENT_TIMESTAMP" if is_sqlite else "NOW()"
-    true_val = "1" if is_sqlite else "TRUE"
-    false_val = "0" if is_sqlite else "FALSE"
 
     if not _table_exists(bind, "users"):
         # Use TEXT for SQLite, JSONB for PostgreSQL
@@ -68,7 +66,7 @@ def upgrade() -> None:
             sa.Column("raw_text", sa.Text(), nullable=True),
             sa.Column("category", sa.String(length=100), nullable=True),
             sa.Column("region", sa.String(length=100), nullable=True),
-            sa.Column("is_urgent", sa.Boolean(), server_default=sa.text(false_val), nullable=True),
+            sa.Column("is_urgent", sa.Boolean(), server_default=sa.text("0" if is_sqlite else "FALSE"), nullable=True),
             sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text(now_func), nullable=True),
             sa.Column("process_status", sa.String(length=32), server_default=sa.text("'pending'"), nullable=True),
             sa.Column("error_message", sa.Text(), nullable=True),

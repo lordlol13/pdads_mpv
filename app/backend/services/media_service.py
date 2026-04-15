@@ -6,6 +6,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlencode, unquote, urljoin, urlparse
 
 import httpx
+from app.backend.services.http_client import get_async_client
 
 from app.backend.core.config import settings
 from app.backend.services.orchestrator_service import build_cache_key, get_or_set_json
@@ -737,77 +738,74 @@ async def fetch_media_urls(
     async def _fetch_newsapi() -> dict[str, Any]:
         if not settings.NEWS_API_KEY:
             return {"articles": []}
-
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(
-                NEWS_API_URL,
-                params={
-                    "q": search_query,
-                    "qInTitle": title_query,
-                    "searchIn": "title,description",
-                    "pageSize": max(16, limit * 4),
-                    "sortBy": "relevancy",
-                    "apiKey": settings.NEWS_API_KEY,
-                },
-            )
+        client = await get_async_client()
+        response = await client.get(
+            NEWS_API_URL,
+            params={
+                "q": search_query,
+                "qInTitle": title_query,
+                "searchIn": "title,description",
+                "pageSize": max(16, limit * 4),
+                "sortBy": "relevancy",
+                "apiKey": settings.NEWS_API_KEY,
+            },
+        )
         response.raise_for_status()
         return response.json()
 
     async def _fetch_google_images() -> dict[str, Any]:
         if not settings.GOOGLE_CSE_API_KEY or not settings.GOOGLE_CSE_ID:
             return {"items": []}
-
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(
-                GOOGLE_CSE_IMAGE_SEARCH_URL,
-                params={
-                    "key": settings.GOOGLE_CSE_API_KEY,
-                    "cx": settings.GOOGLE_CSE_ID,
-                    "q": f"{search_query} news photo",
-                    "searchType": "image",
-                    "num": min(10, max(4, limit * 2)),
-                    "imgType": "photo",
-                    "safe": "active",
-                    "hl": "uz",
-                    "gl": "uz",
-                },
-            )
+        client = await get_async_client()
+        response = await client.get(
+            GOOGLE_CSE_IMAGE_SEARCH_URL,
+            params={
+                "key": settings.GOOGLE_CSE_API_KEY,
+                "cx": settings.GOOGLE_CSE_ID,
+                "q": f"{search_query} news photo",
+                "searchType": "image",
+                "num": min(10, max(4, limit * 2)),
+                "imgType": "photo",
+                "safe": "active",
+                "hl": "uz",
+                "gl": "uz",
+            },
+        )
         response.raise_for_status()
         return response.json()
 
     async def _fetch_wikimedia_images() -> dict[str, Any]:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(
-                WIKIMEDIA_API_URL,
-                params={
-                    "action": "query",
-                    "generator": "search",
-                    "gsrnamespace": 6,
-                    "gsrlimit": max(8, limit * 3),
-                    "gsrsearch": search_query,
-                    "prop": "imageinfo",
-                    "iiprop": "url",
-                    "iiurlwidth": 1280,
-                    "format": "json",
-                    "formatversion": 2,
-                    "origin": "*",
-                },
-            )
+        client = await get_async_client()
+        response = await client.get(
+            WIKIMEDIA_API_URL,
+            params={
+                "action": "query",
+                "generator": "search",
+                "gsrnamespace": 6,
+                "gsrlimit": max(8, limit * 3),
+                "gsrsearch": search_query,
+                "prop": "imageinfo",
+                "iiprop": "url",
+                "iiurlwidth": 1280,
+                "format": "json",
+                "formatversion": 2,
+                "origin": "*",
+            },
+        )
         response.raise_for_status()
         return response.json()
 
     async def _fetch_source_images(source_url: str) -> dict[str, Any]:
         if not source_url:
             return {"urls": []}
-
-        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
-            response = await client.get(
-                source_url,
-                headers={
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                },
-            )
+        client = await get_async_client()
+        response = await client.get(
+            source_url,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            },
+        )
         response.raise_for_status()
 
         content_type = str(response.headers.get("content-type") or "").lower()
@@ -964,25 +962,24 @@ async def fetch_video_urls(
     async def _fetch() -> dict[str, Any]:
         if not settings.YOUTUBE_API_KEY:
             return {"items": []}
-
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(
-                YOUTUBE_SEARCH_URL,
-                params={
-                    "part": "snippet",
-                    "q": query,
-                    "type": "video",
-                    "maxResults": max(5, limit),
-                    "regionCode": region_code,
-                    "relevanceLanguage": relevance_language,
-                    "videoCategoryId": "25",
-                    "videoEmbeddable": "true",
-                    "videoSyndicated": "true",
-                    "order": "date",
-                    "safeSearch": "moderate",
-                    "key": settings.YOUTUBE_API_KEY,
-                },
-            )
+        client = await get_async_client()
+        response = await client.get(
+            YOUTUBE_SEARCH_URL,
+            params={
+                "part": "snippet",
+                "q": query,
+                "type": "video",
+                "maxResults": max(5, limit),
+                "regionCode": region_code,
+                "relevanceLanguage": relevance_language,
+                "videoCategoryId": "25",
+                "videoEmbeddable": "true",
+                "videoSyndicated": "true",
+                "order": "date",
+                "safeSearch": "moderate",
+                "key": settings.YOUTUBE_API_KEY,
+            },
+        )
         response.raise_for_status()
         return response.json()
 

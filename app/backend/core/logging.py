@@ -14,7 +14,6 @@ import logging.config
 from typing import Any, Dict, Optional
 from pathlib import Path
 from datetime import datetime, timezone
-import sys
 
 from app.backend.core.config import settings
 

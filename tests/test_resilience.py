@@ -4,7 +4,7 @@ Tests for API resilience layer (retry, rate limiting, caching, fallback).
 
 import asyncio
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 from app.backend.services.resilience_service import (
     RetryConfig,

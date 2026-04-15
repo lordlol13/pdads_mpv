@@ -4,20 +4,18 @@ Health check and monitoring endpoints.
 Provides information about system health, component status, and metrics.
 """
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, status
 from logging import getLogger
 
 from app.backend.core.health import (
     get_system_health,
     SystemHealth,
-    MetricsData,
     ExtendedMetricsData,
     RecommendationMetrics,
     PipelineMetrics,
     get_extended_metrics,
     get_recommendation_metrics,
     get_pipeline_metrics,
-    metrics,
 )
 from app.backend.core.errors import (
     success_response,

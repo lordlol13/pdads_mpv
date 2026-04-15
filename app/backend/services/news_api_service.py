@@ -2,14 +2,13 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
-import json
-import logging
 import re
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 from xml.etree import ElementTree as ET
 
 import httpx
+from app.backend.services.http_client import get_async_client
 
 from app.backend.core.config import settings
 from app.backend.core.logging import ContextLogger
@@ -495,31 +494,31 @@ async def _fetch_rss_whitelist_articles(
         return []
 
     items: list[dict[str, Any]] = []
-    async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
-        for source in sources:
-            source_name = str(source.get("name") or "RSS")
-            source_url = str(source.get("url") or "").strip()
-            source_priority = int(source.get("priority") or 0)
-            if not source_url:
-                continue
+    client = await get_async_client()
+    for source in sources:
+        source_name = str(source.get("name") or "RSS")
+        source_url = str(source.get("url") or "").strip()
+        source_priority = int(source.get("priority") or 0)
+        if not source_url:
+            continue
 
-            try:
-                response = await client.get(source_url, params={})
-                response.raise_for_status()
-            except httpx.HTTPError:
-                continue
+        try:
+            response = await client.get(source_url, params={})
+            response.raise_for_status()
+        except httpx.HTTPError:
+            continue
 
-            response_text = getattr(response, "text", "")
-            if not isinstance(response_text, str) or not response_text.strip():
-                continue
+        response_text = getattr(response, "text", "")
+        if not isinstance(response_text, str) or not response_text.strip():
+            continue
 
-            parsed = _parse_rss_payload(response_text, source_name, source_priority)
-            for article in parsed:
-                if _article_matches_topics(article, topics):
-                    items.append(article)
+        parsed = _parse_rss_payload(response_text, source_name, source_priority)
+        for article in parsed:
+            if _article_matches_topics(article, topics):
+                items.append(article)
 
-            if len(items) >= limit * 2:
-                break
+        if len(items) >= limit * 2:
+            break
 
     deduped = _dedupe_articles_by_url_or_title(items)
     return _prioritize_recent_articles(deduped)[:limit]
@@ -565,56 +564,56 @@ async def _fetch_newsapi_articles(
     }
 
     async def _make_requests():
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            if not preferred_domains:
-                response = await client.get(
-                    NEWS_API_URL,
-                    params={
-                        **base_params,
-                        "pageSize": page_size,
-                        "language": "en",
-                    },
-                )
-                response.raise_for_status()
-                payload = response.json()
-                for article in payload.get("articles") or []:
-                    article.setdefault("_source_priority", 50)
-                return payload.get("articles") or []
-
-            country_page_size = max(1, int(page_size * 0.6))
-            global_page_size = max(1, page_size - country_page_size)
-            preferred_domains_csv = ",".join(preferred_domains[:20])
-
-            country_response = await client.get(
+        client = await get_async_client()
+        if not preferred_domains:
+            response = await client.get(
                 NEWS_API_URL,
                 params={
                     **base_params,
-                    "pageSize": country_page_size,
-                    "domains": preferred_domains_csv,
-                },
-            )
-            country_response.raise_for_status()
-            country_payload = country_response.json()
-            for article in country_payload.get("articles") or []:
-                article.setdefault("_source_priority", 90)
-
-            global_response = await client.get(
-                NEWS_API_URL,
-                params={
-                    **base_params,
-                    "pageSize": global_page_size,
+                    "pageSize": page_size,
                     "language": "en",
-                    "excludeDomains": preferred_domains_csv,
                 },
             )
-            global_response.raise_for_status()
-            global_payload = global_response.json()
-            for article in global_payload.get("articles") or []:
-                article.setdefault("_source_priority", 70)
+            response.raise_for_status()
+            payload = response.json()
+            for article in payload.get("articles") or []:
+                article.setdefault("_source_priority", 50)
+            return payload.get("articles") or []
 
-            return _dedupe_articles_by_url_or_title(
-                (country_payload.get("articles") or []) + (global_payload.get("articles") or [])
-            )
+        country_page_size = max(1, int(page_size * 0.6))
+        global_page_size = max(1, page_size - country_page_size)
+        preferred_domains_csv = ",".join(preferred_domains[:20])
+
+        country_response = await client.get(
+            NEWS_API_URL,
+            params={
+                **base_params,
+                "pageSize": country_page_size,
+                "domains": preferred_domains_csv,
+            },
+        )
+        country_response.raise_for_status()
+        country_payload = country_response.json()
+        for article in country_payload.get("articles") or []:
+            article.setdefault("_source_priority", 90)
+
+        global_response = await client.get(
+            NEWS_API_URL,
+            params={
+                **base_params,
+                "pageSize": global_page_size,
+                "language": "en",
+                "excludeDomains": preferred_domains_csv,
+            },
+        )
+        global_response.raise_for_status()
+        global_payload = global_response.json()
+        for article in global_payload.get("articles") or []:
+            article.setdefault("_source_priority", 70)
+
+        return _dedupe_articles_by_url_or_title(
+            (country_payload.get("articles") or []) + (global_payload.get("articles") or [])
+        )
 
     try:
         articles = await retry_async(

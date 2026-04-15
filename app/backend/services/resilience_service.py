@@ -9,8 +9,8 @@ import json
 import hashlib
 import logging
 import random
-from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Optional, TypeVar, Union
+import time
+from typing import Any, Callable, Optional, TypeVar
 from functools import wraps
 
 import redis.asyncio as aioredis
@@ -21,6 +21,11 @@ from app.backend.core.config import settings
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
+
+# In-memory fallback cache used when Redis is unavailable.
+# Maps key -> (expires_at_timestamp|None, value)
+_in_memory_cache: dict[str, tuple[float | None, Any]] = {}
+_in_memory_cache_lock = asyncio.Lock()
 
 
 # =====================================================================
@@ -92,8 +97,9 @@ async def retry_async(
             
             if attempt < config.max_attempts - 1:
                 delay = config.get_delay(attempt)
+                func_name = getattr(func, "__name__", repr(func))
                 logger.warning(
-                    f"Attempt {attempt + 1}/{config.max_attempts} failed for {func.__name__}: {e}. "
+                    f"Attempt {attempt + 1}/{config.max_attempts} failed for {func_name}: {e}. "
                     f"Retrying in {delay:.1f}s..."
                 )
                 
@@ -102,8 +108,9 @@ async def retry_async(
                 
                 await asyncio.sleep(delay)
             else:
+                func_name = getattr(func, "__name__", repr(func))
                 logger.error(
-                    f"All {config.max_attempts} attempts failed for {func.__name__}. "
+                    f"All {config.max_attempts} attempts failed for {func_name}. "
                     f"Last error: {e}"
                 )
     
@@ -278,7 +285,23 @@ class CacheManager:
                     return value
             return None
         except RedisError as e:
-            logger.warning(f"Cache get error: {e}")
+            logger.warning(f"Cache get error: {e} - falling back to in-memory cache")
+            # Fallback to in-memory cache when Redis is unreachable
+            key = self._make_key(namespace, *args)
+            try:
+                async with _in_memory_cache_lock:
+                    entry = _in_memory_cache.get(key)
+                    if entry:
+                        expires_at, stored = entry
+                        if expires_at is None or expires_at > time.time():
+                            try:
+                                return json.loads(stored) if isinstance(stored, str) else stored
+                            except Exception:
+                                return stored
+                        else:
+                            del _in_memory_cache[key]
+            except Exception:
+                pass
             return None
     
     async def set(
@@ -299,10 +322,19 @@ class CacheManager:
             ttl_seconds = ttl_hours * 3600
             await client.setex(key, ttl_seconds, str(value))
             return True
-        
         except RedisError as e:
-            logger.warning(f"Cache set error: {e}")
-            return False
+            logger.warning(f"Cache set error: {e} - saving to in-memory cache")
+            # Fallback to in-memory cache
+            try:
+                key = self._make_key(namespace, *args)
+                stored = json.dumps(value) if isinstance(value, (dict, list)) else str(value)
+                ttl_seconds = ttl_hours * 3600
+                expires_at = time.time() + ttl_seconds if ttl_seconds > 0 else None
+                async with _in_memory_cache_lock:
+                    _in_memory_cache[key] = (expires_at, stored)
+                return True
+            except Exception:
+                return False
     
     async def delete(self, namespace: str, *args) -> bool:
         """Delete value from cache."""
@@ -312,7 +344,15 @@ class CacheManager:
             await client.delete(key)
             return True
         except RedisError:
-            return False
+            # Try deleting from in-memory fallback
+            try:
+                key = self._make_key(namespace, *args)
+                async with _in_memory_cache_lock:
+                    if key in _in_memory_cache:
+                        del _in_memory_cache[key]
+                return True
+            except Exception:
+                return False
 
 
 # Global cache manager
