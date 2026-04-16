@@ -20,6 +20,9 @@ celery_app.conf.update(
     task_serializer="json",
     result_serializer="json",
     accept_content=["json"],
+        # For local development allow running tasks eagerly when Redis is not available.
+        # Enable with CELERY_TASK_ALWAYS_EAGER=true or when APP_ENV=dev.
+        task_always_eager=(os.getenv("CELERY_TASK_ALWAYS_EAGER", "").lower() == "true") or (str(settings.APP_ENV).lower() == "dev"),
     task_time_limit=int(os.getenv("CELERY_TASK_TIME_LIMIT", str(settings.CELERY_TASK_TIME_LIMIT))),
     worker_concurrency=int(os.getenv("CELERY_WORKER_CONCURRENCY", str(settings.CELERY_WORKER_CONCURRENCY))),
     broker_transport_options={"visibility_timeout": int(os.getenv("CELERY_BROKER_VISIBILITY_TIMEOUT", "3600"))},

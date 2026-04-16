@@ -60,7 +60,7 @@ class Settings(BaseSettings):
     SMTP_USERNAME: str = ""
     SMTP_PASSWORD: str = ""
     SMTP_FROM_EMAIL: str = "noreply@pdads.local"
-    SMTP_USE_TLS: bool = True
+    SMTP_USE_TLS: bool | str = True
     RESEND_API_KEY: str = ""
     RESEND_FROM_EMAIL: str = "onboarding@resend.dev"
 
@@ -194,6 +194,23 @@ class Settings(BaseSettings):
                 self.SMTP_PORT = 587
             else:
                 self.SMTP_PORT = int(raw)
+        return self
+
+    @model_validator(mode="after")
+    def _coerce_bools(self) -> "Settings":
+        # Some hosting dashboards set empty string for cleared vars.
+        # Accept textual boolean input and coerce to actual bool here.
+        if isinstance(self.SMTP_USE_TLS, str):
+            raw = self.SMTP_USE_TLS.strip()
+            if not raw:
+                # default to True when unspecified
+                self.SMTP_USE_TLS = True
+            else:
+                val = raw.lower()
+                if val in {"false", "0", "no", "off"}:
+                    self.SMTP_USE_TLS = False
+                elif val in {"true", "1", "yes", "on"}:
+                    self.SMTP_USE_TLS = True
         return self
 
     @model_validator(mode="after")

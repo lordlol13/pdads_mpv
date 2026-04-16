@@ -454,17 +454,25 @@ async def _upsert_ai_news_for_persona(
 
     video_urls: list[str] = []
     is_sqlite = session.get_bind().dialect.name == "sqlite"
-    # For sqlite we store JSON text; for Postgres we use native arrays (list)
-    params["image_urls"] = json.dumps(media_urls, ensure_ascii=False) if is_sqlite else media_urls
-    params["video_urls"] = json.dumps(video_urls, ensure_ascii=False) if is_sqlite else video_urls
+    # Store as JSON string in params. For Postgres we will convert JSON->text[] in SQL.
+    params["image_urls"] = json.dumps(media_urls, ensure_ascii=False)
+    params["video_urls"] = json.dumps(video_urls, ensure_ascii=False)
+
+    if is_sqlite:
+        img_sql = ":image_urls"
+        vid_sql = ":video_urls"
+    else:
+        # PostgreSQL: convert JSON string parameter into text[] using jsonb_array_elements_text
+        img_sql = "ARRAY(SELECT jsonb_array_elements_text(:image_urls::jsonb))"
+        vid_sql = "ARRAY(SELECT jsonb_array_elements_text(:video_urls::jsonb))"
 
     if existing_id is not None:
-        update_query = """
+        update_query = f"""
         UPDATE ai_news
         SET final_title = :final_title,
             final_text = :final_text,
-            image_urls = :image_urls,
-            video_urls = :video_urls,
+            image_urls = {img_sql},
+            video_urls = {vid_sql},
             category = :category,
             ai_score = :ai_score,
             embedding_id = :embedding_id,
@@ -486,7 +494,7 @@ async def _upsert_ai_news_for_persona(
         )
         return updated_ai_news_id
 
-    insert_query = """
+    insert_query = f"""
     INSERT INTO ai_news (
         raw_news_id,
         target_persona,
@@ -504,8 +512,8 @@ async def _upsert_ai_news_for_persona(
         :target_persona,
         :final_title,
         :final_text,
-        :image_urls,
-        :video_urls,
+        {img_sql},
+        {vid_sql},
         :category,
         :ai_score,
         :embedding_id,
@@ -817,7 +825,15 @@ def process_raw_news(self, raw_news_id: int, personas: list[dict[str, str | None
     logger.info("process_raw_news started raw_news_id=%s attempt=%s", raw_news_id, attempt)
 
     try:
-        result = asyncio.run(_process_raw_news_async(raw_news_id, attempt, personas))
+        # Run async coroutine in a fresh event loop to avoid coroutine warnings
+        loop = asyncio.new_event_loop()
+        try:
+            result = loop.run_until_complete(_process_raw_news_async(raw_news_id, attempt, personas))
+        finally:
+            try:
+                loop.close()
+            except Exception:
+                pass
         logger.info("process_raw_news finished raw_news_id=%s result=%s", raw_news_id, result)
         return result
     except SQLAlchemyError as e:
@@ -839,7 +855,14 @@ def process_raw_news(self, raw_news_id: int, personas: list[dict[str, str | None
 def scheduled_ingestion() -> dict:
     logger.info("scheduled_ingestion tick started")
     try:
-        result = asyncio.run(_schedule_ingestion_batch_async())
+        loop = asyncio.new_event_loop()
+        try:
+            result = loop.run_until_complete(_schedule_ingestion_batch_async())
+        finally:
+            try:
+                loop.close()
+            except Exception:
+                pass
         logger.info("scheduled_ingestion tick finished result=%s", result)
         return result
     except Exception as e:
@@ -858,7 +881,14 @@ def scheduled_ingestion() -> dict:
 def scheduled_cleanup_ai_products() -> dict:
     logger.info("scheduled_cleanup_ai_products tick started")
     try:
-        result = asyncio.run(_cleanup_ai_products_async())
+        loop = asyncio.new_event_loop()
+        try:
+            result = loop.run_until_complete(_cleanup_ai_products_async())
+        finally:
+            try:
+                loop.close()
+            except Exception:
+                pass
         logger.info("scheduled_cleanup_ai_products tick finished result=%s", result)
         return result
     except Exception as e:

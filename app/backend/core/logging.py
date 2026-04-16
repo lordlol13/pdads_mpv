@@ -15,6 +15,8 @@ from typing import Any, Dict, Optional
 from pathlib import Path
 from datetime import datetime, timezone
 
+import sys
+
 from app.backend.core.config import settings
 
 
@@ -71,6 +73,16 @@ def configure_logging():
     log_dir = Path("logs")
     log_dir.mkdir(exist_ok=True)
     
+    # Ensure stdout/stderr use UTF-8 where possible (helps Windows consoles)
+    try:
+        if hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(encoding="utf-8")
+        if hasattr(sys.stderr, "reconfigure"):
+            sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        # Best-effort only; don't fail logging setup if reconfigure not available
+        pass
+    
     # Logging configuration
     config = {
         "version": 1,
@@ -103,6 +115,7 @@ def configure_logging():
                 "level": log_level,
                 "formatter": "json",
                 "filename": str(log_dir / "app.log"),
+                "encoding": "utf-8",
                 "maxBytes": 10485760,  # 10MB
                 "backupCount": 5,
                 "filters": ["correlation_id"],
@@ -112,6 +125,7 @@ def configure_logging():
                 "level": logging.ERROR,
                 "formatter": "json",
                 "filename": str(log_dir / "app_error.log"),
+                "encoding": "utf-8",
                 "maxBytes": 10485760,
                 "backupCount": 5,
                 "filters": ["correlation_id"],
