@@ -12,12 +12,12 @@ logger = logging.getLogger(__name__)
 def _send_with_resend(*, to_email: str, subject: str, html: str) -> bool:
     if not settings.RESEND_API_KEY.strip():
         return False
-
+    # Prefer the official Resend SDK when available.
     try:
-        import resend
+        from resend import Resend
 
-        resend.api_key = settings.RESEND_API_KEY
-        resend.Emails.send(
+        client = Resend(settings.RESEND_API_KEY)
+        client.emails.send(
             {
                 "from": settings.RESEND_FROM_EMAIL,
                 "to": to_email,
@@ -26,11 +26,40 @@ def _send_with_resend(*, to_email: str, subject: str, html: str) -> bool:
             }
         )
         return True
-    except Exception as exc:
-        # Resend SDK exceptions often include HTTP status/message (e.g. 401/403/422).
-        # Log the exception details without leaking any secrets.
-        logger.exception("Failed to send email via Resend to %s: %s", to_email, exc)
-        return False
+    except Exception as exc_sdk:
+        # SDK may be missing or raise an HTTP-related exception. Try a plain HTTP
+        # request fallback using `requests` to avoid total failure.
+        try:
+            import requests
+
+            resp = requests.post(
+                "https://api.resend.com/emails",
+                json={
+                    "from": settings.RESEND_FROM_EMAIL,
+                    "to": to_email,
+                    "subject": subject,
+                    "html": html,
+                },
+                headers={"Authorization": f"Bearer {settings.RESEND_API_KEY}"},
+                timeout=10,
+            )
+            if 200 <= resp.status_code < 300:
+                return True
+            logger.error(
+                "Resend HTTP fallback failed for %s: status=%s body=%s",
+                to_email,
+                resp.status_code,
+                (resp.text[:200] if resp is not None else ""),
+            )
+            return False
+        except Exception as exc_http:
+            logger.exception(
+                "Failed to send email via Resend (sdk=%s http=%s) to %s",
+                exc_sdk,
+                exc_http,
+                to_email,
+            )
+            return False
 
 
 def send_verification_code(email: str, code: str) -> bool:
