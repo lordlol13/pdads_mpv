@@ -463,8 +463,9 @@ async def _upsert_ai_news_for_persona(
         vid_sql = ":video_urls"
     else:
         # PostgreSQL: convert JSON string parameter into text[] using jsonb_array_elements_text
-        img_sql = "ARRAY(SELECT jsonb_array_elements_text(:image_urls::jsonb))"
-        vid_sql = "ARRAY(SELECT jsonb_array_elements_text(:video_urls::jsonb))"
+        # Use CAST(:param AS jsonb) to avoid parser issues with '::' after a bind
+        img_sql = "ARRAY(SELECT jsonb_array_elements_text(CAST(:image_urls AS jsonb)))"
+        vid_sql = "ARRAY(SELECT jsonb_array_elements_text(CAST(:video_urls AS jsonb)))"
 
     if existing_id is not None:
         update_query = f"""
