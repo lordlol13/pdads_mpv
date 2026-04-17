@@ -639,18 +639,125 @@ async def _populate_user_feed_for_ai_news(
                     AND uf.ai_news_id = :ai_news_id
             )
         """
-    result = await session.execute(
-        text(query),
-        {
-            "ai_news_id": ai_news_id,
-            "ai_score": ai_score,
-            "target_topic": target_topic,
-            "target_profession": normalized_profession,
-            "target_geo": normalized_geo,
-            "target_country_code": normalized_country_code,
-        },
-    )
-    return int(result.rowcount or 0)
+    params = {
+        "ai_news_id": ai_news_id,
+        "ai_score": ai_score,
+        "target_topic": target_topic,
+        "target_profession": normalized_profession or "",
+        "target_geo": normalized_geo or "",
+        "target_country_code": normalized_country_code or "",
+    }
+
+    # First, attempt the original (strict) insert
+    result = await session.execute(text(query), params)
+    inserted = int(result.rowcount or 0)
+    if inserted:
+        return inserted
+
+    # If nothing matched, try a relaxed topic match that checks multiple topic keys
+    if not is_sqlite:
+        relaxed_query = """
+        INSERT INTO user_feed (user_id, ai_news_id, ai_score, created_at)
+        SELECT u.id, :ai_news_id, :ai_score, NOW()
+        FROM users u
+        WHERE u.is_active = TRUE
+            AND (
+                :target_topic = 'general'
+                OR (
+                    (u.interests -> 'all_topics') ? :target_topic
+                    OR (u.interests -> 'topics') ? :target_topic
+                    OR (u.interests -> 'custom_topics') ? :target_topic
+                    OR LOWER(COALESCE(u.interests::text, '')) LIKE ('%' || :target_topic || '%')
+                )
+            )
+            AND (
+                :target_profession = ''
+                OR LOWER(COALESCE(u.interests ->> 'profession', '')) = :target_profession
+            )
+            AND (
+                :target_geo = ''
+                OR LOWER(COALESCE(u.location, '')) LIKE ('%' || :target_geo || '%')
+            )
+            AND (
+                :target_country_code = ''
+                OR UPPER(COALESCE(u.country_code, '')) = :target_country_code
+            )
+            AND NOT EXISTS (
+                SELECT 1 FROM user_feed uf WHERE uf.user_id = u.id AND uf.ai_news_id = :ai_news_id
+            )
+        """
+        res2 = await session.execute(text(relaxed_query), params)
+        inserted2 = int(res2.rowcount or 0)
+        if inserted2:
+            return inserted2
+
+    else:
+        # SQLite relaxed topic check (fallback to text search of interests)
+        relaxed_query_sqlite = """
+        INSERT INTO user_feed (user_id, ai_news_id, ai_score, created_at)
+        SELECT u.id, :ai_news_id, :ai_score, CURRENT_TIMESTAMP
+        FROM users u
+        WHERE COALESCE(u.is_active, 1) = 1
+            AND (
+                :target_topic = 'general'
+                OR LOWER(COALESCE(u.interests, '')) LIKE ('%' || :target_topic || '%')
+            )
+            AND (
+                :target_profession = ''
+                OR LOWER(COALESCE(json_extract(COALESCE(u.interests, '{}'), '$.profession'), '')) = :target_profession
+            )
+            AND (
+                :target_geo = ''
+                OR LOWER(COALESCE(u.location, '')) LIKE ('%' || :target_geo || '%')
+            )
+            AND (
+                :target_country_code = ''
+                OR UPPER(COALESCE(u.country_code, '')) = :target_country_code
+            )
+            AND NOT EXISTS (
+                SELECT 1 FROM user_feed uf WHERE uf.user_id = u.id AND uf.ai_news_id = :ai_news_id
+            )
+        """
+        res2 = await session.execute(text(relaxed_query_sqlite), params)
+        inserted2 = int(res2.rowcount or 0)
+        if inserted2:
+            return inserted2
+
+    # Final fallback: if still nothing, match any of profession / geo / country (OR), to avoid dropping audience completely
+    if not is_sqlite:
+        fallback_query = """
+        INSERT INTO user_feed (user_id, ai_news_id, ai_score, created_at)
+        SELECT u.id, :ai_news_id, :ai_score, NOW()
+        FROM users u
+        WHERE u.is_active = TRUE
+            AND (
+                (:target_profession != '' AND LOWER(COALESCE(u.interests ->> 'profession','')) = :target_profession)
+                OR (:target_geo != '' AND LOWER(COALESCE(u.location,'')) LIKE ('%' || :target_geo || '%'))
+                OR (:target_country_code != '' AND UPPER(COALESCE(u.country_code,'')) = :target_country_code)
+            )
+            AND NOT EXISTS (
+                SELECT 1 FROM user_feed uf WHERE uf.user_id = u.id AND uf.ai_news_id = :ai_news_id
+            )
+        """
+        res3 = await session.execute(text(fallback_query), params)
+        return int(res3.rowcount or 0)
+    else:
+        fallback_query_sqlite = """
+        INSERT INTO user_feed (user_id, ai_news_id, ai_score, created_at)
+        SELECT u.id, :ai_news_id, :ai_score, CURRENT_TIMESTAMP
+        FROM users u
+        WHERE COALESCE(u.is_active, 1) = 1
+            AND (
+                (:target_profession != '' AND LOWER(COALESCE(json_extract(COALESCE(u.interests, '{}'), '$.profession'), '')) = :target_profession)
+                OR (:target_geo != '' AND LOWER(COALESCE(u.location,'')) LIKE ('%' || :target_geo || '%'))
+                OR (:target_country_code != '' AND UPPER(COALESCE(u.country_code,'')) = :target_country_code)
+            )
+            AND NOT EXISTS (
+                SELECT 1 FROM user_feed uf WHERE uf.user_id = u.id AND uf.ai_news_id = :ai_news_id
+            )
+        """
+        res3 = await session.execute(text(fallback_query_sqlite), params)
+        return int(res3.rowcount or 0)
 
 
 async def _schedule_ingestion_batch_async() -> dict[str, Any]:
