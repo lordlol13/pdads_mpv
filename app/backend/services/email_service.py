@@ -12,54 +12,78 @@ logger = logging.getLogger(__name__)
 def _send_with_resend(*, to_email: str, subject: str, html: str) -> bool:
     if not settings.RESEND_API_KEY.strip():
         return False
-    # Prefer the official Resend SDK when available.
+    # Try a robust multi-tiered approach in preferred order:
+    # 1) HTTP request via `httpx` (sync), 2) `requests` fallback, 3) official SDK `resend`.
+    payload = {
+        "from": settings.RESEND_FROM_EMAIL,
+        "to": to_email,
+        "subject": subject,
+        "html": html,
+    }
+
+    # 1) httpx (preferred; already in requirements)
     try:
-        from resend import Resend
+        import httpx
 
-        client = Resend(settings.RESEND_API_KEY)
-        client.emails.send(
-            {
-                "from": settings.RESEND_FROM_EMAIL,
-                "to": to_email,
-                "subject": subject,
-                "html": html,
-            }
-        )
-        return True
-    except Exception as exc_sdk:
-        # SDK may be missing or raise an HTTP-related exception. Try a plain HTTP
-        # request fallback using `requests` to avoid total failure.
         try:
-            import requests
+            resp = httpx.post(
+                "https://api.resend.com/emails",
+                json=payload,
+                headers={"Authorization": f"Bearer {settings.RESEND_API_KEY}"},
+                timeout=10.0,
+            )
+            if 200 <= resp.status_code < 300:
+                return True
+            logger.error(
+                "Resend httpx request failed for %s: status=%s body=%s",
+                to_email,
+                resp.status_code,
+                (resp.text[:200] if resp is not None else ""),
+            )
+        except Exception as exc_httpx:
+            logger.exception("Resend httpx request error for %s: %s", to_email, exc_httpx)
+    except Exception:
+        # httpx not available; try next option
+        logger.debug("httpx not available for Resend HTTP send, will try requests or SDK")
 
+    # 2) requests fallback
+    try:
+        import requests
+
+        try:
             resp = requests.post(
                 "https://api.resend.com/emails",
-                json={
-                    "from": settings.RESEND_FROM_EMAIL,
-                    "to": to_email,
-                    "subject": subject,
-                    "html": html,
-                },
+                json=payload,
                 headers={"Authorization": f"Bearer {settings.RESEND_API_KEY}"},
                 timeout=10,
             )
             if 200 <= resp.status_code < 300:
                 return True
             logger.error(
-                "Resend HTTP fallback failed for %s: status=%s body=%s",
+                "Resend requests request failed for %s: status=%s body=%s",
                 to_email,
                 resp.status_code,
                 (resp.text[:200] if resp is not None else ""),
             )
+        except Exception as exc_requests:
+            logger.exception("Resend requests error for %s: %s", to_email, exc_requests)
+    except Exception:
+        logger.debug("requests not available for Resend HTTP send, will try SDK if present")
+
+    # 3) Official SDK as last resort (may be missing in lightweight environments)
+    try:
+        from resend import Resend
+
+        try:
+            client = Resend(settings.RESEND_API_KEY)
+            client.emails.send(payload)
+            return True
+        except Exception as exc_sdk_call:
+            logger.exception("Resend SDK send failed for %s: %s", to_email, exc_sdk_call)
             return False
-        except Exception as exc_http:
-            logger.exception(
-                "Failed to send email via Resend (sdk=%s http=%s) to %s",
-                exc_sdk,
-                exc_http,
-                to_email,
-            )
-            return False
+    except Exception:
+        logger.exception("No available method succeeded to send email via Resend to %s", to_email)
+        return False
 
 
 def send_verification_code(email: str, code: str) -> bool:
