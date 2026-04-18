@@ -1,0 +1,11 @@
+{
+  "build": {
+    "builder": "custom",
+    "buildCommand": "pip install -r requirements.txt",
+    "startCommand": "gunicorn -k uvicorn.workers.UvicornWorker app.backend.main:app --bind 0.0.0.0:$PORT --workers 2"
+  },
+  "rootDirectory": ".",
+  "env": {
+    "PYTHONUNBUFFERED": "1"
+  }
+}
