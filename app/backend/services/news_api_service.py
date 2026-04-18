@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import math
 from email.utils import parsedate_to_datetime
 import re
 from typing import Any
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse, urljoin
+import html as html_lib
 from xml.etree import ElementTree as ET
 
 import httpx
@@ -34,13 +36,18 @@ RSS_SOURCE_WHITELIST: dict[str, list[dict[str, Any]]] = {
     ],
     "uz": [
         {"name": "Kun.uz", "url": "https://kun.uz/news/rss", "priority": 106},
+        {"name": "Gazeta.uz (ru)", "url": "https://www.gazeta.uz/ru/rss", "priority": 108},
         {"name": "Gazeta.uz", "url": "https://www.gazeta.uz/rss/", "priority": 104},
-        {"name": "Daryo", "url": "https://daryo.uz/feed", "priority": 102},
+        {"name": "Daryo (rss)", "url": "https://daryo.uz/rss", "priority": 106},
+        {"name": "Daryo (feed)", "url": "https://daryo.uz/feed", "priority": 102},
+        {"name": "Uz24", "url": "https://uz24.uz/rss", "priority": 102},
+        {"name": "Uznews", "url": "https://uznews.uz/rss", "priority": 100},
+        {"name": "Podrobno.uz", "url": "https://podrobno.uz/rss", "priority": 98},
     ],
 }
 
 COUNTRY_NEWS_DOMAINS: dict[str, list[str]] = {
-    "UZ": ["kun.uz", "gazeta.uz", "daryo.uz", "uznews.uz"],
+    "UZ": ["uz24.uz", "uznews.uz", "kun.uz", "daryo.uz", "gazeta.uz", "podrobno.uz"],
     "RU": ["ria.ru", "rbc.ru", "lenta.ru", "vesti.ru"],
     "KZ": ["tengrinews.kz", "inform.kz"],
     "US": ["apnews.com", "reuters.com", "cnn.com"],
@@ -374,9 +381,11 @@ def _article_matches_topics(article: dict[str, Any], topics: list[str]) -> bool:
 def _rss_sources_for_country_codes(country_codes: list[str] | None) -> list[dict[str, Any]]:
     normalized_codes = {code.strip().upper() for code in (country_codes or []) if code and code.strip()}
 
-    selected = list(RSS_SOURCE_WHITELIST["global"])
-    # Uzbekistan sources are explicitly prioritized for this product's target audience.
-    selected.extend(RSS_SOURCE_WHITELIST["uz"])
+    # If a specific country is requested, prefer that country's sources first.
+    if "UZ" in normalized_codes:
+        selected = list(RSS_SOURCE_WHITELIST["uz"]) + list(RSS_SOURCE_WHITELIST["global"])
+    else:
+        selected = list(RSS_SOURCE_WHITELIST["global"]) + list(RSS_SOURCE_WHITELIST["uz"])
 
     deduped: list[dict[str, Any]] = []
     seen_urls: set[str] = set()
@@ -426,6 +435,94 @@ def _parse_rss_payload(payload: str, source_name: str, source_priority: int) -> 
                 "_source_priority": source_priority,
             }
         )
+
+    return items
+
+
+def _html_extract_links(html_text: str, base_url: str) -> list[tuple[str, str]]:
+    results: list[tuple[str, str]] = []
+    for m in re.finditer(r'<a[^>]+href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', html_text, flags=re.I | re.S):
+        href = (m.group(1) or "").strip()
+        inner = (m.group(2) or "").strip()
+        if not href:
+            continue
+        # strip tags from inner HTML
+        text = re.sub(r"<[^>]+>", "", inner)
+        text = html_lib.unescape(text).strip()
+        resolved = urljoin(base_url, href)
+        results.append((resolved, text))
+
+    # dedupe while preserving order
+    seen: set[str] = set()
+    out: list[tuple[str, str]] = []
+    for u, t in results:
+        u_norm = u.split('#')[0]
+        if u_norm in seen:
+            continue
+        seen.add(u_norm)
+        out.append((u_norm, t))
+    return out
+
+
+async def _scrape_site_for_articles(base_url: str, source_name: str, source_priority: int, limit: int) -> list[dict[str, Any]]:
+    parsed_base = urlparse(base_url)
+    base = f"{parsed_base.scheme}://{parsed_base.netloc}"
+    client = await get_async_client()
+    try:
+        resp = await client.get(base)
+        resp.raise_for_status()
+        html_text = getattr(resp, "text", "") or ""
+        final_base = str(resp.url) if getattr(resp, "url", None) else base
+    except Exception:
+        return []
+
+    candidates = _html_extract_links(html_text, final_base)
+    items: list[dict[str, Any]] = []
+    seen_urls: set[str] = set()
+
+    def _netloc_norm(n: str) -> str:
+        n = (n or "").lower()
+        return n[4:] if n.startswith("www.") else n
+
+    base_net = _netloc_norm(parsed_base.netloc)
+
+    for url, title in candidates:
+        try:
+            p = urlparse(url)
+        except Exception:
+            continue
+        if p.scheme not in ("http", "https"):
+            continue
+        if _netloc_norm(p.netloc) != base_net:
+            continue
+        path = p.path or ""
+        # skip likely non-articles
+        if re.search(r"\.(jpg|jpeg|png|gif|webp|svg)$", path, flags=re.I):
+            continue
+        # heuristics: article-like path contains year or '/news/' or has dashes or multiple segments
+        if not (re.search(r"/\d{4}/", path) or "/news/" in path or ("-" in path) or len([s for s in path.split('/') if s]) >= 2):
+            continue
+
+        u_norm = url.split('#')[0]
+        if u_norm in seen_urls:
+            continue
+        seen_urls.add(u_norm)
+
+        items.append(
+            {
+                "source": {"name": source_name},
+                "title": title or u_norm,
+                "description": "",
+                "content": title or "",
+                "url": u_norm,
+                "urlToImage": None,
+                "publishedAt": None,
+                "_source_priority": source_priority,
+            }
+        )
+
+        if len(items) >= limit:
+            break
 
     return items
 
@@ -513,9 +610,22 @@ async def _fetch_rss_whitelist_articles(
             continue
 
         parsed = _parse_rss_payload(response_text, source_name, source_priority)
-        for article in parsed:
-            if _article_matches_topics(article, topics):
-                items.append(article)
+        if parsed:
+            for article in parsed:
+                if _article_matches_topics(article, topics):
+                    items.append(article)
+        else:
+            # If the response is HTML or RSS parsing failed, attempt to scrape the site for article links.
+            try:
+                parsed_src = urlparse(source_url)
+                base_site = f"{parsed_src.scheme}://{parsed_src.netloc}"
+                scraped = await _scrape_site_for_articles(base_site, source_name, source_priority, limit)
+            except Exception:
+                scraped = []
+
+            for article in scraped:
+                if _article_matches_topics(article, topics):
+                    items.append(article)
 
         if len(items) >= limit * 2:
             break
@@ -657,22 +767,120 @@ async def fetch_articles_for_topics(
             limit=max(page_size * 2, 24),
         )
 
-        try:
-            newsapi_articles = await _fetch_newsapi_articles(
+        normalized_codes = [code.strip().upper() for code in (country_codes or []) if code and code.strip()]
+        is_regional_query = bool(normalized_codes)
+        is_uz = "UZ" in normalized_codes
+
+        newsapi_articles: list[dict[str, Any]] = []
+        # Only call NewsAPI for global queries (no country codes). For UZ we will rely on RSS-only.
+        if not is_regional_query:
+            try:
+                newsapi_articles = await _fetch_newsapi_articles(
+                    effective_topics,
+                    page_size=max(page_size, 12),
+                    preferred_domains=preferred_domains,
+                )
+            except httpx.HTTPError:
+                newsapi_articles = []
+
+            newsapi_articles = [item for item in newsapi_articles if _article_matches_topics(item, effective_topics)]
+            newsapi_articles = await _ai_select_newsapi_articles(
                 effective_topics,
-                page_size=max(page_size, 12),
-                preferred_domains=preferred_domains,
+                newsapi_articles,
+                max_items=max(page_size, 12),
             )
-        except httpx.HTTPError:
-            newsapi_articles = []
 
-        newsapi_articles = [item for item in newsapi_articles if _article_matches_topics(item, effective_topics)]
-        newsapi_articles = await _ai_select_newsapi_articles(
-            effective_topics,
-            newsapi_articles,
-            max_items=max(page_size, 12),
-        )
+        # Uzbekistan-specific mix: prefer 3 regional (from specific UZ domains) and 2 global for 5 posts.
+        if is_uz:
+            total = max(1, page_size)
+            regional_count = math.ceil(total * 3 / 5)
+            global_count = max(0, total - regional_count)
+            uz_domains = {"uz24.uz", "uznews.uz", "kun.uz", "daryo.uz", "gazeta.uz", "podrobno.uz"}
 
+            def _domain_of_article(article: dict[str, Any]) -> str:
+                try:
+                    netloc = urlparse(str(article.get("url") or "")).netloc.lower()
+                    if netloc.startswith("www."):
+                        netloc = netloc[4:]
+                    return netloc
+                except Exception:
+                    return ""
+
+            regional_pool: list[dict[str, Any]] = []
+            seen_urls: set[str] = set()
+
+            # Prefer RSS articles from the UZ whitelist domains first
+            for a in rss_articles:
+                u = str(a.get("url") or "").strip().lower()
+                if not u or u in seen_urls:
+                    continue
+                if _domain_of_article(a) in uz_domains:
+                    regional_pool.append(a)
+                    seen_urls.add(u)
+
+            # Then include NewsAPI articles from UZ domains
+            for a in newsapi_articles:
+                u = str(a.get("url") or "").strip().lower()
+                if not u or u in seen_urls:
+                    continue
+                if _domain_of_article(a) in uz_domains:
+                    regional_pool.append(a)
+                    seen_urls.add(u)
+
+            # If still not enough regional items, relax and include other RSS/newsapi items as fallback
+            if len(regional_pool) < regional_count:
+                for a in rss_articles:
+                    u = str(a.get("url") or "").strip().lower()
+                    if not u or u in seen_urls:
+                        continue
+                    regional_pool.append(a)
+                    seen_urls.add(u)
+                    if len(regional_pool) >= regional_count:
+                        break
+                for a in newsapi_articles:
+                    u = str(a.get("url") or "").strip().lower()
+                    if not u or u in seen_urls:
+                        continue
+                    regional_pool.append(a)
+                    seen_urls.add(u)
+                    if len(regional_pool) >= regional_count:
+                        break
+
+            regional_selected = regional_pool[:regional_count]
+
+            # Build global pool from NewsAPI (excluding UZ domains and already selected)
+            global_pool: list[dict[str, Any]] = []
+            for a in newsapi_articles:
+                u = str(a.get("url") or "").strip().lower()
+                if not u or u in seen_urls:
+                    continue
+                if _domain_of_article(a) in uz_domains:
+                    continue
+                global_pool.append(a)
+                seen_urls.add(u)
+                if len(global_pool) >= global_count:
+                    break
+
+            # Fallback to RSS for global if needed
+            if len(global_pool) < global_count:
+                for a in rss_articles:
+                    u = str(a.get("url") or "").strip().lower()
+                    if not u or u in seen_urls:
+                        continue
+                    global_pool.append(a)
+                    seen_urls.add(u)
+                    if len(global_pool) >= global_count:
+                        break
+
+            merged_articles = _dedupe_articles_by_url_or_title(regional_selected + global_pool)
+            return {"articles": merged_articles}
+
+        # If regional query for non-UZ country: prefer RSS-only (avoid NewsAPI usage)
+        if is_regional_query:
+            merged_articles = _dedupe_articles_by_url_or_title(rss_articles)
+            return {"articles": merged_articles}
+
+        # Global query: combine NewsAPI results with RSS whitelist
         merged_articles = _dedupe_articles_by_url_or_title(rss_articles + newsapi_articles)
         return {"articles": merged_articles}
 
@@ -687,6 +895,7 @@ async def fetch_articles_for_topics(
             "domains": preferred_domains,
             "global_mix": bool(preferred_domains),
             "rss_whitelist": True,
+            "regional_only": bool(country_codes),
         },
     )
     payload = await get_or_set_json(cache_key, ttl_seconds=900, fetcher=_fetch)
