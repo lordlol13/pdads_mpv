@@ -1,0 +1,512 @@
+﻿  File "/app/.venv/lib/python3.13/site-packages/httpx/_transports/default.py", line 406, in aclose
+    await self._pool.aclose()
+  File "/app/.venv/lib/python3.13/site-packages/httpcore/_async/connection_pool.py", line 353, in aclose
+    self._loop.call_soon(self._call_connection_lost, None)
+    await self._close_connections(closing_connections)
+  File "/app/.venv/lib/python3.13/site-packages/httpcore/_async/connection_pool.py", line 345, in _close_connections
+    await connection.aclose()
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/.venv/lib/python3.13/site-packages/httpcore/_async/connection.py", line 173, in aclose
+    await self._connection.aclose()
+  File "/app/.venv/lib/python3.13/site-packages/httpcore/_async/http11.py", line 258, in aclose
+    await self._network_stream.aclose()
+  File "/app/.venv/lib/python3.13/site-packages/httpcore/_backends/anyio.py", line 53, in aclose
+    await self._stream.aclose()
+  File "/app/.venv/lib/python3.13/site-packages/anyio/streams/tls.py", line 236, in aclose
+    await self.transport_stream.aclose()
+  File "/app/.venv/lib/python3.13/site-packages/anyio/_backends/_asyncio.py", line 1344, in aclose
+    self._transport.close()
+    ~~~~~~~~~~~~~~~~~~~~~^^
+  File "/mise/installs/python/3.13.13/lib/python3.13/asyncio/selector_events.py", line 1216, in close
+    super().close()
+    ~~~~~~~~~~~~~^^
+  File "/mise/installs/python/3.13.13/lib/python3.13/asyncio/selector_events.py", line 869, in close
+  File "/mise/installs/python/3.13.13/lib/python3.13/asyncio/base_events.py", line 833, in call_soon
+    self._check_closed()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/mise/installs/python/3.13.13/lib/python3.13/asyncio/base_events.py", line 556, in _check_closed
+    raise RuntimeError('Event loop is closed')
+RuntimeError: Event loop is closed
+[2026-04-18 01:40:43,385: ERROR/MainProcess] Task exception was never retrieved
+future: <Task finished name='Task-2734' coro=<AsyncClient.aclose() done, defined at /app/.venv/lib/python3.13/site-packages/httpx/_client.py:1978> exception=RuntimeError('Event loop is closed')>
+Traceback (most recent call last):
+  File "/app/.venv/lib/python3.13/site-packages/httpx/_client.py", line 1985, in aclose
+  File "/app/.venv/lib/python3.13/site-packages/httpcore/_async/connection.py", line 173, in aclose
+    await self._transport.aclose()
+  File "/app/.venv/lib/python3.13/site-packages/httpx/_transports/default.py", line 406, in aclose
+    await self._pool.aclose()
+  File "/app/.venv/lib/python3.13/site-packages/httpcore/_async/connection_pool.py", line 353, in aclose
+    await self._close_connections(closing_connections)
+  File "/app/.venv/lib/python3.13/site-packages/httpcore/_async/connection_pool.py", line 345, in _close_connections
+    await connection.aclose()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/mise/installs/python/3.13.13/lib/python3.13/asyncio/base_events.py", line 556, in _check_closed
+    await self._connection.aclose()
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/.venv/lib/python3.13/site-packages/anyio/_backends/_asyncio.py", line 1344, in aclose
+  File "/app/.venv/lib/python3.13/site-packages/httpcore/_async/http11.py", line 258, in aclose
+    self._transport.close()
+    ~~~~~~~~~~~~~~~~~~~~~^^
+    await self._network_stream.aclose()
+  File "/mise/installs/python/3.13.13/lib/python3.13/asyncio/base_events.py", line 833, in call_soon
+  File "/app/.venv/lib/python3.13/site-packages/httpcore/_backends/anyio.py", line 53, in aclose
+    self._check_closed()
+  File "/mise/installs/python/3.13.13/lib/python3.13/asyncio/selector_events.py", line 1216, in close
+    super().close()
+    ~~~~~~~~~~~~~^^
+    await self._stream.aclose()
+  File "/mise/installs/python/3.13.13/lib/python3.13/asyncio/selector_events.py", line 869, in close
+  File "/app/.venv/lib/python3.13/site-packages/anyio/streams/tls.py", line 236, in aclose
+    self._loop.call_soon(self._call_connection_lost, None)
+    await self.transport_stream.aclose()
+    raise RuntimeError('Event loop is closed')
+  File "/app/.venv/lib/python3.13/site-packages/httpcore/_backends/anyio.py", line 53, in aclose
+RuntimeError: Event loop is closed
+  File "/app/.venv/lib/python3.13/site-packages/httpx/_client.py", line 1985, in aclose
+    await self._transport.aclose()
+[2026-04-18 01:40:43,387: ERROR/MainProcess] Task exception was never retrieved
+    await connection.aclose()
+  File "/app/.venv/lib/python3.13/site-packages/httpx/_transports/default.py", line 406, in aclose
+future: <Task finished name='Task-2735' coro=<AsyncClient.aclose() done, defined at /app/.venv/lib/python3.13/site-packages/httpx/_client.py:1978> exception=RuntimeError('Event loop is closed')>
+  File "/app/.venv/lib/python3.13/site-packages/httpcore/_async/connection.py", line 173, in aclose
+    await self._pool.aclose()
+Traceback (most recent call last):
+    await self._connection.aclose()
+  File "/app/.venv/lib/python3.13/site-packages/httpcore/_async/connection_pool.py", line 353, in aclose
+  File "/app/.venv/lib/python3.13/site-packages/httpcore/_async/http11.py", line 258, in aclose
+    await self._close_connections(closing_connections)
+    await self._network_stream.aclose()
+  File "/app/.venv/lib/python3.13/site-packages/httpcore/_async/connection_pool.py", line 345, in _close_connections
+    await self._stream.aclose()
+  File "/app/.venv/lib/python3.13/site-packages/anyio/streams/tls.py", line 236, in aclose
+    await self.transport_stream.aclose()
+  File "/app/.venv/lib/python3.13/site-packages/anyio/_backends/_asyncio.py", line 1344, in aclose
+    self._transport.close()
+    ~~~~~~~~~~~~~~~~~~~~~^^
+  File "/mise/installs/python/3.13.13/lib/python3.13/asyncio/selector_events.py", line 1216, in close
+    super().close()
+    ~~~~~~~~~~~~~^^
+  File "/mise/installs/python/3.13.13/lib/python3.13/asyncio/selector_events.py", line 869, in close
+    self._loop.call_soon(self._call_connection_lost, None)
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/mise/installs/python/3.13.13/lib/python3.13/asyncio/base_events.py", line 833, in call_soon
+    self._check_closed()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/mise/installs/python/3.13.13/lib/python3.13/asyncio/base_events.py", line 556, in _check_closed
+    raise RuntimeError('Event loop is closed')
+RuntimeError: Event loop is closed
+[2026-04-18 01:40:43,389: ERROR/MainProcess] Task exception was never retrieved
+Traceback (most recent call last):
+  File "/app/.venv/lib/python3.13/site-packages/httpx/_client.py", line 1985, in aclose
+    ~~~~~~~~~~~~~~~~~~~~~^^
+  File "/mise/installs/python/3.13.13/lib/python3.13/asyncio/selector_events.py", line 1216, in close
+    await self._pool.aclose()
+  File "/app/.venv/lib/python3.13/site-packages/httpcore/_async/connection_pool.py", line 353, in aclose
+    self._loop.call_soon(self._call_connection_lost, None)
+    await connection.aclose()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/mise/installs/python/3.13.13/lib/python3.13/asyncio/base_events.py", line 556, in _check_closed
+    await self._network_stream.aclose()
+  File "/app/.venv/lib/python3.13/site-packages/httpcore/_backends/anyio.py", line 53, in aclose
+future: <Task finished name='Task-2740' coro=<AsyncClient.aclose() done, defined at /app/.venv/lib/python3.13/site-packages/httpx/_client.py:1978> exception=RuntimeError('Event loop is closed')>
+Traceback (most recent call last):
+  File "/app/.venv/lib/python3.13/site-packages/anyio/_backends/_asyncio.py", line 1344, in aclose
+    await self._transport.aclose()
+  File "/app/.venv/lib/python3.13/site-packages/httpx/_transports/default.py", line 406, in aclose
+    super().close()
+    ~~~~~~~~~~~~~^^
+    await self._close_connections(closing_connections)
+  File "/mise/installs/python/3.13.13/lib/python3.13/asyncio/base_events.py", line 833, in call_soon
+    self._check_closed()
+    await self._connection.aclose()
+    raise RuntimeError('Event loop is closed')
+RuntimeError: Event loop is closed
+    await self._stream.aclose()
+[2026-04-18 01:40:49,161: INFO/MainProcess] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+[2026-04-18 01:40:49,440: INFO/MainProcess] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+Railway rate limit of 500 logs/sec reached for replica, update your application to reduce the logging rate. Messages dropped: 279
+[2026-04-18 01:40:55,351: INFO/MainProcess] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+[2026-04-18 01:40:55,921: INFO/MainProcess] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+[2026-04-18 01:41:01,905: INFO/MainProcess] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+[2026-04-18 01:41:05,297: INFO/MainProcess] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+[2026-04-18 01:41:05,747: INFO/MainProcess] HTTP Request: GET https://siliconangle.com/2026/04/16/ai-mode-chrome-adds-split-screen-view-enhance-web-search-experience/ "HTTP/1.1 200 OK"
+[2026-04-18 01:41:05,820: INFO/MainProcess] HTTP Request: GET https://newsapi.org/v2/everything?q=mode+chrome+adds+split+screen+view+enhance+the&qInTitle=mode+chrome+adds+split+screen&searchIn=title%2Cdescription&pageSize=16&sortBy=relevancy&apiKey=c658ccec76f94a83bbbef8584aab525f "HTTP/1.1 429 Too Many Requests"
+[2026-04-18 01:41:06,271: INFO/MainProcess] HTTP Request: POST https://api.openai.com/v1/embeddings "HTTP/1.1 200 OK"
+[2026-04-18 01:41:06,528: INFO/MainProcess] process_raw_news finished raw_news_id=201 result={'status': 'generated', 'raw_news_id': 201, 'ai_news_ids': [613, 613, 613, 613, 613, 613], 'personas': ['ai|student|tashkent|uz', 'health|student|tashkent|uz', 'technology|student|tashkent|uz', 'cs|student|tashkent|uz', 'dota|student|tashkent|uz', 'technology|ai engineer|tashkent|uz']}
+[2026-04-18 01:41:06,546: INFO/MainProcess] process_raw_news started raw_news_id=202 attempt=1
+[2026-04-18 01:41:06,057: INFO/MainProcess] HTTP Request: GET https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrnamespace=6&gsrlimit=12&gsrsearch=mode+chrome+adds+split+screen+view+enhance+the&prop=imageinfo&iiprop=url&iiurlwidth=1280&format=json&formatversion=2&origin=%2A "HTTP/1.1 403 Forbidden"
+[2026-04-18 01:41:12,789: INFO/MainProcess] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+[2026-04-18 01:41:13,305: INFO/MainProcess] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+[2026-04-18 01:41:19,565: INFO/MainProcess] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+[2026-04-18 01:41:21,540: INFO/MainProcess] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+[2026-04-18 01:41:26,895: INFO/MainProcess] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+[2026-04-18 01:41:28,326: INFO/MainProcess] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+[2026-04-18 01:41:28,524: INFO/MainProcess] HTTP Request: GET https://abcnews.com/US/death-rates-ice-detention-facilities-raise-concerns-health/story?id=132121020 "HTTP/1.1 200 OK"
+[2026-04-18 01:41:28,615: INFO/MainProcess] HTTP Request: GET https://newsapi.org/v2/everything?q=death+rates+ice+detention+facilities+raise+concerns+about&qInTitle=death+rates+ice+detention+facilities&searchIn=title%2Cdescription&pageSize=16&sortBy=relevancy&apiKey=c658ccec76f94a83bbbef8584aab525f "HTTP/1.1 429 Too Many Requests"
+[2026-04-18 01:41:28,646: ERROR/MainProcess] Task exception was never retrieved
+future: <Task finished name='Task-2775' coro=<AsyncClient.aclose() done, defined at /app/.venv/lib/python3.13/site-packages/httpx/_client.py:1978> exception=RuntimeError('Event loop is closed')>
+Traceback (most recent call last):
+  File "/app/.venv/lib/python3.13/site-packages/httpx/_client.py", line 1985, in aclose
+    await self._transport.aclose()
+  File "/app/.venv/lib/python3.13/site-packages/httpx/_transports/default.py", line 406, in aclose
+    await self._pool.aclose()
+  File "/app/.venv/lib/python3.13/site-packages/httpcore/_async/connection_pool.py", line 353, in aclose
+    await self._close_connections(closing_connections)
+  File "/app/.venv/lib/python3.13/site-packages/httpcore/_async/connection_pool.py", line 345, in _close_connections
+    await connection.aclose()
+    self._loop.call_soon(self._call_connection_lost, None)
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/.venv/lib/python3.13/site-packages/httpcore/_async/connection.py", line 173, in aclose
+  File "/mise/installs/python/3.13.13/lib/python3.13/asyncio/base_events.py", line 833, in call_soon
+    await self._connection.aclose()
+    self._check_closed()
+  File "/app/.venv/lib/python3.13/site-packages/httpcore/_async/http11.py", line 258, in aclose
+    await self._network_stream.aclose()
+  File "/app/.venv/lib/python3.13/site-packages/httpcore/_backends/anyio.py", line 53, in aclose
+    await self._stream.aclose()
+  File "/app/.venv/lib/python3.13/site-packages/anyio/streams/tls.py", line 236, in aclose
+    await self.transport_stream.aclose()
+  File "/app/.venv/lib/python3.13/site-packages/anyio/_backends/_asyncio.py", line 1344, in aclose
+    self._transport.close()
+    ~~~~~~~~~~~~~~~~~~~~~^^
+  File "/mise/installs/python/3.13.13/lib/python3.13/asyncio/selector_events.py", line 1216, in close
+    super().close()
+    ~~~~~~~~~~~~~^^
+  File "/mise/installs/python/3.13.13/lib/python3.13/asyncio/selector_events.py", line 869, in close
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/mise/installs/python/3.13.13/lib/python3.13/asyncio/base_events.py", line 556, in _check_closed
+    raise RuntimeError('Event loop is closed')
+RuntimeError: Event loop is closed
+[2026-04-18 01:41:28,665: INFO/MainProcess] HTTP Request: GET https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrnamespace=6&gsrlimit=12&gsrsearch=death+rates+ice+detention+facilities+raise+concerns+about&prop=imageinfo&iiprop=url&iiurlwidth=1280&format=json&formatversion=2&origin=%2A "HTTP/1.1 403 Forbidden"
+[2026-04-18 01:41:29,168: INFO/MainProcess] HTTP Request: POST https://api.openai.com/v1/embeddings "HTTP/1.1 200 OK"
+[2026-04-18 01:41:29,448: INFO/MainProcess] process_raw_news finished raw_news_id=202 result={'status': 'generated', 'raw_news_id': 202, 'ai_news_ids': [614, 614, 614, 614, 614, 614], 'personas': ['ai|student|tashkent|uz', 'health|student|tashkent|uz', 'technology|student|tashkent|uz', 'cs|student|tashkent|uz', 'dota|student|tashkent|uz', 'technology|ai engineer|tashkent|uz']}
+[2026-04-18 01:41:29,483: INFO/MainProcess] process_raw_news started raw_news_id=203 attempt=1
+[2026-04-18 01:41:35,422: INFO/MainProcess] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+[2026-04-18 01:41:35,750: INFO/MainProcess] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+[2026-04-18 01:41:41,874: INFO/MainProcess] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+[2026-04-18 01:41:42,858: INFO/MainProcess] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+[2026-04-18 01:41:48,134: INFO/MainProcess] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+[2026-04-18 01:41:49,482: INFO/MainProcess] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+[2026-04-18 01:41:49,688: INFO/MainProcess] HTTP Request: GET https://www.sciencealert.com/scientists-captured-light-in-a-trap-2000-times-thinner-than-a-human-hair "HTTP/1.1 200 OK"
+[2026-04-18 01:41:49,759: INFO/MainProcess] HTTP Request: GET https://newsapi.org/v2/everything?q=scientists+captured+light+trap+times+thinner+than+human&qInTitle=scientists+captured+light+trap+times&searchIn=title%2Cdescription&pageSize=16&sortBy=relevancy&apiKey=c658ccec76f94a83bbbef8584aab525f "HTTP/1.1 429 Too Many Requests"
+[2026-04-18 01:41:49,800: INFO/MainProcess] HTTP Request: GET https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrnamespace=6&gsrlimit=12&gsrsearch=scientists+captured+light+trap+times+thinner+than+human&prop=imageinfo&iiprop=url&iiurlwidth=1280&format=json&formatversion=2&origin=%2A "HTTP/1.1 403 Forbidden"
+  File "/app/.venv/lib/python3.13/site-packages/httpx/_transports/default.py", line 406, in aclose
+    await self._pool.aclose()
+  File "/app/.venv/lib/python3.13/site-packages/httpcore/_backends/anyio.py", line 53, in aclose
+  File "/app/.venv/lib/python3.13/site-packages/httpcore/_async/connection_pool.py", line 353, in aclose
+    await self._close_connections(closing_connections)
+  File "/app/.venv/lib/python3.13/site-packages/httpcore/_async/connection_pool.py", line 345, in _close_connections
+    await connection.aclose()
+  File "/app/.venv/lib/python3.13/site-packages/httpcore/_async/connection.py", line 173, in aclose
+    await self._connection.aclose()
+  File "/app/.venv/lib/python3.13/site-packages/httpcore/_async/http11.py", line 258, in aclose
+    await self._network_stream.aclose()
+[2026-04-18 01:41:50,981: INFO/MainProcess] HTTP Request: POST https://api.openai.com/v1/embeddings "HTTP/1.1 200 OK"
+[2026-04-18 01:41:50,983: ERROR/MainProcess] Task exception was never retrieved
+future: <Task finished name='Task-2805' coro=<AsyncClient.aclose() done, defined at /app/.venv/lib/python3.13/site-packages/httpx/_client.py:1978> exception=RuntimeError('Event loop is closed')>
+Traceback (most recent call last):
+  File "/app/.venv/lib/python3.13/site-packages/httpx/_client.py", line 1985, in aclose
+    await self._transport.aclose()
+    await self._stream.aclose()
+  File "/app/.venv/lib/python3.13/site-packages/anyio/streams/tls.py", line 236, in aclose
+    await self.transport_stream.aclose()
+  File "/app/.venv/lib/python3.13/site-packages/anyio/_backends/_asyncio.py", line 1344, in aclose
+    self._transport.close()
+    ~~~~~~~~~~~~~~~~~~~~~^^
+  File "/mise/installs/python/3.13.13/lib/python3.13/asyncio/selector_events.py", line 1216, in close
+    super().close()
+    ~~~~~~~~~~~~~^^
+  File "/mise/installs/python/3.13.13/lib/python3.13/asyncio/selector_events.py", line 869, in close
+    self._loop.call_soon(self._call_connection_lost, None)
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/mise/installs/python/3.13.13/lib/python3.13/asyncio/base_events.py", line 833, in call_soon
+    self._check_closed()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/mise/installs/python/3.13.13/lib/python3.13/asyncio/base_events.py", line 556, in _check_closed
+    raise RuntimeError('Event loop is closed')
+RuntimeError: Event loop is closed
+[2026-04-18 01:41:51,271: INFO/MainProcess] process_raw_news finished raw_news_id=203 result={'status': 'generated', 'raw_news_id': 203, 'ai_news_ids': [615, 615, 615, 615, 615, 615], 'personas': ['ai|student|tashkent|uz', 'health|student|tashkent|uz', 'technology|student|tashkent|uz', 'cs|student|tashkent|uz', 'dota|student|tashkent|uz', 'technology|ai engineer|tashkent|uz']}
+[2026-04-18 01:55:04,567: INFO/MainProcess] scheduled_ingestion tick started
+[2026-04-18 01:55:04,854: INFO/MainProcess] scheduled_ingestion tick finished result={'fetched': 13, 'queued': 0, 'personas': ['ai|student|tashkent|uz', 'health|student|tashkent|uz', 'technology|student|tashkent|uz', 'cs|student|tashkent|uz', 'dota|student|tashkent|uz', 'technology|ai engineer|tashkent|uz']}
+[2026-04-18 02:10:05,601: INFO/MainProcess] HTTP Request: GET https://rss.dw.com/rdf/rss-en-world "HTTP/1.1 200 OK"
+[2026-04-18 02:10:05,740: INFO/MainProcess] HTTP Request: GET https://kun.uz/news/rss "HTTP/1.1 200 OK"
+[2026-04-18 02:10:06,109: INFO/MainProcess] HTTP Request: GET https://www.gazeta.uz/rss/ "HTTP/1.1 403 Forbidden"
+[2026-04-18 02:10:06,760: INFO/MainProcess] HTTP Request: GET https://daryo.uz/feed "HTTP/1.1 301 Moved Permanently"
+[2026-04-18 02:10:07,241: INFO/MainProcess] HTTP Request: GET https://daryo.uz/ "HTTP/1.1 200 OK"
+[2026-04-18 02:10:07,739: INFO/MainProcess] HTTP Request: GET https://newsapi.org/v2/everything?q=health+OR+technology+OR+%22counter-strike%22+OR+%22counter+strike%22+OR+%22counter-strike+2%22+OR+cs2+OR+esports+OR+%22dota+2%22&sortBy=publishedAt&from=2026-04-11T02%3A10%3A07Z&to=2026-04-18T02%3A10%3A07Z&apiKey=c658ccec76f94a83bbbef8584aab525f&pageSize=12&domains=kun.uz%2Cgazeta.uz%2Cdaryo.uz%2Cuznews.uz "HTTP/1.1 429 Too Many Requests"
+[2026-04-18 02:10:04,564: INFO/MainProcess] scheduled_ingestion tick started
+[2026-04-18 02:10:04,906: INFO/MainProcess] HTTP Request: GET http://feeds.bbci.co.uk/news/world/rss.xml "HTTP/1.1 302 Moved Temporarily"
+[2026-04-18 02:10:04,920: INFO/MainProcess] HTTP Request: GET https://feeds.bbci.co.uk/news/world/rss.xml "HTTP/1.1 200 OK"
+[2026-04-18 02:10:04,936: INFO/MainProcess] HTTP Request: GET http://feeds.bbci.co.uk/news/technology/rss.xml "HTTP/1.1 302 Moved Temporarily"
+[2026-04-18 02:10:05,138: INFO/MainProcess] HTTP Request: GET https://feeds.bbci.co.uk/news/technology/rss.xml "HTTP/1.1 200 OK"
+[2026-04-18 02:10:05,267: INFO/MainProcess] HTTP Request: GET http://rss.cnn.com/rss/edition_world.rss "HTTP/1.1 200 OK"
+[2026-04-18 02:10:05,406: INFO/MainProcess] HTTP Request: GET http://rss.cnn.com/rss/edition.rss "HTTP/1.1 200 OK"
+2026-04-18T02:10:09.619258868Z [WARN] Attempt 1/3 failed for _make_requests: Client error '429 Too Many Requests' for url 'https://newsapi.org/v2/everything?q=health+OR+technology+OR+%22counter-strike%22+OR+%22counter+strike%22+OR+%22counter-strike+2%22+OR+cs2+OR+esports+OR+%22dota+2%22&sortBy=publishedAt&from=2026-04-11T02%3A10%3A07Z&to=2026-04-18T02%3A10%3A07Z&apiKey=c658ccec76f94a83bbbef8584aab525f&pageSize=12&domains=kun.uz%2Cgazeta.uz%2Cdaryo.uz%2Cuznews.uz'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429. Retrying in 2.4s... timestamp="2026-04-18T02:10:07.740612+00:00" correlation_id="app-startup" logger="app.backend.services.resilience_service" module="resilience_service" function="retry_async" line=101
+[2026-04-18 02:10:10,210: INFO/MainProcess] HTTP Request: GET https://newsapi.org/v2/everything?q=health+OR+technology+OR+%22counter-strike%22+OR+%22counter+strike%22+OR+%22counter-strike+2%22+OR+cs2+OR+esports+OR+%22dota+2%22&sortBy=publishedAt&from=2026-04-11T02%3A10%3A07Z&to=2026-04-18T02%3A10%3A07Z&apiKey=c658ccec76f94a83bbbef8584aab525f&pageSize=12&domains=kun.uz%2Cgazeta.uz%2Cdaryo.uz%2Cuznews.uz "HTTP/1.1 429 Too Many Requests"
+2026-04-18T02:10:10.521452556Z [WARN] Attempt 2/3 failed for _make_requests: Client error '429 Too Many Requests' for url 'https://newsapi.org/v2/everything?q=health+OR+technology+OR+%22counter-strike%22+OR+%22counter+strike%22+OR+%22counter-strike+2%22+OR+cs2+OR+esports+OR+%22dota+2%22&sortBy=publishedAt&from=2026-04-11T02%3A10%3A07Z&to=2026-04-18T02%3A10%3A07Z&apiKey=c658ccec76f94a83bbbef8584aab525f&pageSize=12&domains=kun.uz%2Cgazeta.uz%2Cdaryo.uz%2Cuznews.uz'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429. Retrying in 2.9s... timestamp="2026-04-18T02:10:10.210963+00:00" correlation_id="app-startup" logger="app.backend.services.resilience_service" module="resilience_service" function="retry_async" line=101
+[2026-04-18 02:10:13,098: INFO/MainProcess] HTTP Request: GET https://newsapi.org/v2/everything?q=health+OR+technology+OR+%22counter-strike%22+OR+%22counter+strike%22+OR+%22counter-strike+2%22+OR+cs2+OR+esports+OR+%22dota+2%22&sortBy=publishedAt&from=2026-04-11T02%3A10%3A07Z&to=2026-04-18T02%3A10%3A07Z&apiKey=c658ccec76f94a83bbbef8584aab525f&pageSize=12&domains=kun.uz%2Cgazeta.uz%2Cdaryo.uz%2Cuznews.uz "HTTP/1.1 429 Too Many Requests"
+2026-04-18T02:10:13.679835507Z [ERRO] All 3 attempts failed for _make_requests. Last error: Client error '429 Too Many Requests' for url 'https://newsapi.org/v2/everything?q=health+OR+technology+OR+%22counter-strike%22+OR+%22counter+strike%22+OR+%22counter-strike+2%22+OR+cs2+OR+esports+OR+%22dota+2%22&sortBy=publishedAt&from=2026-04-11T02%3A10%3A07Z&to=2026-04-18T02%3A10%3A07Z&apiKey=c658ccec76f94a83bbbef8584aab525f&pageSize=12&domains=kun.uz%2Cgazeta.uz%2Cdaryo.uz%2Cuznews.uz'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429 timestamp="2026-04-18T02:10:13.099334+00:00" correlation_id="app-startup" logger="app.backend.services.resilience_service" module="resilience_service" function="retry_async" line=112
+2026-04-18T02:10:13.679843995Z [ERRO] News API fetch failed after retries: Client error '429 Too Many Requests' for url 'https://newsapi.org/v2/everything?q=health+OR+technology+OR+%22counter-strike%22+OR+%22counter+strike%22+OR+%22counter-strike+2%22+OR+cs2+OR+esports+OR+%22dota+2%22&sortBy=publishedAt&from=2026-04-11T02%3A10%3A07Z&to=2026-04-18T02%3A10%3A07Z&apiKey=c658ccec76f94a83bbbef8584aab525f&pageSize=12&domains=kun.uz%2Cgazeta.uz%2Cdaryo.uz%2Cuznews.uz'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429 timestamp="2026-04-18T02:10:13.100334+00:00" correlation_id="unknown" logger="app.backend.services.news_api_service" module="logging" function="_log" line=208
+2026-04-18T02:10:13.684664154Z [INFO] Falling back to RSS sources timestamp="2026-04-18T02:10:13.100569+00:00" correlation_id="unknown" logger="app.backend.services.news_api_service" module="logging" function="_log" line=208
+[2026-04-18 02:10:13,312: INFO/MainProcess] scheduled_ingestion tick finished result={'fetched': 10, 'queued': 1, 'personas': ['ai|student|tashkent|uz', 'health|student|tashkent|uz', 'technology|student|tashkent|uz', 'cs|student|tashkent|uz', 'dota|student|tashkent|uz', 'technology|ai engineer|tashkent|uz']}
+[2026-04-18 02:10:13,336: INFO/MainProcess] process_raw_news started raw_news_id=204 attempt=1
+[2026-04-18 02:10:20,345: INFO/MainProcess] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+[2026-04-18 02:10:20,825: INFO/MainProcess] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+[2026-04-18 02:10:27,130: INFO/MainProcess] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+[2026-04-18 02:10:27,483: INFO/MainProcess] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+[2026-04-18 02:10:35,552: INFO/MainProcess] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+[2026-04-18 02:10:35,940: INFO/MainProcess] HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+[2026-04-18 02:10:36,153: INFO/MainProcess] HTTP Request: GET https://www.bbc.com/news/articles/cyv10e1d13po?at_medium=RSS&at_campaign=rss "HTTP/1.1 200 OK"
+[2026-04-18 02:10:36,242: INFO/MainProcess] HTTP Request: GET https://newsapi.org/v2/everything?q=white+house+and+anthropic+hold+productive+meeting+amid&qInTitle=white+house+and+anthropic+hold&searchIn=title%2Cdescription&pageSize=16&sortBy=relevancy&apiKey=c658ccec76f94a83bbbef8584aab525f "HTTP/1.1 429 Too Many Requests"
+[2026-04-18 02:10:36,312: INFO/MainProcess] HTTP Request: GET https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrnamespace=6&gsrlimit=12&gsrsearch=white+house+and+anthropic+hold+productive+meeting+amid&prop=imageinfo&iiprop=url&iiurlwidth=1280&format=json&formatversion=2&origin=%2A "HTTP/1.1 403 Forbidden"
+[2026-04-18 02:10:37,327: INFO/MainProcess] HTTP Request: POST https://api.openai.com/v1/embeddings "HTTP/1.1 200 OK"
+[2026-04-18 02:10:37,512: INFO/MainProcess] HTTP Request: GET https://www.bbc.com/news/articles/cyv10e1d13po?at_medium=RSS&at_campaign=rss "HTTP/1.1 200 OK"
+[2026-04-18 02:10:37,568: INFO/MainProcess] HTTP Request: GET https://newsapi.org/v2/everything?q=white+house+and+anthropic+hold+productive+meeting+amid&qInTitle=white+house+and+anthropic+hold&searchIn=title%2Cdescription&pageSize=16&sortBy=relevancy&apiKey=c658ccec76f94a83bbbef8584aab525f "HTTP/1.1 429 Too Many Requests"
+[2026-04-18 02:10:37,594: INFO/MainProcess] HTTP Request: GET https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrnamespace=6&gsrlimit=12&gsrsearch=white+house+and+anthropic+hold+productive+meeting+amid&prop=imageinfo&iiprop=url&iiurlwidth=1280&format=json&formatversion=2&origin=%2A "HTTP/1.1 403 Forbidden"
+[2026-04-18 02:10:38,719: INFO/MainProcess] HTTP Request: POST https://api.openai.com/v1/embeddings "HTTP/1.1 200 OK"
+[2026-04-18 02:10:38,904: INFO/MainProcess] HTTP Request: GET https://www.bbc.com/news/articles/cyv10e1d13po?at_medium=RSS&at_campaign=rss "HTTP/1.1 200 OK"
+[2026-04-18 02:10:38,966: INFO/MainProcess] HTTP Request: GET https://newsapi.org/v2/everything?q=white+house+and+anthropic+hold+productive+meeting+amid&qInTitle=white+house+and+anthropic+hold&searchIn=title%2Cdescription&pageSize=16&sortBy=relevancy&apiKey=c658ccec76f94a83bbbef8584aab525f "HTTP/1.1 429 Too Many Requests"
+[2026-04-18 02:10:38,992: INFO/MainProcess] HTTP Request: GET https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrnamespace=6&gsrlimit=12&gsrsearch=white+house+and+anthropic+hold+productive+meeting+amid&prop=imageinfo&iiprop=url&iiurlwidth=1280&format=json&formatversion=2&origin=%2A "HTTP/1.1 403 Forbidden"
+[2026-04-18 02:10:39,339: INFO/MainProcess] HTTP Request: POST https://api.openai.com/v1/embeddings "HTTP/1.1 200 OK"
+[2026-04-18 02:10:39,482: INFO/MainProcess] HTTP Request: GET https://www.bbc.com/news/articles/cyv10e1d13po?at_medium=RSS&at_campaign=rss "HTTP/1.1 200 OK"
+[2026-04-18 02:10:39,542: INFO/MainProcess] HTTP Request: GET https://newsapi.org/v2/everything?q=white+house+and+anthropic+hold+productive+meeting+amid&qInTitle=white+house+and+anthropic+hold&searchIn=title%2Cdescription&pageSize=16&sortBy=relevancy&apiKey=c658ccec76f94a83bbbef8584aab525f "HTTP/1.1 429 Too Many Requests"
+[2026-04-18 02:10:39,565: INFO/MainProcess] HTTP Request: GET https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrnamespace=6&gsrlimit=12&gsrsearch=white+house+and+anthropic+hold+productive+meeting+amid&prop=imageinfo&iiprop=url&iiurlwidth=1280&format=json&formatversion=2&origin=%2A "HTTP/1.1 403 Forbidden"
+[2026-04-18 02:10:39,812: INFO/MainProcess] HTTP Request: POST https://api.openai.com/v1/embeddings "HTTP/1.1 200 OK"
+[2026-04-18 02:10:40,031: INFO/MainProcess] HTTP Request: GET https://www.bbc.com/news/articles/cyv10e1d13po?at_medium=RSS&at_campaign=rss "HTTP/1.1 200 OK"
+[2026-04-18 02:10:40,091: INFO/MainProcess] HTTP Request: GET https://newsapi.org/v2/everything?q=white+house+and+anthropic+hold+productive+meeting+amid&qInTitle=white+house+and+anthropic+hold&searchIn=title%2Cdescription&pageSize=16&sortBy=relevancy&apiKey=c658ccec76f94a83bbbef8584aab525f "HTTP/1.1 429 Too Many Requests"
+[2026-04-18 02:10:40,117: INFO/MainProcess] HTTP Request: GET https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrnamespace=6&gsrlimit=12&gsrsearch=white+house+and+anthropic+hold+productive+meeting+amid&prop=imageinfo&iiprop=url&iiurlwidth=1280&format=json&formatversion=2&origin=%2A "HTTP/1.1 403 Forbidden"
+[2026-04-18 02:10:40,311: INFO/MainProcess] HTTP Request: POST https://api.openai.com/v1/embeddings "HTTP/1.1 200 OK"
+[2026-04-18 02:10:40,480: INFO/MainProcess] HTTP Request: GET https://newsapi.org/v2/everything?q=white+house+and+anthropic+hold+productive+meeting+amid&qInTitle=white+house+and+anthropic+hold&searchIn=title%2Cdescription&pageSize=16&sortBy=relevancy&apiKey=c658ccec76f94a83bbbef8584aab525f "HTTP/1.1 429 Too Many Requests"
+[2026-04-18 02:10:40,513: INFO/MainProcess] HTTP Request: GET https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrnamespace=6&gsrlimit=12&gsrsearch=white+house+and+anthropic+hold+productive+meeting+amid&prop=imageinfo&iiprop=url&iiurlwidth=1280&format=json&formatversion=2&origin=%2A "HTTP/1.1 403 Forbidden"
+[2026-04-18 02:10:40,963: INFO/MainProcess] HTTP Request: POST https://api.openai.com/v1/embeddings "HTTP/1.1 200 OK"
+[2026-04-18 02:10:41,073: INFO/MainProcess] process_raw_news finished raw_news_id=204 result={'status': 'generated', 'raw_news_id': 204, 'ai_news_ids': [616, 617, 618, 619, 620, 621], 'personas': ['ai|student|tashkent|uz', 'health|student|tashkent|uz', 'technology|student|tashkent|uz', 'cs|student|tashkent|uz', 'dota|student|tashkent|uz', 'technology|ai engineer|tashkent|uz']}
+[2026-04-18 02:25:04,567: INFO/MainProcess] scheduled_ingestion tick started
+[2026-04-18 02:25:04,813: INFO/MainProcess] scheduled_ingestion tick finished result={'fetched': 10, 'queued': 0, 'personas': ['ai|student|tashkent|uz', 'health|student|tashkent|uz', 'technology|student|tashkent|uz', 'cs|student|tashkent|uz', 'dota|student|tashkent|uz', 'technology|ai engineer|tashkent|uz']}
+[2026-04-18 02:40:04,566: INFO/MainProcess] scheduled_ingestion tick started
+[2026-04-18 02:40:04,784: INFO/MainProcess] HTTP Request: GET http://feeds.bbci.co.uk/news/world/rss.xml "HTTP/1.1 302 Moved Temporarily"
+[2026-04-18 02:40:04,798: INFO/MainProcess] HTTP Request: GET https://feeds.bbci.co.uk/news/world/rss.xml "HTTP/1.1 200 OK"
+[2026-04-18 02:40:04,806: ERROR/MainProcess] Task exception was never retrieved
+future: <Task finished name='Task-2889' coro=<AsyncClient.aclose() done, defined at /app/.venv/lib/python3.13/site-packages/httpx/_client.py:1978> exception=RuntimeError('Event loop is closed')>
+Traceback (most recent call last):
+  File "/app/.venv/lib/python3.13/site-packages/httpx/_client.py", line 1985, in aclose
+    await self._transport.aclose()
+  File "/app/.venv/lib/python3.13/site-packages/httpx/_transports/default.py", line 406, in aclose
+    await self._pool.aclose()
+  File "/app/.venv/lib/python3.13/site-packages/httpcore/_async/connection_pool.py", line 353, in aclose
+    await self._close_connections(closing_connections)
+  File "/app/.venv/lib/python3.13/site-packages/httpcore/_async/connection_pool.py", line 345, in _close_connections
+    await connection.aclose()
+  File "/app/.venv/lib/python3.13/site-packages/httpcore/_async/connection.py", line 173, in aclose
+    await self._connection.aclose()
+  File "/app/.venv/lib/python3.13/site-packages/httpcore/_async/http11.py", line 258, in aclose
+    await self._stream.aclose()
+  File "/app/.venv/lib/python3.13/site-packages/anyio/streams/tls.py", line 236, in aclose
+    await self.transport_stream.aclose()
+  File "/app/.venv/lib/python3.13/site-packages/anyio/_backends/_asyncio.py", line 1344, in aclose
+    ~~~~~~~~~~~~~^^
+  File "/mise/installs/python/3.13.13/lib/python3.13/asyncio/selector_events.py", line 869, in close
+    self._loop.call_soon(self._call_connection_lost, None)
+    self._transport.close()
+    raise RuntimeError('Event loop is closed')
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ~~~~~~~~~~~~~~~~~~~~~^^
+    self._check_closed()
+  File "/mise/installs/python/3.13.13/lib/python3.13/asyncio/base_events.py", line 833, in call_soon
+RuntimeError: Event loop is closed
+  File "/mise/installs/python/3.13.13/lib/python3.13/asyncio/selector_events.py", line 1216, in close
+[2026-04-18 02:40:04,808: ERROR/MainProcess] Task exception was never retrieved
+    ~~~~~~~~~~~~~~~~~~^^
+    await self._network_stream.aclose()
+    super().close()
+  File "/mise/installs/python/3.13.13/lib/python3.13/asyncio/base_events.py", line 556, in _check_closed
+  File "/app/.venv/lib/python3.13/site-packages/httpcore/_backends/anyio.py", line 53, in aclose
+future: <Task finished name='Task-2890' coro=<AsyncClient.aclose() done, defined at /app/.venv/lib/python3.13/site-packages/httpx/_client.py:1978> exception=RuntimeError('Event loop is closed')>
+Traceback (most recent call last):
+  File "/app/.venv/lib/python3.13/site-packages/httpx/_client.py", line 1985, in aclose
+    await self._transport.aclose()
+  File "/app/.venv/lib/python3.13/site-packages/httpx/_transports/default.py", line 406, in aclose
+    await self._pool.aclose()
+  File "/app/.venv/lib/python3.13/site-packages/httpcore/_async/connection_pool.py", line 353, in aclose
+    await self._close_connections(closing_connections)
+  File "/app/.venv/lib/python3.13/site-packages/httpcore/_async/connection_pool.py", line 345, in _close_connections
+    await connection.aclose()
+  File "/app/.venv/lib/python3.13/site-packages/httpcore/_async/connection.py", line 173, in aclose
+    await self._connection.aclose()
+  File "/app/.venv/lib/python3.13/site-packages/httpcore/_async/http11.py", line 258, in aclose
+    await self._network_stream.aclose()
+  File "/app/.venv/lib/python3.13/site-packages/httpcore/_backends/anyio.py", line 53, in aclose
+    await self._stream.aclose()
+  File "/app/.venv/lib/python3.13/site-packages/anyio/streams/tls.py", line 236, in aclose
+    await self.transport_stream.aclose()
+  File "/app/.venv/lib/python3.13/site-packages/anyio/_backends/_asyncio.py", line 1344, in aclose
+    self._transport.close()
+    ~~~~~~~~~~~~~~~~~~~~~^^
+Traceback (most recent call last):
+  File "/mise/installs/python/3.13.13/lib/python3.13/asyncio/selector_events.py", line 1216, in close
+    super().close()
+  File "/app/.venv/lib/python3.13/site-packages/httpx/_client.py", line 1985, in aclose
+    ~~~~~~~~~~~~~^^
+  File "/mise/installs/python/3.13.13/lib/python3.13/asyncio/selector_events.py", line 869, in close
+    self._loop.call_soon(self._call_connection_lost, None)
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/mise/installs/python/3.13.13/lib/python3.13/asyncio/base_events.py", line 833, in call_soon
+    self._check_closed()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/mise/installs/python/3.13.13/lib/python3.13/asyncio/base_events.py", line 556, in _check_closed
+    raise RuntimeError('Event loop is closed')
+RuntimeError: Event loop is closed
+[2026-04-18 02:40:04,812: ERROR/MainProcess] Task exception was never retrieved
+future: <Task finished name='Task-2891' coro=<AsyncClient.aclose() done, defined at /app/.venv/lib/python3.13/site-packages/httpx/_client.py:1978> exception=RuntimeError('Event loop is closed')>
+    await self._transport.aclose()
+  File "/app/.venv/lib/python3.13/site-packages/httpx/_transports/default.py", line 406, in aclose
+    await self._pool.aclose()
+  File "/app/.venv/lib/python3.13/site-packages/anyio/streams/tls.py", line 236, in aclose
+  File "/app/.venv/lib/python3.13/site-packages/httpcore/_async/connection_pool.py", line 353, in aclose
+    await self.transport_stream.aclose()
+    await self._close_connections(closing_connections)
+  File "/app/.venv/lib/python3.13/site-packages/anyio/_backends/_asyncio.py", line 1344, in aclose
+  File "/app/.venv/lib/python3.13/site-packages/httpcore/_async/connection_pool.py", line 345, in _close_connections
+    self._transport.close()
+    await connection.aclose()
+    ~~~~~~~~~~~~~~~~~~~~~^^
+  File "/app/.venv/lib/python3.13/site-packages/httpcore/_async/connection.py", line 173, in aclose
+  File "/mise/installs/python/3.13.13/lib/python3.13/asyncio/selector_events.py", line 1216, in close
+    await self._connection.aclose()
+  File "/app/.venv/lib/python3.13/site-packages/httpcore/_async/http11.py", line 258, in aclose
+    await self._network_stream.aclose()
+  File "/app/.venv/lib/python3.13/site-packages/httpcore/_backends/anyio.py", line 53, in aclose
+    await self._stream.aclose()
+    super().close()
+    ~~~~~~~~~~~~~^^
+  File "/mise/installs/python/3.13.13/lib/python3.13/asyncio/selector_events.py", line 869, in close
+    self._loop.call_soon(self._call_connection_lost, None)
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/mise/installs/python/3.13.13/lib/python3.13/asyncio/base_events.py", line 833, in call_soon
+    self._check_closed()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/mise/installs/python/3.13.13/lib/python3.13/asyncio/base_events.py", line 556, in _check_closed
+    raise RuntimeError('Event loop is closed')
+RuntimeError: Event loop is closed
+[2026-04-18 02:40:04,814: ERROR/MainProcess] Task exception was never retrieved
+future: <Task finished name='Task-2892' coro=<AsyncClient.aclose() done, defined at /app/.venv/lib/python3.13/site-packages/httpx/_client.py:1978> exception=RuntimeError('Event loop is closed')>
+Traceback (most recent call last):
+  File "/app/.venv/lib/python3.13/site-packages/httpx/_client.py", line 1985, in aclose
+    await self._transport.aclose()
+  File "/app/.venv/lib/python3.13/site-packages/httpx/_transports/default.py", line 406, in aclose
+    await self._pool.aclose()
+  File "/app/.venv/lib/python3.13/site-packages/httpcore/_async/connection_pool.py", line 353, in aclose
+    await self._close_connections(closing_connections)
+  File "/app/.venv/lib/python3.13/site-packages/httpcore/_async/connection_pool.py", line 345, in _close_connections
+    await connection.aclose()
+  File "/app/.venv/lib/python3.13/site-packages/httpcore/_async/connection.py", line 173, in aclose
+    await self._connection.aclose()
+  File "/app/.venv/lib/python3.13/site-packages/httpcore/_async/http11.py", line 258, in aclose
+    await self._network_stream.aclose()
+  File "/app/.venv/lib/python3.13/site-packages/httpcore/_backends/anyio.py", line 53, in aclose
+    await self._stream.aclose()
+  File "/app/.venv/lib/python3.13/site-packages/anyio/streams/tls.py", line 236, in aclose
+    await self.transport_stream.aclose()
+  File "/app/.venv/lib/python3.13/site-packages/anyio/_backends/_asyncio.py", line 1344, in aclose
+    self._transport.close()
+    ~~~~~~~~~~~~~~~~~~~~~^^
+  File "/mise/installs/python/3.13.13/lib/python3.13/asyncio/selector_events.py", line 1216, in close
+    super().close()
+    ~~~~~~~~~~~~~^^
+  File "/mise/installs/python/3.13.13/lib/python3.13/asyncio/selector_events.py", line 869, in close
+    self._loop.call_soon(self._call_connection_lost, None)
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/mise/installs/python/3.13.13/lib/python3.13/asyncio/base_events.py", line 833, in call_soon
+    self._check_closed()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/mise/installs/python/3.13.13/lib/python3.13/asyncio/base_events.py", line 556, in _check_closed
+    raise RuntimeError('Event loop is closed')
+RuntimeError: Event loop is closed
+[2026-04-18 02:40:04,817: ERROR/MainProcess] Task exception was never retrieved
+future: <Task finished name='Task-2893' coro=<AsyncClient.aclose() done, defined at /app/.venv/lib/python3.13/site-packages/httpx/_client.py:1978> exception=RuntimeError('Event loop is closed')>
+Traceback (most recent call last):
+  File "/app/.venv/lib/python3.13/site-packages/httpx/_client.py", line 1985, in aclose
+    await self._transport.aclose()
+  File "/app/.venv/lib/python3.13/site-packages/httpx/_transports/default.py", line 406, in aclose
+    await self._pool.aclose()
+  File "/app/.venv/lib/python3.13/site-packages/httpcore/_async/connection_pool.py", line 353, in aclose
+    await self._close_connections(closing_connections)
+  File "/app/.venv/lib/python3.13/site-packages/httpcore/_async/connection_pool.py", line 345, in _close_connections
+    await connection.aclose()
+  File "/app/.venv/lib/python3.13/site-packages/httpcore/_async/connection.py", line 173, in aclose
+    ~~~~~~~~~~~~~^^
+  File "/mise/installs/python/3.13.13/lib/python3.13/asyncio/selector_events.py", line 869, in close
+    self._loop.call_soon(self._call_connection_lost, None)
+    await self._connection.aclose()
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/.venv/lib/python3.13/site-packages/httpcore/_async/http11.py", line 258, in aclose
+  File "/mise/installs/python/3.13.13/lib/python3.13/asyncio/base_events.py", line 833, in call_soon
+    await self._network_stream.aclose()
+    self._check_closed()
+  File "/app/.venv/lib/python3.13/site-packages/httpcore/_backends/anyio.py", line 53, in aclose
+    ~~~~~~~~~~~~~~~~~~^^
+    await self._stream.aclose()
+  File "/app/.venv/lib/python3.13/site-packages/anyio/streams/tls.py", line 236, in aclose
+  File "/mise/installs/python/3.13.13/lib/python3.13/asyncio/base_events.py", line 556, in _check_closed
+    await self.transport_stream.aclose()
+  File "/app/.venv/lib/python3.13/site-packages/anyio/_backends/_asyncio.py", line 1344, in aclose
+    self._transport.close()
+    ~~~~~~~~~~~~~~~~~~~~~^^
+  File "/mise/installs/python/3.13.13/lib/python3.13/asyncio/selector_events.py", line 1216, in close
+    super().close()
+    raise RuntimeError('Event loop is closed')
+RuntimeError: Event loop is closed
+[2026-04-18 02:40:04,825: INFO/MainProcess] HTTP Request: GET http://feeds.bbci.co.uk/news/technology/rss.xml "HTTP/1.1 302 Moved Temporarily"
+[2026-04-18 02:40:04,916: INFO/MainProcess] HTTP Request: GET https://feeds.bbci.co.uk/news/technology/rss.xml "HTTP/1.1 200 OK"
+[2026-04-18 02:40:05,039: INFO/MainProcess] HTTP Request: GET http://rss.cnn.com/rss/edition_world.rss "HTTP/1.1 200 OK"
+[2026-04-18 02:40:05,155: INFO/MainProcess] HTTP Request: GET http://rss.cnn.com/rss/edition.rss "HTTP/1.1 200 OK"
+[2026-04-18 02:40:05,306: INFO/MainProcess] HTTP Request: GET https://rss.dw.com/rdf/rss-en-world "HTTP/1.1 200 OK"
+[2026-04-18 02:40:05,442: INFO/MainProcess] HTTP Request: GET https://kun.uz/news/rss "HTTP/1.1 200 OK"
+[2026-04-18 02:40:05,808: INFO/MainProcess] HTTP Request: GET https://www.gazeta.uz/rss/ "HTTP/1.1 403 Forbidden"
+[2026-04-18 02:40:06,450: INFO/MainProcess] HTTP Request: GET https://daryo.uz/feed "HTTP/1.1 301 Moved Permanently"
+[2026-04-18 02:40:06,973: INFO/MainProcess] HTTP Request: GET https://daryo.uz/ "HTTP/1.1 200 OK"
+[2026-04-18 02:40:07,447: INFO/MainProcess] HTTP Request: GET https://newsapi.org/v2/everything?q=health+OR+technology+OR+%22counter-strike%22+OR+%22counter+strike%22+OR+%22counter-strike+2%22+OR+cs2+OR+esports+OR+%22dota+2%22&sortBy=publishedAt&from=2026-04-11T02%3A40%3A07Z&to=2026-04-18T02%3A40%3A07Z&apiKey=c658ccec76f94a83bbbef8584aab525f&pageSize=12&domains=kun.uz%2Cgazeta.uz%2Cdaryo.uz%2Cuznews.uz "HTTP/1.1 429 Too Many Requests"
+2026-04-18T02:40:09.243285829Z [WARN] Attempt 1/3 failed for _make_requests: Client error '429 Too Many Requests' for url 'https://newsapi.org/v2/everything?q=health+OR+technology+OR+%22counter-strike%22+OR+%22counter+strike%22+OR+%22counter-strike+2%22+OR+cs2+OR+esports+OR+%22dota+2%22&sortBy=publishedAt&from=2026-04-11T02%3A40%3A07Z&to=2026-04-18T02%3A40%3A07Z&apiKey=c658ccec76f94a83bbbef8584aab525f&pageSize=12&domains=kun.uz%2Cgazeta.uz%2Cdaryo.uz%2Cuznews.uz'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429. Retrying in 2.5s... timestamp="2026-04-18T02:40:07.448788+00:00" correlation_id="app-startup" logger="app.backend.services.resilience_service" module="resilience_service" function="retry_async" line=101
+[2026-04-18 02:40:10,016: INFO/MainProcess] HTTP Request: GET https://newsapi.org/v2/everything?q=health+OR+technology+OR+%22counter-strike%22+OR+%22counter+strike%22+OR+%22counter-strike+2%22+OR+cs2+OR+esports+OR+%22dota+2%22&sortBy=publishedAt&from=2026-04-11T02%3A40%3A07Z&to=2026-04-18T02%3A40%3A07Z&apiKey=c658ccec76f94a83bbbef8584aab525f&pageSize=12&domains=kun.uz%2Cgazeta.uz%2Cdaryo.uz%2Cuznews.uz "HTTP/1.1 429 Too Many Requests"
+2026-04-18T02:40:10.257054162Z [WARN] Attempt 2/3 failed for _make_requests: Client error '429 Too Many Requests' for url 'https://newsapi.org/v2/everything?q=health+OR+technology+OR+%22counter-strike%22+OR+%22counter+strike%22+OR+%22counter-strike+2%22+OR+cs2+OR+esports+OR+%22dota+2%22&sortBy=publishedAt&from=2026-04-11T02%3A40%3A07Z&to=2026-04-18T02%3A40%3A07Z&apiKey=c658ccec76f94a83bbbef8584aab525f&pageSize=12&domains=kun.uz%2Cgazeta.uz%2Cdaryo.uz%2Cuznews.uz'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429. Retrying in 5.7s... timestamp="2026-04-18T02:40:10.017015+00:00" correlation_id="app-startup" logger="app.backend.services.resilience_service" module="resilience_service" function="retry_async" line=101
+[2026-04-18 02:40:15,731: INFO/MainProcess] HTTP Request: GET https://newsapi.org/v2/everything?q=health+OR+technology+OR+%22counter-strike%22+OR+%22counter+strike%22+OR+%22counter-strike+2%22+OR+cs2+OR+esports+OR+%22dota+2%22&sortBy=publishedAt&from=2026-04-11T02%3A40%3A07Z&to=2026-04-18T02%3A40%3A07Z&apiKey=c658ccec76f94a83bbbef8584aab525f&pageSize=12&domains=kun.uz%2Cgazeta.uz%2Cdaryo.uz%2Cuznews.uz "HTTP/1.1 429 Too Many Requests"
+2026-04-18T02:40:16.222187224Z [ERRO] All 3 attempts failed for _make_requests. Last error: Client error '429 Too Many Requests' for url 'https://newsapi.org/v2/everything?q=health+OR+technology+OR+%22counter-strike%22+OR+%22counter+strike%22+OR+%22counter-strike+2%22+OR+cs2+OR+esports+OR+%22dota+2%22&sortBy=publishedAt&from=2026-04-11T02%3A40%3A07Z&to=2026-04-18T02%3A40%3A07Z&apiKey=c658ccec76f94a83bbbef8584aab525f&pageSize=12&domains=kun.uz%2Cgazeta.uz%2Cdaryo.uz%2Cuznews.uz'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429 timestamp="2026-04-18T02:40:15.731700+00:00" correlation_id="app-startup" logger="app.backend.services.resilience_service" module="resilience_service" function="retry_async" line=112
+2026-04-18T02:40:16.222195198Z [ERRO] News API fetch failed after retries: Client error '429 Too Many Requests' for url 'https://newsapi.org/v2/everything?q=health+OR+technology+OR+%22counter-strike%22+OR+%22counter+strike%22+OR+%22counter-strike+2%22+OR+cs2+OR+esports+OR+%22dota+2%22&sortBy=publishedAt&from=2026-04-11T02%3A40%3A07Z&to=2026-04-18T02%3A40%3A07Z&apiKey=c658ccec76f94a83bbbef8584aab525f&pageSize=12&domains=kun.uz%2Cgazeta.uz%2Cdaryo.uz%2Cuznews.uz'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429 timestamp="2026-04-18T02:40:15.731962+00:00" correlation_id="unknown" logger="app.backend.services.news_api_service" module="logging" function="_log" line=208
+2026-04-18T02:40:16.222860341Z [INFO] Falling back to RSS sources timestamp="2026-04-18T02:40:15.732091+00:00" correlation_id="unknown" logger="app.backend.services.news_api_service" module="logging" function="_log" line=208
+[2026-04-18 02:40:15,778: INFO/MainProcess] scheduled_ingestion tick finished result={'fetched': 10, 'queued': 0, 'personas': ['ai|student|tashkent|uz', 'health|student|tashkent|uz', 'technology|student|tashkent|uz', 'cs|student|tashkent|uz', 'dota|student|tashkent|uz', 'technology|ai engineer|tashkent|uz']}
+[2026-04-18 02:55:04,567: INFO/MainProcess] scheduled_ingestion tick started
+[2026-04-18 02:55:04,814: INFO/MainProcess] scheduled_ingestion tick finished result={'fetched': 10, 'queued': 0, 'personas': ['ai|student|tashkent|uz', 'health|student|tashkent|uz', 'technology|student|tashkent|uz', 'cs|student|tashkent|uz', 'dota|student|tashkent|uz', 'technology|ai engineer|tashkent|uz']}
+[2026-04-18 03:10:04,564: INFO/MainProcess] scheduled_ingestion tick started
+[2026-04-18 03:10:04,774: INFO/MainProcess] HTTP Request: GET http://feeds.bbci.co.uk/news/world/rss.xml "HTTP/1.1 302 Moved Temporarily"
+[2026-04-18 03:10:04,785: INFO/MainProcess] HTTP Request: GET https://feeds.bbci.co.uk/news/world/rss.xml "HTTP/1.1 200 OK"
+[2026-04-18 03:10:04,793: INFO/MainProcess] HTTP Request: GET http://feeds.bbci.co.uk/news/technology/rss.xml "HTTP/1.1 302 Moved Temporarily"
+[2026-04-18 03:10:04,800: INFO/MainProcess] HTTP Request: GET https://feeds.bbci.co.uk/news/technology/rss.xml "HTTP/1.1 200 OK"
+[2026-04-18 03:10:04,932: INFO/MainProcess] HTTP Request: GET http://rss.cnn.com/rss/edition_world.rss "HTTP/1.1 200 OK"
+[2026-04-18 03:10:05,062: INFO/MainProcess] HTTP Request: GET http://rss.cnn.com/rss/edition.rss "HTTP/1.1 200 OK"
+[2026-04-18 03:10:05,211: INFO/MainProcess] HTTP Request: GET https://rss.dw.com/rdf/rss-en-world "HTTP/1.1 200 OK"
+[2026-04-18 03:10:05,337: INFO/MainProcess] HTTP Request: GET https://kun.uz/news/rss "HTTP/1.1 200 OK"
+[2026-04-18 03:10:05,709: INFO/MainProcess] HTTP Request: GET https://www.gazeta.uz/rss/ "HTTP/1.1 403 Forbidden"
+[2026-04-18 03:10:06,679: INFO/MainProcess] HTTP Request: GET https://daryo.uz/feed "HTTP/1.1 301 Moved Permanently"
+[2026-04-18 03:10:07,226: INFO/MainProcess] HTTP Request: GET https://daryo.uz/ "HTTP/1.1 200 OK"
+[2026-04-18 03:10:07,705: INFO/MainProcess] HTTP Request: GET https://newsapi.org/v2/everything?q=health+OR+technology+OR+%22counter-strike%22+OR+%22counter+strike%22+OR+%22counter-strike+2%22+OR+cs2+OR+esports+OR+%22dota+2%22&sortBy=publishedAt&from=2026-04-11T03%3A10%3A07Z&to=2026-04-18T03%3A10%3A07Z&apiKey=c658ccec76f94a83bbbef8584aab525f&pageSize=12&domains=kun.uz%2Cgazeta.uz%2Cdaryo.uz%2Cuznews.uz "HTTP/1.1 429 Too Many Requests"
+2026-04-18T03:10:08.844233851Z [WARN] Attempt 1/3 failed for _make_requests: Client error '429 Too Many Requests' for url 'https://newsapi.org/v2/everything?q=health+OR+technology+OR+%22counter-strike%22+OR+%22counter+strike%22+OR+%22counter-strike+2%22+OR+cs2+OR+esports+OR+%22dota+2%22&sortBy=publishedAt&from=2026-04-11T03%3A10%3A07Z&to=2026-04-18T03%3A10%3A07Z&apiKey=c658ccec76f94a83bbbef8584aab525f&pageSize=12&domains=kun.uz%2Cgazeta.uz%2Cdaryo.uz%2Cuznews.uz'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429. Retrying in 1.6s... timestamp="2026-04-18T03:10:07.706598+00:00" correlation_id="app-startup" logger="app.backend.services.resilience_service" module="resilience_service" function="retry_async" line=101
+[2026-04-18 03:10:09,281: INFO/MainProcess] HTTP Request: GET https://newsapi.org/v2/everything?q=health+OR+technology+OR+%22counter-strike%22+OR+%22counter+strike%22+OR+%22counter-strike+2%22+OR+cs2+OR+esports+OR+%22dota+2%22&sortBy=publishedAt&from=2026-04-11T03%3A10%3A07Z&to=2026-04-18T03%3A10%3A07Z&apiKey=c658ccec76f94a83bbbef8584aab525f&pageSize=12&domains=kun.uz%2Cgazeta.uz%2Cdaryo.uz%2Cuznews.uz "HTTP/1.1 429 Too Many Requests"
+2026-04-18T03:10:09.739045701Z [WARN] Attempt 2/3 failed for _make_requests: Client error '429 Too Many Requests' for url 'https://newsapi.org/v2/everything?q=health+OR+technology+OR+%22counter-strike%22+OR+%22counter+strike%22+OR+%22counter-strike+2%22+OR+cs2+OR+esports+OR+%22dota+2%22&sortBy=publishedAt&from=2026-04-11T03%3A10%3A07Z&to=2026-04-18T03%3A10%3A07Z&apiKey=c658ccec76f94a83bbbef8584aab525f&pageSize=12&domains=kun.uz%2Cgazeta.uz%2Cdaryo.uz%2Cuznews.uz'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429. Retrying in 2.4s... timestamp="2026-04-18T03:10:09.282336+00:00" correlation_id="app-startup" logger="app.backend.services.resilience_service" module="resilience_service" function="retry_async" line=101
+[2026-04-18 03:10:11,676: INFO/MainProcess] HTTP Request: GET https://newsapi.org/v2/everything?q=health+OR+technology+OR+%22counter-strike%22+OR+%22counter+strike%22+OR+%22counter-strike+2%22+OR+cs2+OR+esports+OR+%22dota+2%22&sortBy=publishedAt&from=2026-04-11T03%3A10%3A07Z&to=2026-04-18T03%3A10%3A07Z&apiKey=c658ccec76f94a83bbbef8584aab525f&pageSize=12&domains=kun.uz%2Cgazeta.uz%2Cdaryo.uz%2Cuznews.uz "HTTP/1.1 429 Too Many Requests"
+2026-04-18T03:10:11.784546951Z [ERRO] All 3 attempts failed for _make_requests. Last error: Client error '429 Too Many Requests' for url 'https://newsapi.org/v2/everything?q=health+OR+technology+OR+%22counter-strike%22+OR+%22counter+strike%22+OR+%22counter-strike+2%22+OR+cs2+OR+esports+OR+%22dota+2%22&sortBy=publishedAt&from=2026-04-11T03%3A10%3A07Z&to=2026-04-18T03%3A10%3A07Z&apiKey=c658ccec76f94a83bbbef8584aab525f&pageSize=12&domains=kun.uz%2Cgazeta.uz%2Cdaryo.uz%2Cuznews.uz'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429 timestamp="2026-04-18T03:10:11.676751+00:00" correlation_id="app-startup" logger="app.backend.services.resilience_service" module="resilience_service" function="retry_async" line=112
+2026-04-18T03:10:11.784554884Z [ERRO] News API fetch failed after retries: Client error '429 Too Many Requests' for url 'https://newsapi.org/v2/everything?q=health+OR+technology+OR+%22counter-strike%22+OR+%22counter+strike%22+OR+%22counter-strike+2%22+OR+cs2+OR+esports+OR+%22dota+2%22&sortBy=publishedAt&from=2026-04-11T03%3A10%3A07Z&to=2026-04-18T03%3A10%3A07Z&apiKey=c658ccec76f94a83bbbef8584aab525f&pageSize=12&domains=kun.uz%2Cgazeta.uz%2Cdaryo.uz%2Cuznews.uz'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429 timestamp="2026-04-18T03:10:11.677003+00:00" correlation_id="unknown" logger="app.backend.services.news_api_service" module="logging" function="_log" line=208
+2026-04-18T03:10:11.787635855Z [INFO] Falling back to RSS sources timestamp="2026-04-18T03:10:11.677604+00:00" correlation_id="unknown" logger="app.backend.services.news_api_service" module="logging" function="_log" line=208
+[2026-04-18 03:10:11,720: INFO/MainProcess] scheduled_ingestion tick finished result={'fetched': 10, 'queued': 0, 'personas': ['ai|student|tashkent|uz', 'health|student|tashkent|uz', 'technology|student|tashkent|uz', 'cs|student|tashkent|uz', 'dota|student|tashkent|uz', 'technology|ai engineer|tashkent|uz']}
+[2026-04-18 03:25:04,567: INFO/MainProcess] scheduled_ingestion tick started
+[2026-04-18 03:25:04,832: INFO/MainProcess] scheduled_ingestion tick finished result={'fetched': 10, 'queued': 0, 'personas': ['ai|student|tashkent|uz', 'health|student|tashkent|uz', 'technology|student|tashkent|uz', 'cs|student|tashkent|uz', 'dota|student|tashkent|uz', 'technology|ai engineer|tashkent|uz']}
