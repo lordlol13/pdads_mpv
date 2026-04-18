@@ -17,6 +17,7 @@ from app.backend.services.media_service import (
     canonical_image_key,
     visual_image_key,
     extract_image_dimensions,
+    _normalize_candidate_url,
 )
 from app.backend.services.news_api_service import fetch_articles_for_topics
 from app.backend.services.recommender_service import refresh_ai_news_embedding
@@ -440,6 +441,22 @@ async def _upsert_ai_news_for_persona(
         source_url=str(raw_row.get("source_url") or "").strip() or None,
         source_image_url=str(raw_row.get("image_url") or "").strip() or None,
     )
+    # Ensure fetched URLs are normalized (add scheme, resolve protocol-less URLs)
+    try:
+        normalized_list: list[str] = []
+        for raw in media_urls:
+            try:
+                norm = _normalize_candidate_url(raw)
+            except Exception:
+                norm = None
+            if norm:
+                normalized_list.append(norm)
+            elif raw:
+                normalized_list.append(str(raw).strip())
+        media_urls = normalized_list
+    except Exception:
+        # best-effort: leave original list if normalization fails
+        pass
     media_urls = _enforce_cross_post_unique_images(
         media_urls,
         reserved_image_keys,
