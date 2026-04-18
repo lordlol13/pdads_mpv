@@ -381,9 +381,11 @@ def _article_matches_topics(article: dict[str, Any], topics: list[str]) -> bool:
 def _rss_sources_for_country_codes(country_codes: list[str] | None) -> list[dict[str, Any]]:
     normalized_codes = {code.strip().upper() for code in (country_codes or []) if code and code.strip()}
 
-    selected = list(RSS_SOURCE_WHITELIST["global"])
-    # Uzbekistan sources are explicitly prioritized for this product's target audience.
-    selected.extend(RSS_SOURCE_WHITELIST["uz"])
+    # If a specific country is requested, prefer that country's sources first.
+    if "UZ" in normalized_codes:
+        selected = list(RSS_SOURCE_WHITELIST["uz"]) + list(RSS_SOURCE_WHITELIST["global"])
+    else:
+        selected = list(RSS_SOURCE_WHITELIST["global"]) + list(RSS_SOURCE_WHITELIST["uz"])
 
     deduped: list[dict[str, Any]] = []
     seen_urls: set[str] = set()

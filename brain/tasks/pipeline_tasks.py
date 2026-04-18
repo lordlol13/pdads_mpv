@@ -67,7 +67,7 @@ async def _load_reserved_image_keys(session: AsyncSession, exclude_ai_news_id: i
 
 def _build_unique_fallback_image_url(seed_base: str, index: int) -> str:
     digest = hashlib.sha1(f"{seed_base}:{index}".encode("utf-8")).hexdigest()[:16]
-    return f"https://picsum.photos/seed/{digest}/1280/720"
+    return f"https://picsum.photos/seed/{digest}/1600/900"
 
 
 def _enforce_cross_post_unique_images(
@@ -84,8 +84,9 @@ def _enforce_cross_post_unique_images(
         url = str(raw_url or "").strip()
         if not url:
             continue
-        key = canonical_image_key(url)
-        if not key or key in reserved_keys or key in local_keys:
+        # Prefer canonical key, but fall back to visual key or raw url when canonical is missing
+        key = canonical_image_key(url) or visual_image_key(url) or url
+        if key in reserved_keys or key in local_keys:
             continue
         unique_urls.append(url)
         local_keys.add(key)
@@ -107,7 +108,7 @@ def _enforce_cross_post_unique_images(
     return unique_urls[:limit]
 
 
-def _collapse_quality_variants(urls: list[str], prefer_indices: tuple[int, int] = (2, 3)) -> list[str]:
+def _collapse_quality_variants(urls: list[str], prefer_indices: tuple[int, int] = (0, 1)) -> list[str]:
     """Collapse multiple URLs that are the same image in different qualities.
 
     Groups URLs by their visual key (size/quality placeholders). For groups
@@ -146,8 +147,8 @@ def _collapse_quality_variants(urls: list[str], prefer_indices: tuple[int, int] 
             if entries_with_area:
                 chosen = max(entries_with_area, key=lambda e: e.get("area") or 0)
             else:
-                # fallback: choose last (most likely highest-quality variant)
-                chosen = max(entries, key=lambda e: e.get("idx") or 0)
+                # fallback: choose first (preserve original ranking when no dimensions available)
+                chosen = min(entries, key=lambda e: e.get("idx") or 0)
 
         if chosen:
             result.append(chosen["url"])
@@ -421,12 +422,13 @@ async def _upsert_ai_news_for_persona(
     existing_id = existing_result.scalar_one_or_none()
 
     reserved_image_keys = await _load_reserved_image_keys(session, exclude_ai_news_id=existing_id)
+    # Build media query prioritizing article title and category over persona/topic
     media_query = " ".join(
         part
         for part in [
             str(raw_row.get("title") or "").strip(),
-            topic,
             str(raw_row.get("category") or "").strip().lower() or None,
+            topic,
             geo,
             country_code.lower() if country_code else None,
         ]
@@ -445,9 +447,9 @@ async def _upsert_ai_news_for_persona(
         seed_base=f"{raw_row['id']}:{target_persona}",
     )
     # Collapse multiple quality variants of the same image into a single best-quality URL.
-    # Prefer items that appear at positions 3 or 4 (0-based indices 2 or 3) when present.
+    # Prefer items that appear early in the original ranking (0-based indices 0 or 1) when present.
     try:
-        media_urls = _collapse_quality_variants(media_urls, prefer_indices=(2, 3))
+        media_urls = _collapse_quality_variants(media_urls, prefer_indices=(0, 1))
     except Exception:
         # If quality collapse fails for any reason, fall back to original media_urls
         pass

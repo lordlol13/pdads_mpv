@@ -47,8 +47,8 @@ LOW_QUALITY_IMAGE_TERMS = (
     "sprite",
 )
 
-MIN_PUBLIC_IMAGE_WIDTH = 1024
-MIN_PUBLIC_IMAGE_HEIGHT = 576
+MIN_PUBLIC_IMAGE_WIDTH = 720
+MIN_PUBLIC_IMAGE_HEIGHT = 400
 MIN_PUBLIC_IMAGE_AREA = MIN_PUBLIC_IMAGE_WIDTH * MIN_PUBLIC_IMAGE_HEIGHT
 
 NEWS_IMAGE_BLOCKLIST_TERMS = (
@@ -560,6 +560,19 @@ def _rank_image_urls(
                 score += 6.0
             elif width_hint >= 720:
                 score += 2.0
+        # area-based boost when both dims available
+        if width_hint is not None and height_hint is not None:
+            area = width_hint * height_hint
+            if area >= 1600 * 900:
+                score += 12.0
+            elif area >= 1280 * 720:
+                score += 8.0
+            elif area >= 1024 * 576:
+                score += 5.0
+        elif width_hint is None and height_hint is None:
+            # unknown size: larger penalty
+            score -= 6.0
+
         if height_hint is not None:
             if height_hint >= 900:
                 score += 8.0
@@ -569,8 +582,6 @@ def _rank_image_urls(
                 score += 3.0
             elif height_hint >= MIN_PUBLIC_IMAGE_HEIGHT:
                 score += 1.5
-        else:
-            score -= 4.0
 
         token_hits_url = 0
         token_hits_context = 0
@@ -649,7 +660,50 @@ def _filter_topical_candidates(
     return filtered
 
 
+def _select_best_per_visual_group(values: list[str]) -> list[str]:
+    """Group by visual key and pick the best variant per group.
+
+    Prefer the variant with the largest parsed area (width*height). If no
+    dimensions are available, prefer the earliest/highest-ranked variant.
+    """
+    if not values:
+        return []
+
+    groups_order: list[str] = []
+    groups: dict[str, list[dict[str, Any]]] = {}
+
+    for idx, value in enumerate(values):
+        candidate = str(value or "").strip()
+        if not candidate:
+            continue
+        vkey = _visual_image_key(candidate)
+        if vkey not in groups:
+            groups[vkey] = []
+            groups_order.append(vkey)
+
+        w, h = _extract_dimension_hints(candidate)
+        area = (w or 0) * (h or 0) if (w and h) else None
+        groups[vkey].append({"idx": idx, "url": candidate, "area": area})
+
+    result: list[str] = []
+    for vkey in groups_order:
+        entries = groups.get(vkey, [])
+        if not entries:
+            continue
+        entries_with_area = [e for e in entries if e.get("area")]
+        if entries_with_area:
+            chosen = max(entries_with_area, key=lambda e: e.get("area") or 0)
+        else:
+            chosen = min(entries, key=lambda e: e.get("idx") or 0)
+        result.append(chosen["url"])
+
+    return result
+
+
 def _collect_unique_urls(values: list[str], limit: int) -> list[str]:
+    # First collapse visual variants choosing the best per visual key
+    values = _select_best_per_visual_group(values)
+
     result: list[str] = []
     seen_keys: set[str] = set()
     seen_visual_keys: set[str] = set()
@@ -711,7 +765,7 @@ def _fallback_image_urls(topic: str, start_sig: int, count: int) -> list[str]:
     if not pool:
         fallback_topic = re.sub(r"\s+", "-", topic.strip().lower()) or "news"
         return [
-            f"https://picsum.photos/seed/{fallback_topic}-{idx}/1280/720"
+            f"https://picsum.photos/seed/{fallback_topic}-{idx}/1600/900"
             for idx in range(start_sig, start_sig + count)
         ]
 
