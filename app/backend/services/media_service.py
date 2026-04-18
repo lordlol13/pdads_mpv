@@ -333,11 +333,23 @@ def _normalize_candidate_url(raw_url: str | None, base_url: str | None = None) -
     if value.startswith("//"):
         value = f"https:{value}"
 
+    # Resolve relative values against `base_url` when provided.
     if base_url and not re.match(r"^https?://", value, flags=re.IGNORECASE):
         value = urljoin(base_url, value)
 
+    # If value still lacks scheme, attempt to infer `https://` for host-like values.
     if not re.match(r"^https?://", value, flags=re.IGNORECASE):
-        return None
+        maybe = "https://" + value.lstrip("/")
+        parsed_maybe = urlparse(maybe)
+        # Accept only if parsed netloc looks like a real host (contains a dot) or is localhost/IP
+        if parsed_maybe.netloc and (
+            "." in parsed_maybe.netloc
+            or parsed_maybe.netloc == "localhost"
+            or re.match(r"^\d+\.\d+\.\d+\.\d+$", parsed_maybe.netloc)
+        ):
+            value = maybe
+        else:
+            return None
 
     return value
 
