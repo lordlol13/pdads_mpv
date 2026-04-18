@@ -34,7 +34,19 @@ async def get_async_client() -> httpx.AsyncClient:
     key = id(loop) if loop is not None else 0
     client = _CLIENTS.get(key)
     if client is None or client.is_closed:
-        client = httpx.AsyncClient(timeout=_default_timeout(), limits=_default_limits(), follow_redirects=True)
+        # Use a common browser User-Agent to avoid simple bot blocks from some RSS endpoints.
+        client = httpx.AsyncClient(
+            timeout=_default_timeout(),
+            limits=_default_limits(),
+            follow_redirects=True,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/115.0.0.0 Safari/537.36"
+                )
+            },
+        )
         _CLIENTS[key] = client
     return client
 
