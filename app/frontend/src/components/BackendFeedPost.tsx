@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
+﻿import { useEffect, useMemo, useRef, useState, type MouseEvent, type WheelEvent } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Bookmark, ChevronLeft, ChevronRight, Heart, MessageCircle, Play, Send, Share2 } from 'lucide-react';
 import { useDoubleTap } from 'use-double-tap';
@@ -178,6 +178,7 @@ export function BackendFeedPost({
   const [isPlaying, setIsPlaying] = useState(true);
   const [showHeartAnimation, setShowHeartAnimation] = useState(false);
   const [showDescription, setShowDescription] = useState(false);
+  const [descHeight, setDescHeight] = useState<number>(60); // viewport height in vh for modal
   const [showComments, setShowComments] = useState(false);
   const [showShareSheet, setShowShareSheet] = useState(false);
   const [newComment, setNewComment] = useState('');
@@ -303,6 +304,18 @@ export function BackendFeedPost({
     if (hasVideo) {
       setIsPlaying((previous) => !previous);
     }
+  };
+
+  const handleDescWheel = (e: WheelEvent) => {
+    // Adjust modal height with mouse wheel when hovering the handle
+    e.stopPropagation();
+    e.preventDefault();
+    const delta = e.deltaY;
+    const step = e.shiftKey ? 10 : 5; // larger step when holding Shift
+    setDescHeight((prev) => {
+      const next = prev - (delta > 0 ? step : -step);
+      return Math.max(30, Math.min(95, Math.round(next)));
+    });
   };
 
   const handleAddComment = async () => {
@@ -547,10 +560,19 @@ export function BackendFeedPost({
               animate={{ y: 0 }}
               exit={{ y: '100%' }}
               transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-              className="absolute bottom-0 left-0 w-full bg-zinc-950 rounded-t-[24px] md:rounded-t-[32px] p-4 md:p-8 z-[70] border-t border-white/5"
+              style={{ height: `${descHeight}vh` }}
+              className="absolute bottom-0 left-0 w-full bg-zinc-950 rounded-t-[24px] md:rounded-t-[32px] p-4 md:p-8 z-[70] border-t border-white/5 flex flex-col"
             >
-              <div className="w-12 h-1.5 bg-zinc-700 rounded-full mx-auto mb-8" />
-              <div className="space-y-6">
+              <div className="flex items-center justify-center gap-2 mb-4">
+                <div
+                  className="w-12 h-1.5 bg-zinc-700 rounded-full"
+                  onWheel={handleDescWheel}
+                  title="Прокрутите колесом для изменения высоты модалки"
+                />
+                <span className="text-xs text-zinc-500">{descHeight}vh</span>
+              </div>
+
+              <div className="flex-1 overflow-y-auto space-y-6">
                 <div className="flex items-center gap-4">
                   <div className="w-12 h-12 bg-zinc-800 rounded-full border border-white/10" />
                   <div>
