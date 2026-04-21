@@ -36,7 +36,33 @@ def upgrade() -> None:
     if bind.dialect.name == "sqlite":
         op.create_index("uq_raw_news_source_url", "raw_news", ["source_url"], unique=True)
     else:
-        # PostgreSQL supports CREATE INDEX IF NOT EXISTS
+        # PostgreSQL: first clean up duplicates (keep newest by created_at),
+        # reassign referencing `ai_news` rows to the kept id, then create unique index.
+        # This prevents migration failure when the DB already contains duplicate source_url values.
+        op.execute("""
+        DO $$
+        DECLARE
+            rec RECORD;
+            keep_id INT;
+            ids INT[];
+        BEGIN
+            FOR rec IN
+                SELECT source_url, array_agg(id ORDER BY coalesce(created_at, to_timestamp(0)) DESC, id DESC) AS ids
+                FROM raw_news
+                WHERE source_url IS NOT NULL
+                GROUP BY source_url
+                HAVING COUNT(*) > 1
+            LOOP
+                ids := rec.ids;
+                keep_id := ids[1];
+                -- Reassign ai_news to the kept raw_news id
+                UPDATE ai_news SET raw_news_id = keep_id WHERE raw_news_id = ANY(ids) AND raw_news_id <> keep_id;
+                -- Delete duplicate raw_news rows (keep the chosen one)
+                DELETE FROM raw_news WHERE id = ANY(ids) AND id <> keep_id;
+            END LOOP;
+        END$$;
+        """)
+
         op.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_raw_news_source_url ON raw_news (source_url)")
 
 
