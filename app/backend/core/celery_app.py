@@ -37,4 +37,9 @@ celery_app.conf.beat_schedule = {
         "task": "brain.scheduled_cleanup_ai_products",
         "schedule": settings.SCHEDULER_CLEANUP_INTERVAL_HOURS * 60 * 60,
     }
+    ,
+    "scheduled-feed-ingestion-every-15-minutes": {
+        "task": "brain.scheduled_feed_ingestion",
+        "schedule": settings.SCHEDULER_INTERVAL_MINUTES * 60,
+    }
 }

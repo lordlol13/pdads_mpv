@@ -7,12 +7,19 @@ Usage: railway run python scripts/check_user_match_for_ai_news.py 491
 import os
 import sys
 import asyncio
+import argparse
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy import text
 
 async def main():
     ai_id = int(sys.argv[1]) if len(sys.argv) > 1 else 491
+    parser = argparse.ArgumentParser(description="Показывает статистику совпадений пользователей по фильтрам target_persona.")
+    parser.add_argument("ai_news_id", type=int, nargs="?", default=491, help="ID новости в таблице ai_news")
+    args = parser.parse_args()
+    
+    ai_id = args.ai_news_id
     db_url = os.environ.get("DATABASE_URL")
+
     if not db_url:
         print("DATABASE_URL is not set in environment.")
         return 2

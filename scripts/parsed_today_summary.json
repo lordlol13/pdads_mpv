@@ -1,0 +1,146 @@
+{
+  "counts": {
+    "https://podrobno.uz/": 104,
+    "https://daryo.uz/": 52,
+    "https://kun.uz/": 46,
+    "https://gazeta.uz/ru/": 87,
+    "https://uznews.uz/": 44
+  },
+  "examples": {
+    "https://podrobno.uz/": [
+      {
+        "url": "https://podrobno.uz/",
+        "title": "Новости Узбекистана сегодня - Агентство новостей Podrobno.uz",
+        "published_at": "2026-04-19T18:15:00+05:00"
+      },
+      {
+        "url": "https://podrobno.uz/cat/",
+        "title": "Новости",
+        "published_at": "2026-04-19T15:25:00+05:00"
+      },
+      {
+        "url": "https://podrobno.uz/cat/calche/",
+        "title": "Культура Узбекистана",
+        "published_at": "2026-04-19T12:40:00+05:00"
+      },
+      {
+        "url": "https://podrobno.uz/cat/podrobno/",
+        "title": "Туризм в Узбекистане",
+        "published_at": "2026-04-19T13:53:00+05:00"
+      },
+      {
+        "url": "https://podrobno.uz/cat/proisshestviya/",
+        "title": "Происшествия в Узбекистане, новости Узбекистана сегодня",
+        "published_at": "2026-04-19T10:50:00+05:00"
+      }
+    ],
+    "https://daryo.uz/": [
+      {
+        "url": "https://daryo.uz/2026/04/19/toshkentning-yangihayot-tumanidagi-ishlab-chiqarish-korxonasida-yongin-chiqdi",
+        "title": "Toshkentning Yangihayot tumanidagi ishlab chiqarish korxonasida yong‘in chiqdi",
+        "published_at": "2026-04-19T17:06:00+05:00"
+      },
+      {
+        "url": "https://daryo.uz/2026/04/19/u-rahbar-odam-qachon-ilm-qiladi-ozfa-prezidenti-mansabdorlarning-tezkor-ilmiy-daraja-olishini-tanqid-qildi",
+        "title": "“U rahbar odam qachon ilm qiladi?” — OʻzFA prezidenti mansabdorlarning “tezkor” ilmiy daraja olishini tanqid qildi",
+        "published_at": "2026-04-19T19:11:00+05:00"
+      },
+      {
+        "url": "https://daryo.uz/2026/04/17/toshkent-yuragida-yangi-ifoda",
+        "title": "Etéra – Toshkent yuragida yangi ifoda",
+        "published_at": "2026-04-19T19:30:00+05:00"
+      },
+      {
+        "url": "https://daryo.uz/2026/04/19/trampning-maslahatchilari-ziddiyatli-bayonotlari-sabab-undan-intervyularni-kamaytirishni-soramoqda-wsj",
+        "title": "Trampning maslahatchilari ziddiyatli bayonotlari sabab undan intervyularni kamaytirishni so‘ramoqda — WSJ",
+        "published_at": "2026-04-19T19:43:00+05:00"
+      },
+      {
+        "url": "https://daryo.uz/2026/04/18/adm-va-taewoong-logistika-xabini-ishga-tushirmoqda-asosiy-etibor-e-commerce-va-mintaqaning-yangi-iqtisodiyotiga",
+        "title": "ADM va Taewoong logistika xabini ishga tushirmoqda: asosiy e’tibor e-commerce va mintaqaning yangi iqtisodiyotiga",
+        "published_at": "2026-04-19T10:30:00+05:00"
+      }
+    ],
+    "https://kun.uz/": [
+      {
+        "url": "https://kun.uz/news/audio/list",
+        "title": "Audio xabarlar",
+        "published_at": "2026-04-19T00:00:00+05:00"
+      },
+      {
+        "url": "https://kun.uz/news/list?f=photo",
+        "title": "Fotoyangiliklar",
+        "published_at": "2026-04-19T16:47:00+05:00"
+      },
+      {
+        "url": "https://kun.uz/news/actual",
+        "title": "Dolzarb xabarlar",
+        "published_at": "2026-04-19T17:58:00+05:00"
+      },
+      {
+        "url": "https://kun.uz/news/list?f=video",
+        "title": "Video yangiliklar",
+        "published_at": "2026-04-19T18:55:00+05:00"
+      },
+      {
+        "url": "https://kun.uz/news/editors-choice",
+        "title": "",
+        "published_at": "2026-04-19T20:39:00+05:00"
+      }
+    ],
+    "https://gazeta.uz/ru/": [
+      {
+        "url": "https://gazeta.uz/ru/politics/",
+        "title": "Политика | Страница 1 – Gazeta",
+        "published_at": "2026-04-19T18:19:00+05:00"
+      },
+      {
+        "url": "https://gazeta.uz/ru/society/",
+        "title": "Общество | Страница 1 – Gazeta",
+        "published_at": "2026-04-19T11:38:00+05:00"
+      },
+      {
+        "url": "https://gazeta.uz/ru/economy/",
+        "title": "Экономика | Страница 1 – Gazeta",
+        "published_at": "2026-04-19T18:45:00+05:00"
+      },
+      {
+        "url": "https://gazeta.uz/ru/culture/",
+        "title": "Культура | Страница 1 – Gazeta",
+        "published_at": "2026-04-19T13:04:00+05:00"
+      },
+      {
+        "url": "https://gazeta.uz/ru/sport/",
+        "title": "Спорт | Страница 1 – Gazeta",
+        "published_at": "2026-04-19T14:13:00+05:00"
+      }
+    ],
+    "https://uznews.uz/": [
+      {
+        "url": "https://uznews.uz/news",
+        "title": "Новости Узбекистана - UzNews.uz",
+        "published_at": "2026-04-19T10:10:00+05:00"
+      },
+      {
+        "url": "https://uznews.uz/uz",
+        "title": "Ўзбекистон янгиликлари   - UzNews.uz",
+        "published_at": "2026-04-19T18:20:00+05:00"
+      },
+      {
+        "url": "https://uznews.uz/ru/news/109031",
+        "title": "«Дети заражаются новым штаммом COVID-19 «Цикада» чаще» - в СЭС прокомментировали сообщения о мутации вируса - UzNews.uz",
+        "published_at": "2026-04-19T10:02:00+05:00"
+      },
+      {
+        "url": "https://uznews.uz/ru/news/109038",
+        "title": "Экс-глава Узметкомбината Дилшод Ахмедов объявлен в международный розыск - UzNews.uz",
+        "published_at": "2026-04-19T11:50:00+05:00"
+      },
+      {
+        "url": "https://uznews.uz/ru/news/109058",
+        "title": "В Ташкенте и других городах ощущалось землетрясение силой до 3 баллов - UzNews.uz",
+        "published_at": "2026-04-19T08:20:00+05:00"
+      }
+    ]
+  }
+}

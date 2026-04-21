@@ -5,118 +5,190 @@
 ![Celery](https://img.shields.io/badge/Celery-Distributed-orange)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15-blue)
 
-Personalized news platform with asynchronous AI pipeline, recommendation ranking, and production-focused observability.
+Кратко: персонализированная платформа новостей с асинхронным пайплайном, обработкой через Celery и интеграцией LLM.
 
-## Architecture Diagram
+---
 
-```mermaid
-flowchart LR
-		A[News API / RSS Sources] --> B[Ingestion API]
-		B --> C[(raw_news)]
-		C --> D[Celery Pipeline]
-		D --> E[LLM Generation<br/>Primary + Fallback]
-		E --> F[(ai_news)]
-		F --> G[Feed Service + Recommender]
-		G --> H[(user_feed + interactions + feed_feature_log)]
-		H --> I[FastAPI /feed]
-		I --> J[Frontend]
+## Содержание
 
-		K[Redis] --> D
-		K --> G
-		L[Health & Metrics] --> I
+- [Быстрый старт](#быстрый-старт)
+- [Запуск сервисов](#запуск-сервисов)
+- [Инжест (парсер)](#инжест-parser)
+  - [Ручной запуск](#ручной-запуск)
+  - [Dry-run (без записи в БД)](#dry-run)
+  - [Показать примеры (samples)](#показать-примеры)
+- [Продакшен-настройки по умолчанию](#продакшен-настройки-по-умолчанию)
+- [Полезные скрипты](#полезные-скрипты)
+- [Отладка и частые проблемы](#отладка-и-частые-проблемы)
+- [Файлы и точки входа](#файлы-и-точки-входа)
+- [Разработка и тестирование](#разработка-и-тестирование)
+
+---
+
+## Быстрый старт
+
+1. Создайте и активируйте виртуальное окружение.
+
+PowerShell:
+```powershell
+& .venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
 ```
 
-## Pipeline Flow
+Bash / WSL:
+```bash
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+```
 
-1. Ingestion stores raw content in `raw_news`.
-2. Celery task `brain.process_raw_news` processes each raw item.
-3. LLM service generates persona-specific AI variants with retry/cache/fallback.
-4. Results are saved to `ai_news` and added to `user_feed`.
-5. Recommender ranks feed by similarity, engagement, and freshness.
-6. Feed requests are logged as impressions for quality analytics.
+2. Скопируйте пример окружения и заполните переменные (обязательно `DATABASE_URL`, `REDIS_URL`, `CELERY_BROKER_URL`, `CELERY_RESULT_BACKEND`, ключи LLM):
 
-## Tech Stack
+```powershell
+Copy-Item .env.example .env
+# отредактируйте .env
+```
 
-- Backend: FastAPI, SQLAlchemy Async, Alembic
-- Queue/Workers: Celery + Redis
-- Data: PostgreSQL (SQLite-compatible fallback in several paths)
-- AI: LLM generation with fallback chain
-- Frontend: React + Vite
-- Testing: Pytest
-
-## Features
-
-- Async ingestion + background processing
-- LLM resilience: retry, rate limit, cache, fallback
-- Personalized ranking with embeddings and engagement signals
-- Health checks: liveness/readiness/system
-- Production metrics:
-	- Recommendation: CTR, average time spent, recommendation accuracy
-	- Pipeline: failed tasks, latency, retry count, pending queue
-
-## Monitoring Endpoints
-
-- `GET /api/health/live`
-- `GET /api/health/ready`
-- `GET /api/health/system`
-- `GET /api/health/metrics`
-- `GET /api/health/metrics/recommendations`
-- `GET /api/health/metrics/pipeline`
-
-## Demo
-
-- Frontend demo (Vercel): set your URL here after deployment
-	- `https://<your-project>.vercel.app`
-- Local demo:
-	1. Start backend + worker + beat
-	2. Start frontend (`npm run dev` in `app/frontend`)
-	3. Open frontend and use demo credentials
-
-Demo credentials:
-- Email: `demo@example.com`
-- Password: `Demo12345!`
-
-## Quick Start
-
-1. Create and activate virtual environment.
-2. Configure `.env` at minimum:
-	 - `DATABASE_URL`
-	 - `REDIS_URL`
-	 - `CELERY_BROKER_URL`
-	 - `CELERY_RESULT_BACKEND`
-	 - LLM API key(s)
-3. Run migrations:
+3. Примените миграции:
 
 ```bash
 alembic upgrade head
 ```
 
-4. Start backend:
+4. Запустите backend:
 
 ```bash
 uvicorn app.backend.main:app --reload
 ```
 
-5. Start Celery worker:
+---
+
+## Запуск сервисов
+
+Celery worker:
 
 ```bash
 python -m celery -A app.backend.core.celery_app:celery_app worker --loglevel=info --pool=solo
 ```
 
-6. Start Celery beat:
+Celery beat:
 
 ```bash
 python -m celery -A app.backend.core.celery_app:celery_app beat --loglevel=info
 ```
 
-7. Optional smoke test:
+Настройте процессы в продакшене через Supervisor / systemd / контейнеры, в зависимости от инфраструктуры.
 
-```bash
-python scripts/smoke_test.py --base-url http://127.0.0.1:8000
+Для локального тестирования Celery-тасков синхронно (без отдельного worker):
+
+PowerShell:
+```powershell
+$env:CELERY_TASK_ALWAYS_EAGER = 'true'
+python -c "from brain.tasks.pipeline_tasks import scheduled_feed_ingestion; print(scheduled_feed_ingestion())"
 ```
 
-## Production Notes
+Bash:
+```bash
+CELERY_TASK_ALWAYS_EAGER=true python -c "from brain.tasks.pipeline_tasks import scheduled_feed_ingestion; print(scheduled_feed_ingestion())"
+```
 
-- Heavy LLM operations are executed in pipeline tasks, not per user request.
-- Feed endpoint is optimized for serving ranked content, not generating it.
-- Keep retry/fallback settings tuned in `app/backend/core/config.py`.
+---
+
+## Инжест (parser)
+
+Парсер реализован в `app/backend/services/feed_fetcher.py`. Он поддерживает:
+- чтение RSS (через `feedparser`)
+- скрейпинг фронт-страниц и извлечение текста/изображений (BeautifulSoup, site_parsers)
+- выбор лучшего изображения через `media_service.fetch_media_urls`
+- запись в `raw_news` через `create_raw_news` (дедупликация по content_hash)
+
+### Ручной запуск (пишет в БД)
+
+```bash
+python scripts/ingest_feeds.py
+```
+
+Требуется рабочая БД и корректные переменные окружения — команда создаст записи в `raw_news`.
+
+### Dry-run (без записи в БД)
+
+Для безопасной проверки создания полезен `scripts/dry_run_ingest.py` — он подменяет `create_raw_news` на заглушку и печатает найденные payload'ы:
+
+```bash
+python scripts/dry_run_ingest.py
+```
+
+### Показать примеры (up to 5 на домен)
+
+Чтобы быстро просмотреть примеры, используйте:
+
+```bash
+python scripts/show_parsed_samples.py
+```
+
+Этот скрипт собирает и печатает до 5 записей с каждого парсированного домена (заголовок, URL, IMAGE, фрагмент).
+
+---
+
+## Продакшен-настройки по умолчанию
+
+Значения, настроенные в парсере по умолчанию (prod‑ориентированные):
+
+```
+per_rss_limit = 30          # записей на RSS
+per_site_limit = 100        # ссылок с фронт-страницы
+RSS_CONCURRENCY = 16       # параллельная обработка RSS-статей
+SITE_CONCURRENCY = 12      # параллельная обработка site-статей
+```
+
+Рекомендации:
+- Настройте семафоры и размеры потоков в зависимости от CPU/памяти воркера.
+- Внедрите per-domain rate‑limit, `ETag`/`If-Modified-Since` и храните `last_processed` для инкрементальных прогонов.
+
+---
+
+## Полезные скрипты
+
+- `scripts/ingest_feeds.py` — ручной запуск инжеста в БД
+- `scripts/dry_run_ingest.py` — dry-run (не пишет в БД)
+- `scripts/show_parsed_samples.py` — показать примеры парсинга
+- `scripts/README_INGEST.md` — устаревший вспомогательный файл (информация объединена сюда)
+
+---
+
+## Отладка и частые проблемы
+
+- Убедитесь, что установлены зависимости: `feedparser`, `beautifulsoup4`.
+- Если видите HTTP 429 / 403 — уменьшите частоту запросов или добавьте задержки; некоторые API (Wikimedia и т.п.) могут требовать User-Agent или ключи.
+- `daryo.uz` иногда возвращает 301 редирект — парсер корректно обрабатывает абсолютные URL, но имейте в виду редиректы.
+- Если dry-run выдаёт ошибки, проверьте, что скрипты корректно подменяют `create_raw_news` (они создают заглушку для безопасного выполнения).
+- Для восстановления локальной БД смотрите: `trash/cleanup_20260419_134030` (резервные файлы).
+
+---
+
+## Файлы и точки входа
+
+- Парсер: `app/backend/services/feed_fetcher.py`
+- Site-specific правила: `app/backend/services/site_parsers.py`
+- HTTP клиент: `app/backend/services/http_client.py`
+- Инжест/дедупликация: `app/backend/services/ingestion_service.py`
+- Celery: `app/backend/core/celery_app.py`, таски в `brain/tasks/`
+
+---
+
+## Разработка и тестирование
+
+- Тесты: добавить unit-тесты для парсера (TODO). Пары задач в `tests/`.
+- Форматирование и быстрая проверка синтаксиса:
+
+```bash
+python -m compileall .
+```
+
+---
+
+Если хотите, я могу:
+- запустить реальный инжест (при наличии рабочей БД), или
+- расширить dry-run (увеличить лимиты / добавить источники), или
+- сохранить результаты выборки в JSON/CSV для анализа.
+
+Спасибо — если нужно, укратю/дополню README по специфике деплоя (Railway / Docker / systemd).

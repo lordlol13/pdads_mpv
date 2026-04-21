@@ -1,0 +1,33 @@
+{
+  "total_time": 19.8461172580719,
+  "articles_processed": 38,
+  "time_per_article": 0.5222662436334711,
+  "samples": [
+    {
+      "url": "https://daryo.uz/2026/04/21/innoprom",
+      "title": "Sanoat maromidagi an’analar: “Innoprom. Markaziy Osiyo” xalqaro sanoat ko‘rgazmasi ish boshladi",
+      "summary": "Toshkentda mintaqaning eng yirik ishbilarmonlik maydonchalaridan biri — “Innoprom. Markaziy Osiyo” xalqaro sanoat ko‘rgazmasi ish boshladi. 2026-yilda forum 35 ta davlatdan delegatsiyalar va 350 ga yaqin kompaniyalarni jamlab, poytaxtni Yevrosiyo sanoat integratsiyasining epitsentriga aylantirdi.",
+      "category": "economy",
+      "raw_text_snippet": "Toshkentda mintaqaning eng yirik ishbilarmonlik maydonchalaridan biri — “Innoprom. Markaziy Osiyo” xalqaro sanoat ko‘rgazmasi ish boshladi.\n2026-yilda forum 35 ta davlatdan delegatsiyalar va 350 ga yaqin kompaniyalarni jamlab, poytaxtni Yevrosiyo sanoat integratsiyasining epitsentriga aylantirdi. Biroq bu gal og‘ir mashinasozlik va energetika yechimlari namoyish etilgan stendlar orasida iqtisodiyot va madaniyat chorrahasida faoliyat yurituvchi o‘ziga xos makon paydo bo‘ldi: “Rossiya” milliy mark"
+    },
+    {
+      "url": "https://daryo.uz/2026/04/21/zarafshon-shahri-va-qiziriq-tumani-hududi-kengaytiriladi",
+      "title": "Zarafshon shahri va Qiziriq tumani hududi kengaytiriladi",
+      "summary": "Oliy Majlis Qonunchilik palatasining 21-apreldagi majlisida Surxondaryo viloyatining Qiziriq va Jarqo‘rg‘on tumanlari chegaralarini, Navoiy viloyatining Zarafshon shahri va Tomdi tumani chegaralarini o‘zgartirish taklifi ko‘rib chiqilib, ma’qullandi . “Surxondaryo viloyatining Qiziriq va Jarqo‘rg‘on tumanlari chegaralarini o‘zgartirish to‘g‘risida”gi palata qarori loyihasiga ko‘ra Jarqo‘rg‘on tumanidan 4 740 gektar yerni Qiziriq tumaniga o‘tkazish nazarda tutilmoqda . Chegaralarga o‘zgarishlar kiritish masalasi tegishli mahalla fuqarolar yig‘inlari, xalq deputatlari Qiziriq va Jarqo‘rg‘on tumanlari Kengashlari hamda viloyat Kengashida muhokama qilinib, chegaralarning kartografik chizmasi va chegaralar chizig‘ining tasnifi ma’qullangan.",
+      "category": "economy",
+      "raw_text_snippet": "Oliy Majlis Qonunchilik palatasining 21-apreldagi majlisida Surxondaryo viloyatining Qiziriq va Jarqo‘rg‘on tumanlari chegaralarini, Navoiy viloyatining Zarafshon shahri va Tomdi tumani chegaralarini o‘zgartirish taklifi ko‘rib chiqilib, ma’qullandi . “Surxondaryo viloyatining Qiziriq va Jarqo‘rg‘on tumanlari chegaralarini o‘zgartirish to‘g‘risida”gi palata qarori loyihasiga ko‘ra Jarqo‘rg‘on tumanidan 4 740 gektar yerni Qiziriq tumaniga o‘tkazish nazarda tutilmoqda . Chegaralarga o‘zgarishlar k"
+    }
+  ],
+  "stats": {
+    "processed": 38,
+    "ads_skipped": 5,
+    "invalid": 7,
+    "short": 2,
+    "fetch_error": 0,
+    "no_html": 0,
+    "not_article": 5,
+    "detector_error": 0
+  },
+  "requested_limit": 50,
+  "collected_links": 50
+}

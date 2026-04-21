@@ -1,0 +1,120 @@
+{
+  "counts": {
+    "https://daryo.uz/": 49,
+    "https://kun.uz/": 25,
+    "https://gazeta.uz/ru/": 64,
+    "https://uznews.uz/": 33
+  },
+  "total_before": 333,
+  "total_after": 171,
+  "examples": {
+    "https://daryo.uz/": [
+      {
+        "url": "https://daryo.uz/2026/04/19/toshkentning-yangihayot-tumanidagi-ishlab-chiqarish-korxonasida-yongin-chiqdi",
+        "title": "Toshkentning Yangihayot tumanidagi ishlab chiqarish korxonasida yong‘in chiqdi",
+        "published_at": "2026-04-19T17:06:00+05:00"
+      },
+      {
+        "url": "https://daryo.uz/2026/04/19/u-rahbar-odam-qachon-ilm-qiladi-ozfa-prezidenti-mansabdorlarning-tezkor-ilmiy-daraja-olishini-tanqid-qildi",
+        "title": "“U rahbar odam qachon ilm qiladi?” — OʻzFA prezidenti mansabdorlarning “tezkor” ilmiy daraja olishini tanqid qildi",
+        "published_at": "2026-04-19T19:11:00+05:00"
+      },
+      {
+        "url": "https://daryo.uz/2026/04/17/toshkent-yuragida-yangi-ifoda",
+        "title": "Etéra – Toshkent yuragida yangi ifoda",
+        "published_at": "2026-04-19T19:30:00+05:00"
+      },
+      {
+        "url": "https://daryo.uz/2026/04/19/trampning-maslahatchilari-ziddiyatli-bayonotlari-sabab-undan-intervyularni-kamaytirishni-soramoqda-wsj",
+        "title": "Trampning maslahatchilari ziddiyatli bayonotlari sabab undan intervyularni kamaytirishni so‘ramoqda — WSJ",
+        "published_at": "2026-04-19T19:43:00+05:00"
+      },
+      {
+        "url": "https://daryo.uz/2026/04/18/adm-va-taewoong-logistika-xabini-ishga-tushirmoqda-asosiy-etibor-e-commerce-va-mintaqaning-yangi-iqtisodiyotiga",
+        "title": "ADM va Taewoong logistika xabini ishga tushirmoqda: asosiy e’tibor e-commerce va mintaqaning yangi iqtisodiyotiga",
+        "published_at": "2026-04-19T10:30:00+05:00"
+      }
+    ],
+    "https://kun.uz/": [
+      {
+        "url": "https://kun.uz/news/actual",
+        "title": "Dolzarb xabarlar",
+        "published_at": "2026-04-19T17:58:00+05:00"
+      },
+      {
+        "url": "https://kun.uz/news/editors-choice",
+        "title": "",
+        "published_at": "2026-04-19T20:39:00+05:00"
+      },
+      {
+        "url": "https://kun.uz/news/time/hayotiy-hikoyalar",
+        "title": "Hayotiy hikoyalar",
+        "published_at": "2026-04-19T12:24:00+05:00"
+      },
+      {
+        "url": "https://kun.uz/news/2026/04/19/soliqdan-ozod-gadjetlar-va-tojga-davogar-sindorov-hafta-dayjesti",
+        "title": "Soliqdan ozod gadjetlar va tojga da’vogar Sindorov - hafta dayjesti",
+        "published_at": "2026-04-19T08:55:00+05:00"
+      },
+      {
+        "url": "https://kun.uz/news/2026/04/15/saudiya-arabistonida-haj-mavsumiga-tayyorgarlik-boshlandi-nimalarni-bilish-kerak",
+        "title": "Saudiya Arabistonida Haj mavsumiga tayyorgarlik boshlandi. Nimalarni bilish kerak?",
+        "published_at": "2026-04-19T23:09:00+05:00"
+      }
+    ],
+    "https://gazeta.uz/ru/": [
+      {
+        "url": "https://gazeta.uz/ru/2026/04/18/javokhir-sindarov/",
+        "title": "«Если обыграю Гукеша, сыграю с Нодирбеком». Как Ташкент встретил Жавохира Синдарова – Новости Узбекистана – Gazeta",
+        "published_at": "2026-04-19T12:46:00+05:00"
+      },
+      {
+        "url": "https://gazeta.uz/ru/2026/04/15/digital-marking/",
+        "title": "«Не только не решает проблемы, но и создаёт новые». Производители воды, напитков и эксперты — о цифровой маркировке – Новости Узбекистана – Gazeta",
+        "published_at": "2026-04-19T20:42:00+05:00"
+      },
+      {
+        "url": "https://gazeta.uz/ru/2026/04/17/protection-of-women-and-children/",
+        "title": "«Очень много проблем». Часть дел о сексуальном насилии против женщин и детей передадут прокуратуре – Новости Узбекистана – Gazeta",
+        "published_at": "2026-04-19T11:39:00+05:00"
+      },
+      {
+        "url": "https://gazeta.uz/ru/2026/04/17/market-control/",
+        "title": "«Компромисс правительства» и опасения бизнеса: Как депутаты обсуждали закон о рыночном надзоре – Новости Узбекистана – Gazeta",
+        "published_at": "2026-04-19T16:13:00+05:00"
+      },
+      {
+        "url": "https://gazeta.uz/ru/2026/04/19/sherzod-kudbiyev-watches/",
+        "title": "«Госслужащий должен быть скромным». Шерзод Кудбиев ответил на критику из-за дорогих часов – Новости Узбекистана – Gazeta",
+        "published_at": "2026-04-19T18:19:00+05:00"
+      }
+    ],
+    "https://uznews.uz/": [
+      {
+        "url": "https://uznews.uz/ru/news/109031",
+        "title": "«Дети заражаются новым штаммом COVID-19 «Цикада» чаще» - в СЭС прокомментировали сообщения о мутации вируса - UzNews.uz",
+        "published_at": "2026-04-19T10:02:00+05:00"
+      },
+      {
+        "url": "https://uznews.uz/ru/news/109038",
+        "title": "Экс-глава Узметкомбината Дилшод Ахмедов объявлен в международный розыск - UzNews.uz",
+        "published_at": "2026-04-19T11:50:00+05:00"
+      },
+      {
+        "url": "https://uznews.uz/ru/news/109058",
+        "title": "В Ташкенте и других городах ощущалось землетрясение силой до 3 баллов - UzNews.uz",
+        "published_at": "2026-04-19T08:20:00+05:00"
+      },
+      {
+        "url": "https://uznews.uz/ru/news/109067",
+        "title": "NRG-BI Green: как девелопер формирует культуру экологичной жизни вместе с жителями своих проектов - UzNews.uz",
+        "published_at": "2026-04-19T10:08:00+05:00"
+      },
+      {
+        "url": "https://uznews.uz/ru/news/109071",
+        "title": "Узбекистан и Руанда установили дипломатические отношения - UzNews.uz",
+        "published_at": "2026-04-19T10:10:00+05:00"
+      }
+    ]
+  }
+}

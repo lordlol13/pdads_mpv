@@ -997,6 +997,56 @@ def scheduled_ingestion() -> dict:
         raise
 
 
+
+async def _schedule_feed_ingestion_async() -> dict[str, Any]:
+    """Async wrapper to run feed_fetcher.ingest_many within an AsyncSession.
+
+    Importing `app.backend.services.feed_fetcher` is done at runtime to avoid
+    hard import-time dependency failures when optional parsing libs are not
+    installed in some environments.
+    """
+    async with SessionLocal() as session:
+        try:
+            try:
+                # Import at runtime to keep startup resilient
+                from app.backend.services.feed_fetcher import ingest_many
+            except Exception as e:
+                logger.exception("feed_fetcher import failed", exc_info=True)
+                return {"error": "feed_fetcher_import_failed", "detail": str(e)}
+
+            result = await ingest_many(session)
+            return {"ingested": result}
+        except Exception as e:
+            logger.exception("_schedule_feed_ingestion_async failed", exc_info=True)
+            raise
+
+
+@celery_app.task(
+    name="brain.scheduled_feed_ingestion",
+    autoretry_for=(ConnectionError, TimeoutError, Exception),
+    retry_backoff=True,
+    retry_backoff_max=settings.API_RETRY_MAX_DELAY_SECONDS,
+    retry_jitter=True,
+    max_retries=2,
+)
+def scheduled_feed_ingestion() -> dict:
+    logger.info("scheduled_feed_ingestion tick started")
+    try:
+        loop = asyncio.new_event_loop()
+        try:
+            result = loop.run_until_complete(_schedule_feed_ingestion_async())
+        finally:
+            try:
+                loop.close()
+            except Exception:
+                pass
+        logger.info("scheduled_feed_ingestion tick finished result=%s", result)
+        return result
+    except Exception as e:
+        logger.error("scheduled_feed_ingestion failed: %s", e)
+        raise
+
+
 @celery_app.task(
     name="brain.scheduled_cleanup_ai_products",
     autoretry_for=(ConnectionError, TimeoutError, Exception),

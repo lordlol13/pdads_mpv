@@ -1,0 +1,42 @@
+{
+  "recent_users": [
+    {
+      "id": 6,
+      "email": "muzaffarimperator@gmail.com",
+      "username": "VODKA",
+      "password_hash": "a1950e7ea8440057362f6a627b09981b$TqaNTZFgrH9pxOLY0gdGFQ-5xWULKpGQlZlVCLlOhnE",
+      "created_at": "2026-04-12T17:24:21.701977+00:00"
+    }
+  ],
+  "recent_regs": [
+    {
+      "id": "96a18cf4-7d65-4fda-a556-130f487b407e",
+      "username": "VODKA",
+      "email": "muzaffarimperator@gmail.com",
+      "is_verified": true,
+      "consumed_at": "2026-04-12T17:24:21.815591",
+      "created_at": "2026-04-12T17:23:26.285637"
+    }
+  ],
+  "raw_news": [
+    {
+      "id": 900,
+      "title": "Узбекистан впервые представляет свою национальную выставку на Milan Design Week",
+      "source_url": "https://uznews.uz/ru/news/109108",
+      "raw_text_snippet": "<figure><img src=\"https://uznews.uz/storage/uploads/2026/4/20/file_69e652e7105b6_orig.jpg\"></figure><p>Проект реализован Фондом развития культуры и искусства Узбекистана по инициативе президента Узбекистана Шавката Мирзиёева и направлен на продвижение экологической и культурной повестки региона Приаралья.</p><figure><button data-fancybox=\"gallery\" data-src=\"/storage/uploads/2026/4/20/file_69e653879455a_orig.jpg\" data-download-src=\"/storage/uploads/2026/4/20/file_69e653879455a_full.jpg\">\n            <picture class='delte-on-error'>\n                <source srcset=\"/storage/uploads/2026/4/20/file_69e653879455a_avif.avif\" type=\"image/avif\">\n                <img src='/storage/uploads/2026/4/20/file_69e653879455a_orig.jpg' loading='lazy' alt=''/>
+            </picture>\n        </button></figure><p>Куратором выступил Кулапат Янтрасаст, основатель WHY Architecture. Экспозиция раскрывает трансформацию Аральского моря — от экологического кризиса к новым инициативам и формированию будущего регион",
+      "created_at": "2026-04-20T18:20:22.749196+00:00",
+      "process_status": "pending"
+    }
+  ],
+  "ai_news": [
+    {
+      "id": 315,
+      "raw_news_id": 55,
+      "final_title": "AirPods Pro 3: 2025-yildan beri yaxshilangan quloqchinlar tajribasi",
+      "final_text_snippet": "Apple kompaniyasi 2025-yil sentyabr oyida AirPods Pro 3 quloqchinlarini taqdim etdi va shu kundan boshlab ular kundalik hayotimning ajralmas qismiga aylandi. Sport bilan shug‘ullanish, Zoom uchrashuvlari, sayohatlar va oddiy musiqa tinglash uchun ishlatganimda, ularning sifati va qulayligi meni o‘ziga tortdi. Bu quloqchinlar dastlabki chiqarilishidan beri sezilarli yaxshilanishlarga erishdi, ayniqsa shovqinni bostirish va ovoz sifati jihatidan.",
+      "category": "technology",
+      "ai_score": 9.2
+    }
+  ]
+}

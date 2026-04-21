@@ -48,6 +48,7 @@ class AuthRegisterStartResponse(BaseModel):
     verification_id: str
     expires_in_seconds: int
     debug_code: str | None = None
+    provider_error: str | None = None
 
 
 class AuthVerifyCodeRequest(BaseModel):
@@ -69,6 +70,7 @@ class AuthResendVerificationResponse(BaseModel):
     expires_in_seconds: int
     sent: bool
     debug_code: str | None = None
+    provider_error: str | None = None
 
 
 class AuthRegisterCompleteRequest(BaseModel):

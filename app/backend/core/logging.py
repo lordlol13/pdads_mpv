@@ -16,6 +16,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 
 import sys
+import os
 
 from app.backend.core.config import settings
 
@@ -83,6 +84,18 @@ def configure_logging():
         # Best-effort only; don't fail logging setup if reconfigure not available
         pass
     
+    # On Windows rotating handlers can fail when another process holds the file.
+    # Use non-rotating FileHandler locally on Windows to avoid PermissionError.
+    file_handler_class = "logging.handlers.RotatingFileHandler"
+    error_handler_class = "logging.handlers.RotatingFileHandler"
+    file_handler_extra: dict = {"maxBytes": 10485760, "backupCount": 5}
+    error_handler_extra: dict = {"maxBytes": 10485760, "backupCount": 5}
+    if sys.platform.startswith("win"):
+        file_handler_class = "logging.FileHandler"
+        error_handler_class = "logging.FileHandler"
+        file_handler_extra = {}
+        error_handler_extra = {}
+
     # Logging configuration
     config = {
         "version": 1,
@@ -111,23 +124,21 @@ def configure_logging():
                 "filters": ["correlation_id"],
             },
             "file": {
-                "class": "logging.handlers.RotatingFileHandler",
+                "class": file_handler_class,
                 "level": log_level,
                 "formatter": "json",
                 "filename": str(log_dir / "app.log"),
                 "encoding": "utf-8",
-                "maxBytes": 10485760,  # 10MB
-                "backupCount": 5,
+                **file_handler_extra,
                 "filters": ["correlation_id"],
             },
             "error_file": {
-                "class": "logging.handlers.RotatingFileHandler",
+                "class": error_handler_class,
                 "level": logging.ERROR,
                 "formatter": "json",
                 "filename": str(log_dir / "app_error.log"),
                 "encoding": "utf-8",
-                "maxBytes": 10485760,
-                "backupCount": 5,
+                **error_handler_extra,
                 "filters": ["correlation_id"],
             },
         },

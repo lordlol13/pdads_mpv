@@ -76,7 +76,7 @@ async def register_start(
         password=payload.password,
     )
 
-    sent = send_verification_code(payload.email, data["code"])
+    sent, provider_error = send_verification_code(payload.email, data["code"])
     if not sent and not settings.AUTH_DEBUG_RETURN_CODE:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -84,11 +84,19 @@ async def register_start(
         )
 
     debug_code = data["code"] if settings.AUTH_DEBUG_RETURN_CODE else None
+    provider_error_msg = None
+    if provider_error:
+        provider_error_msg = (
+            provider_error.get("message")
+            or provider_error.get("error")
+            or str(provider_error)
+        )
 
     return AuthRegisterStartResponse(
         verification_id=data["verification_id"],
         expires_in_seconds=data["expires_in_seconds"],
         debug_code=debug_code,
+        provider_error=provider_error_msg,
     )
 
 

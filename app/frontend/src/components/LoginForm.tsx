@@ -24,12 +24,12 @@ export function LoginForm({
   defaultEmail = "",
 }: LoginFormProps) {
   const { t } = useLanguage();
-  const [email, setEmail] = useState(defaultEmail);
+  const [identifier, setIdentifier] = useState(defaultEmail);
   const [password, setPassword] = useState("");
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    await onSubmit({ identifier: email.trim(), password });
+    await onSubmit({ identifier: identifier.trim(), password });
   };
 
   return (
@@ -48,13 +48,13 @@ export function LoginForm({
 
         <div className="space-y-4">
           <div className="space-y-2">
-            <Label htmlFor="email">{t.email}</Label>
+            <Label htmlFor="identifier">{(t as any).emailOrUsername ?? t.email}</Label>
             <Input
-              id="email"
-              type="email"
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-              placeholder="name@example.com"
+              id="identifier"
+              type="text"
+              value={identifier}
+              onChange={(event) => setIdentifier(event.target.value)}
+              placeholder={(t as any).emailOrUsername ?? "name@example.com or username"}
               className="h-12 rounded-xl border-zinc-800 bg-zinc-900 focus:ring-white"
             />
           </div>

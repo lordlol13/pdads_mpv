@@ -828,13 +828,21 @@ async def resend_registration_code(session: AsyncSession, verification_id: str) 
     await session.commit()
 
     email = str(row.get("email") or "").strip().lower()
-    sent = send_verification_code(email, code)
+    sent, provider_error = send_verification_code(email, code)
+    provider_error_str = None
+    if provider_error:
+        provider_error_str = (
+            provider_error.get("message")
+            or provider_error.get("error")
+            or str(provider_error)
+        )
 
     return {
         "verification_id": verification_id,
         "expires_in_seconds": settings.AUTH_VERIFICATION_CODE_TTL_MINUTES * 60,
         "sent": sent,
         "debug_code": code if settings.AUTH_DEBUG_RETURN_CODE else None,
+        "provider_error": provider_error_str,
     }
 
 
@@ -1124,9 +1132,9 @@ async def create_password_reset_request(session: AsyncSession, *, email: str) ->
     )
     await session.commit()
 
-    sent = send_password_reset_code(email_clean, code)
+    sent, provider_error = send_password_reset_code(email_clean, code)
     if not sent:
-        logger.warning("Password reset email send failed for %s", email_clean)
+        logger.warning("Password reset email send failed for %s: %s", email_clean, provider_error)
     return True
 
 

@@ -1,0 +1,1 @@
+﻿import httpx, re; r = httpx.get('https://daryo.uz/_nuxt/D3jSz-M8.js', timeout=30.0); text = r.text; calls = re.findall(r'eb\((?:\""|')[^\""']+ (?:\""|')', text); print('found', len(calls), 'eb calls'); [print('-', c) for c in calls[:50]]

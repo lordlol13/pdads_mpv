@@ -1,0 +1,33 @@
+{
+  "total_before": 46,
+  "cheap_candidates": 23,
+  "checked": 23,
+  "confirmed_html": 22,
+  "examples": [
+    {
+      "url": "https://kun.uz/news/2026/04/13/tadbirkor-jarimaning-50-foizini-1-oy-ichida-tolasa-qolgan-qismidan-ozod-etilishi-mumkin",
+      "title": "Tadbirkor jarimaning 50 foizini 1 oy ichida to‘lasa, qolgan qismidan ozod etilishi mumkin",
+      "published_at": "2026-04-19T20:39:00+05:00"
+    },
+    {
+      "url": "https://kun.uz/news/2026/04/19/soliqdan-ozod-gadjetlar-va-tojga-davogar-sindorov-hafta-dayjesti",
+      "title": "Soliqdan ozod gadjetlar va tojga da’vogar Sindorov - hafta dayjesti",
+      "published_at": "2026-04-19T08:55:00+05:00"
+    },
+    {
+      "url": "https://kun.uz/news/2026/04/12/abbos-fayzullayev-jahon-chempionatida-guruhdan-chiqishimiz-hayron-qolarli-ish-bolmaydi",
+      "title": "Abbos Fayzullayev: Jahon chempionatida guruhdan chiqishimiz hayron qolarli ish bo‘lmaydi!",
+      "published_at": "2026-04-19T16:03:00+05:00"
+    },
+    {
+      "url": "https://kun.uz/news/2026/04/14/aslida-bu-korrupsiya-shavkat-mirziyoyev-qurilish-qilish-uchun-berilgan-arizalarning-kop-rad-etilishi-haqida",
+      "title": "“Aslida bu – korrupsiya!” - Shavkat Mirziyoyev qurilish qilish uchun berilgan arizalarning ko‘p rad etilishi haqida",
+      "published_at": "2026-04-19T19:05:00+05:00"
+    },
+    {
+      "url": "https://kun.uz/news/2026/04/19/soliq-deklaratsiyasi-taqdim-etgan-728-nafar-xonanda-jami-47-mlrd-som-daromad-topgani-malum-boldi",
+      "title": "Soliq deklaratsiyasi taqdim etgan 728 nafar xonanda jami 4,7 mlrd so‘m daromad topgani ma’lum bo‘ldi",
+      "published_at": "2026-04-19T20:00:00+05:00"
+    }
+  ]
+}
