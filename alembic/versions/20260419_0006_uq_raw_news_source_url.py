@@ -36,9 +36,9 @@ def upgrade() -> None:
     if bind.dialect.name == "sqlite":
         op.create_index("uq_raw_news_source_url", "raw_news", ["source_url"], unique=True)
     else:
-        # PostgreSQL: first clean up duplicates (keep newest by created_at),
-        # reassign referencing `ai_news` rows to the kept id, then create unique index.
-        # This prevents migration failure when the DB already contains duplicate source_url values.
+        # PostgreSQL: deduplicate ai_news per-persona inside each raw_news group,
+        # reassign remaining ai_news to the kept raw_news id, remove duplicate raw_news rows,
+        # then create the unique index.
         op.execute("""
         DO $$
         DECLARE
