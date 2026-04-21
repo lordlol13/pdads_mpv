@@ -6,6 +6,32 @@ import httpx
 import json
 
 
+# daryo-specific noise/ad markers to aggressively filter out
+DARYO_BAD_PHRASES = [
+    "izoh qoldirish",
+    "ro‘yxatdan o‘ting",
+    "ro‘yxatdan oting",
+    "guvohnoma",
+    "daryo internet-nashr",
+    "daryo internet-nashrining",
+    "matnli materiallarni to‘liq",
+    "cookies",
+    "cookie",
+    "©",
+    "muallif",
+]
+
+DARYO_AD_KEYWORDS = [
+    "reklam",
+    "reklama",
+    "aksiya",
+    "chegirma",
+    "promo",
+    "sponsor",
+    "advertisement",
+]
+
+
 def _join_paragraphs(el) -> str:
     # prefer explicit paragraph tags
     ps = [p.get_text(" ", strip=True) for p in el.find_all("p")]
@@ -29,7 +55,7 @@ def _join_paragraphs(el) -> str:
     return el.get_text(" ", strip=True)
 
 
-def extract_daryo(soup: BeautifulSoup, url: Optional[str] = None) -> str:
+def extract_daryo(soup: BeautifulSoup, url: Optional[str] = None) -> Optional[str]:
     # API-first: try site API (clean source) when URL is available
     try:
         if url:
@@ -61,21 +87,12 @@ def extract_daryo(soup: BeautifulSoup, url: Optional[str] = None) -> str:
         if len(s) < 40:
             return True
         low = s.lower()
-        bad = [
-            "izoh qoldirish",
-            "ro‘yxatdan",
-            "xato topdingizmi",
-            "cookies",
-            "guvohnoma",
-            "0944-sonli",
-            "elektron manzil",
-            "o'zmaa",
-            "o‘zmaa",
-            "axborot va ommaviy kommunikatsiyalar agentligi",
-            "©",
-            "muallif",
-        ]
-        for b in bad:
+        # check aggressive site-specific bad phrases
+        for b in DARYO_BAD_PHRASES:
+            if b in low:
+                return True
+        # also consider obvious ad markers UI
+        for b in DARYO_AD_KEYWORDS:
             if b in low:
                 return True
         return False
@@ -141,16 +158,25 @@ def extract_daryo(soup: BeautifulSoup, url: Optional[str] = None) -> str:
             good = [p for p in ps if p and not _is_ui_text(p)]
             if good:
                 joined = "\n".join(good)
+                low_joined = joined.lower()
+                # drop clear ad/promotional pages early
+                if any(k in low_joined for k in DARYO_AD_KEYWORDS):
+                    return None
                 if len(joined) > 120:
-                    return joined
+                    cleaned = "\n".join([p for p in good])
+                    return cleaned
         except Exception:
             pass
 
         # fallback to existing joiner but after cleaning
         try:
             txt = _join_paragraphs(el)
-            if txt and len(txt) > 120 and not any(m in txt.lower() for m in attr_markers):
-                return txt
+            if txt:
+                low_txt = txt.lower()
+                if any(k in low_txt for k in DARYO_AD_KEYWORDS):
+                    return None
+                if len(txt) > 120 and not any(m in low_txt for m in attr_markers):
+                    return txt
         except Exception:
             pass
 
@@ -202,10 +228,21 @@ def _fetch_daryo_api_text(url: str) -> Optional[str]:
         if len(parts) >= 1 and parts[0] in ('ru', 'oz', 'uz', 'en'):
             lang = parts[0]
 
-        api_url = f"https://data.daryo.uz/api/v1/site/news/{quote(slug)}"
+        # try official data API first, then WP JSON as fallback
+        api_candidates = [
+            f"https://data.daryo.uz/api/v1/site/news/{quote(slug)}",
+            f"https://daryo.uz/wp-json/wp/v2/posts?slug={quote(slug)}",
+        ]
         headers = {"Accept-Language": lang}
-        r = httpx.get(api_url, headers=headers, timeout=10.0)
-        if r.status_code != 200:
+        r = None
+        for api_url in api_candidates:
+            try:
+                r = httpx.get(api_url, headers=headers, timeout=10.0)
+                if r.status_code == 200:
+                    break
+            except Exception:
+                r = None
+        if not r or r.status_code != 200:
             return None
         try:
             j = r.json()
