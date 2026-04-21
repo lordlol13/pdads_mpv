@@ -1,0 +1,8 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "/^d:/программы/github_repository/pd\\.ads_MVP/pdads_mpv/\\.venv/Scripts/python\\.exe -m uvicorn app\\.backend\\.main:app --host 127\\.0\\.0\\.1 --port 8000$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
+}

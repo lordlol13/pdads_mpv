@@ -42,4 +42,9 @@ celery_app.conf.beat_schedule = {
         "task": "brain.scheduled_feed_ingestion",
         "schedule": settings.SCHEDULER_INTERVAL_MINUTES * 60,
     }
+    ,
+    "parse-news": {
+        "task": "app.backend.tasks.parser_task.parse_news_task",
+        "schedule": 15 * 60,
+    }
 }

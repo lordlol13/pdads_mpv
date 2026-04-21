@@ -200,6 +200,30 @@ export function BackendFeedPost({
   const previewText = item.final_text?.trim() || '';
   const commentCount = item.comment_count + commentsList.length;
 
+  const [isWide, setIsWide] = useState<boolean>(false);
+  const [showAllTags, setShowAllTags] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const m = window.matchMedia('(min-width: 768px)');
+    const handler = (e: MediaQueryListEvent) => setIsWide(e.matches);
+    setIsWide(m.matches);
+    try {
+      m.addEventListener('change', handler);
+    } catch {
+      // fallback for older browsers
+      // @ts-ignore
+      m.addListener(handler);
+    }
+    return () => {
+      try {
+        m.removeEventListener('change', handler);
+      } catch {
+        // @ts-ignore
+        m.removeListener(handler);
+      }
+    };
+  }, []);
   useEffect(() => {
     setIsLiked(Boolean(item.liked));
     setIsSaved(Boolean(item.saved));
@@ -379,7 +403,7 @@ export function BackendFeedPost({
           <video
             ref={videoRef}
             src={topMediaUrl}
-            className="w-full h-full object-contain bg-black"
+            className="w-full h-full object-contain bg-[var(--card)] dark:bg-black"
             loop
             playsInline
             muted={false}
@@ -416,10 +440,10 @@ export function BackendFeedPost({
 
             {urls.length > 1 ? (
               <>
-                {currentImageIndex > 0 ? (
+                  {currentImageIndex > 0 ? (
                   <button
                     onClick={(event) => navigateComments('prev', event)}
-                    className="absolute left-4 top-1/2 -translate-y-1/2 p-2 bg-black/20 backdrop-blur-md rounded-full text-white hover:bg-black/40 transition-all z-10"
+                    className="absolute left-4 top-1/2 -translate-y-1/2 p-2 bg-white/10 dark:bg-black/20 backdrop-blur-md rounded-full text-[var(--popover-foreground)] dark:text-white hover:bg-white/20 dark:hover:bg-black/40 transition-all z-10"
                   >
                     <ChevronLeft className="w-6 h-6" />
                   </button>
@@ -427,7 +451,7 @@ export function BackendFeedPost({
                 {currentImageIndex < urls.length - 1 ? (
                   <button
                     onClick={(event) => navigateComments('next', event)}
-                    className="absolute right-4 top-1/2 -translate-y-1/2 p-2 bg-black/20 backdrop-blur-md rounded-full text-white hover:bg-black/40 transition-all z-10"
+                    className="absolute right-4 top-1/2 -translate-y-1/2 p-2 bg-white/10 dark:bg-black/20 backdrop-blur-md rounded-full text-[var(--popover-foreground)] dark:text-white hover:bg-white/20 dark:hover:bg-black/40 transition-all z-10"
                   >
                     <ChevronRight className="w-6 h-6" />
                   </button>
@@ -446,9 +470,9 @@ export function BackendFeedPost({
         )}
 
         {hasVideo && !isPlaying ? (
-          <div className="absolute inset-0 flex items-center justify-center bg-black/20">
+          <div className="absolute inset-0 flex items-center justify-center bg-white/10 dark:bg-black/20">
             <motion.div initial={{ scale: 0.5, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}>
-              <Play className="w-16 h-16 md:w-20 md:h-20 text-white fill-white opacity-80" />
+              <Play className="w-16 h-16 md:w-20 md:h-20 text-[var(--popover-foreground)] dark:text-white opacity-80" />
             </motion.div>
           </div>
         ) : null}
@@ -467,18 +491,23 @@ export function BackendFeedPost({
         </AnimatePresence>
       </div>
 
-      <div className="absolute right-2 sm:right-4 bottom-20 md:bottom-32 flex flex-col gap-4 sm:gap-6 z-40">
+        <div
+          className={
+            `absolute bottom-20 md:bottom-32 flex flex-col gap-4 sm:gap-6 z-40 ` +
+            (isWide && (showDescription || showComments) ? 'right-[33.333%]' : 'right-2 sm:right-4')
+          }
+        >
         <div className="flex flex-col items-center gap-1">
           <button
             onClick={(event) => {
               event.stopPropagation();
               void handleLike();
             }}
-            className="p-2.5 sm:p-3 bg-black/40 backdrop-blur-xl rounded-full border border-white/5 hover:scale-110 active:scale-95 transition-all"
+            className="p-2.5 sm:p-3 bg-white/10 dark:bg-black/40 backdrop-blur-xl rounded-full border border-border dark:border-white/5 hover:scale-110 active:scale-95 transition-all"
           >
-            <Heart className={`w-6 h-6 sm:w-7 sm:h-7 ${isLiked ? 'text-red-500 fill-red-500' : 'text-white'}`} />
+            <Heart className={`w-6 h-6 sm:w-7 sm:h-7 ${isLiked ? 'text-red-500 fill-red-500' : 'text-[var(--popover-foreground)] dark:text-white'}`} />
           </button>
-          <span className="text-[10px] sm:text-xs font-bold text-white drop-shadow-md">{likesCount}</span>
+          <span className="text-[10px] sm:text-xs font-bold text-[var(--popover-foreground)] dark:text-white drop-shadow-md">{likesCount}</span>
         </div>
 
         <div className="flex flex-col items-center gap-1">
@@ -487,21 +516,21 @@ export function BackendFeedPost({
               event.stopPropagation();
               setShowComments(true);
             }}
-            className="p-2.5 sm:p-3 bg-black/40 backdrop-blur-xl rounded-full border border-white/5 hover:scale-110 active:scale-95 transition-all"
+            className="p-2.5 sm:p-3 bg-white/10 dark:bg-black/40 backdrop-blur-xl rounded-full border border-border dark:border-white/5 hover:scale-110 active:scale-95 transition-all"
           >
-            <MessageCircle className="w-6 h-6 sm:w-7 sm:h-7 text-white" />
+            <MessageCircle className="w-6 h-6 sm:w-7 sm:h-7 text-[var(--popover-foreground)] dark:text-white" />
           </button>
-          <span className="text-[10px] sm:text-xs font-bold text-white drop-shadow-md">{commentCount}</span>
+          <span className="text-[10px] sm:text-xs font-bold text-[var(--popover-foreground)] dark:text-white drop-shadow-md">{commentCount}</span>
         </div>
 
         <div className="flex flex-col items-center gap-1">
           <button
             onClick={handleSave}
-            className="p-2.5 sm:p-3 bg-black/40 backdrop-blur-xl rounded-full border border-white/5 hover:scale-110 active:scale-95 transition-all"
+            className="p-2.5 sm:p-3 bg-white/10 dark:bg-black/40 backdrop-blur-xl rounded-full border border-border dark:border-white/5 hover:scale-110 active:scale-95 transition-all"
           >
-            <Bookmark className={`w-6 h-6 sm:w-7 sm:h-7 ${isSaved ? 'text-yellow-500 fill-yellow-500' : 'text-white'}`} />
+            <Bookmark className={`w-6 h-6 sm:w-7 sm:h-7 ${isSaved ? 'text-yellow-500 fill-yellow-500' : 'text-[var(--popover-foreground)] dark:text-white'}`} />
           </button>
-          <span className="text-[10px] sm:text-xs font-bold text-white drop-shadow-md">{t.save}</span>
+          <span className="text-[10px] sm:text-xs font-bold text-[var(--popover-foreground)] dark:text-white drop-shadow-md">{t.save}</span>
         </div>
 
         <div className="flex flex-col items-center gap-1">
@@ -510,31 +539,42 @@ export function BackendFeedPost({
               event.stopPropagation();
               setShowShareSheet(true);
             }}
-            className="p-2.5 sm:p-3 bg-black/40 backdrop-blur-xl rounded-full border border-white/5 hover:scale-110 active:scale-95 transition-all"
+            className="p-2.5 sm:p-3 bg-white/10 dark:bg-black/40 backdrop-blur-xl rounded-full border border-border dark:border-white/5 hover:scale-110 active:scale-95 transition-all"
           >
-            <Share2 className="w-6 h-6 sm:w-7 sm:h-7 text-white" />
+            <Share2 className="w-6 h-6 sm:w-7 sm:h-7 text-[var(--popover-foreground)] dark:text-white" />
           </button>
-          <span className="text-[10px] sm:text-xs font-bold text-white drop-shadow-md">{t.share}</span>
+          <span className="text-[10px] sm:text-xs font-bold text-[var(--popover-foreground)] dark:text-white drop-shadow-md">{t.share}</span>
         </div>
       </div>
 
-      <div className="absolute bottom-0 left-0 w-full p-4 md:p-6 bg-gradient-to-t from-black/80 via-black/40 to-transparent z-30">
+      <div className="absolute bottom-0 left-0 w-full p-4 md:p-6 dark:bg-gradient-to-t dark:from-black/80 dark:via-black/40 dark:to-transparent bg-transparent z-30">
         <div className="max-w-[80%] space-y-3">
-          <h3 className="font-bold text-lg text-white">{author}</h3>
+          <h3 className="font-bold text-lg text-[var(--popover-foreground)] dark:text-white">{author}</h3>
           {personaMeta.toc.length > 0 ? (
             <div className="flex flex-wrap gap-2">
-              {personaMeta.toc.map((topic) => (
+              {((showAllTags ? personaMeta.toc : personaMeta.toc.slice(0, isWide ? 3 : 2))).map((topic) => (
                 <span
                   key={topic}
-                  className="rounded-full border border-white/25 bg-black/35 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-white/90"
+                  className="rounded-full border border-border dark:border-white/25 dark:bg-black/35 bg-[var(--popover)] px-2.5 py-1 text-[10px] sm:text-[10px] font-semibold uppercase tracking-wide text-[var(--popover-foreground)] dark:text-white/90"
                 >
                   {topic}
                 </span>
               ))}
+              {!showAllTags && personaMeta.toc.length > (isWide ? 3 : 2) ? (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowAllTags(true);
+                  }}
+                  className="rounded-full border border-border dark:border-white/25 dark:bg-black/35 bg-[var(--popover)] px-2.5 py-1 text-[10px] sm:text-[10px] font-semibold uppercase tracking-wide text-[var(--popover-foreground)] dark:text-white/90"
+                >
+                  +{personaMeta.toc.length - (isWide ? 3 : 2)}
+                </button>
+              ) : null}
             </div>
           ) : null}
           <p
-            className="text-white/90 text-sm line-clamp-2 cursor-pointer hover:text-white transition-colors"
+            className={`text-[var(--popover-foreground)] dark:text-white/90 ${isWide ? 'text-sm' : 'text-xs'} ${isWide ? 'line-clamp-2' : 'line-clamp-1'} cursor-pointer hover:text-white transition-colors`}
             onClick={(event) => {
               event.stopPropagation();
               setShowDescription(true);
@@ -553,31 +593,36 @@ export function BackendFeedPost({
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               onClick={() => setShowDescription(false)}
-              className="absolute inset-0 bg-black/60 backdrop-blur-sm z-[60]"
+              className="absolute inset-0 bg-white/30 dark:bg-black/60 backdrop-blur-sm z-[60]"
             />
             <motion.div
-              initial={{ y: '100%' }}
-              animate={{ y: 0 }}
-              exit={{ y: '100%' }}
+              initial={isWide ? { x: '100%' } : { y: '100%' }}
+              animate={isWide ? { x: 0 } : { y: 0 }}
+              exit={isWide ? { x: '100%' } : { y: '100%' }}
               transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-              style={{ height: `${descHeight}vh` }}
-              className="absolute bottom-0 left-0 w-full bg-zinc-950 rounded-t-[24px] md:rounded-t-[32px] p-4 md:p-8 z-[70] border-t border-white/5 flex flex-col"
+              style={isWide ? undefined : { height: `${descHeight}vh` }}
+              className={
+                `absolute z-[70] flex flex-col border-t border-border dark:border-white/5 p-4 md:p-8 ` +
+                (isWide
+                  ? 'top-0 right-0 h-full w-full md:w-1/3 bg-[var(--popover)]'
+                  : 'bottom-0 left-0 w-full bg-[var(--popover)] rounded-t-[24px] md:rounded-t-[32px]')
+              }
             >
               <div className="flex items-center justify-center gap-2 mb-4">
                 <div
-                  className="w-12 h-1.5 bg-zinc-700 rounded-full"
+                  className="w-12 h-1.5 bg-[var(--muted)] dark:bg-zinc-700 rounded-full"
                   onWheel={handleDescWheel}
                   title="Прокрутите колесом для изменения высоты модалки"
                 />
-                <span className="text-xs text-zinc-500">{descHeight}vh</span>
+                <span className="text-xs text-[var(--muted-foreground)]">{descHeight}vh</span>
               </div>
 
-              <div className="flex-1 overflow-y-auto space-y-6">
+                <div className="flex-1 overflow-y-auto space-y-6 text-[var(--popover-foreground)] dark:text-white/90">
                 <div className="flex items-center gap-4">
-                  <div className="w-12 h-12 bg-zinc-800 rounded-full border border-white/10" />
+                  <div className="w-12 h-12 bg-[var(--card)] dark:bg-zinc-800 rounded-full border border-border dark:border-white/10" />
                   <div>
-                    <h4 className="font-bold text-white">{author}</h4>
-                    <p className="text-xs text-zinc-500">{t.posted} {relativeLabel(item.created_at, t.now)}</p>
+                    <h4 className="font-bold text-[var(--popover-foreground)] dark:text-white">{author}</h4>
+                    <p className="text-xs text-[var(--muted-foreground)]">{t.posted} {relativeLabel(item.created_at, t.now)}</p>
                   </div>
                 </div>
                 {personaMeta.toc.length > 0 ? (
@@ -585,7 +630,7 @@ export function BackendFeedPost({
                     {personaMeta.toc.map((topic) => (
                       <span
                         key={`modal-${topic}`}
-                        className="rounded-full border border-white/15 bg-zinc-900 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-zinc-200"
+                        className="rounded-full border border-border dark:border-white/15 bg-[var(--card)] dark:bg-zinc-900 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-[var(--popover-foreground)] dark:text-zinc-200"
                       >
                         {topic}
                       </span>
@@ -593,7 +638,7 @@ export function BackendFeedPost({
                   </div>
                 ) : null}
                 <div className="prose prose-invert max-w-none">
-                  <p className="text-zinc-300 leading-relaxed text-base md:text-lg whitespace-pre-wrap">
+                  <p className="text-[var(--muted-foreground)] leading-relaxed text-base md:text-lg whitespace-pre-wrap">
                     {previewText || t.noComments}
                   </p>
                 </div>
@@ -617,27 +662,32 @@ export function BackendFeedPost({
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               onClick={() => setShowComments(false)}
-              className="absolute inset-0 bg-black/60 backdrop-blur-sm z-[80]"
+              className="absolute inset-0 bg-white/30 dark:bg-black/60 backdrop-blur-sm z-[80]"
             />
             <motion.div
-              initial={{ y: '100%' }}
-              animate={{ y: 0 }}
-              exit={{ y: '100%' }}
+              initial={isWide ? { x: '100%' } : { y: '100%' }}
+              animate={isWide ? { x: 0 } : { y: 0 }}
+              exit={isWide ? { x: '100%' } : { y: '100%' }}
               transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-              className="absolute bottom-0 left-0 w-full h-[60vh] md:h-[70vh] bg-zinc-950 rounded-t-[24px] md:rounded-t-[32px] flex flex-col z-[90] border-t border-white/5"
+              className={
+                `absolute flex flex-col z-[90] border-t border-border dark:border-white/5 ` +
+                (isWide
+                  ? 'top-0 right-0 h-full w-full md:w-1/3 bg-[var(--popover)]'
+                  : 'bottom-0 left-0 w-full h-[60vh] md:h-[70vh] bg-[var(--popover)] rounded-t-[24px] md:rounded-t-[32px]')
+              }
             >
-              <div className="p-4 border-b border-white/5 flex flex-col items-center">
-                <div className="w-12 h-1.5 bg-zinc-700 rounded-full mb-4" />
-                <h3 className="font-bold text-white">{commentCount} {t.comments}</h3>
+              <div className="p-4 border-b border-border dark:border-white/5 flex flex-col items-center">
+                <div className="w-12 h-1.5 bg-[var(--muted)] dark:bg-zinc-700 rounded-full mb-4" />
+                <h3 className="font-bold text-[var(--popover-foreground)] dark:text-white">{commentCount} {t.comments}</h3>
               </div>
 
               <div className="flex-1 overflow-y-auto p-6 space-y-6">
                 {commentsLoading ? (
-                  <p className="text-sm text-zinc-400">{t.loading}</p>
+                  <p className="text-sm text-[var(--muted-foreground)]">{t.loading}</p>
                 ) : null}
                 {commentsError ? <p className="text-sm text-red-400">{commentsError}</p> : null}
                 {!commentsLoading && commentsList.length === 0 && !commentsError ? (
-                  <p className="text-sm text-zinc-500">{t.noComments}</p>
+                  <p className="text-sm text-[var(--muted-foreground)]">{t.noComments}</p>
                 ) : null}
                 {commentsList.map((comment) => (
                   <CommentThread
@@ -649,18 +699,18 @@ export function BackendFeedPost({
                 ))}
               </div>
 
-              <div className="p-4 md:p-6 border-t border-white/5 bg-black/40 backdrop-blur-xl">
-                <div className="flex items-center gap-3 bg-zinc-900 rounded-2xl px-4 py-2">
+              <div className="p-4 md:p-6 border-t border-border dark:border-white/5 bg-[var(--popover)] backdrop-blur-xl">
+                <div className="flex items-center gap-3 bg-[var(--card)] rounded-2xl px-4 py-2">
                   <input
                     type="text"
                     value={newComment}
                     onChange={(event) => setNewComment(event.target.value)}
                     placeholder={t.addComment}
-                    className="flex-1 bg-transparent border-none outline-none text-sm text-white py-2"
+                    className="flex-1 bg-transparent border-none outline-none text-sm text-[var(--popover-foreground)] py-2"
                   />
                   <button
                     onClick={handleAddComment}
-                    className={`p-2 rounded-xl transition-all ${newComment.trim() ? 'bg-white text-black scale-100' : 'bg-zinc-700 text-zinc-500 scale-90'}`}
+                    className={`p-2 rounded-xl transition-all ${newComment.trim() ? 'bg-white text-black scale-100' : 'bg-white/10 dark:bg-zinc-700 text-[var(--muted-foreground)] dark:text-zinc-500 scale-90'}`}
                   >
                     <Send className="w-4 h-4" />
                   </button>
@@ -679,21 +729,21 @@ export function BackendFeedPost({
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               onClick={() => setShowShareSheet(false)}
-              className="absolute inset-0 bg-black/60 backdrop-blur-sm z-[100]"
+              className="absolute inset-0 bg-white/30 dark:bg-black/60 backdrop-blur-sm z-[100]"
             />
             <motion.div
               initial={{ y: '100%' }}
               animate={{ y: 0 }}
               exit={{ y: '100%' }}
               transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-              className="absolute bottom-0 left-0 w-full bg-zinc-950 rounded-t-[24px] md:rounded-t-[32px] p-4 md:p-8 z-[110] border-t border-white/5"
+              className="absolute bottom-0 left-0 w-full bg-[var(--popover)] dark:bg-zinc-950 rounded-t-[24px] md:rounded-t-[32px] p-4 md:p-8 z-[110] border-t border-border dark:border-white/5"
             >
-              <div className="w-12 h-1.5 bg-zinc-700 rounded-full mx-auto mb-8" />
+              <div className="w-12 h-1.5 bg-[var(--muted)] dark:bg-zinc-700 rounded-full mx-auto mb-8" />
               <div className="space-y-6">
                 <h3 className="text-xl font-bold text-white text-center">{t.share}</h3>
-                <div className="bg-zinc-900 p-4 rounded-2xl border border-white/5 break-all">
-                  <p className="text-zinc-400 text-sm mb-2 uppercase tracking-widest font-bold">Post Link</p>
-                  <code className="text-white text-sm">{shareUrl}</code>
+                <div className="bg-[var(--card)] dark:bg-zinc-900 p-4 rounded-2xl border border-border dark:border-white/5 break-all">
+                  <p className="text-[var(--muted-foreground)] dark:text-zinc-400 text-sm mb-2 uppercase tracking-widest font-bold">Post Link</p>
+                  <code className="text-[var(--popover-foreground)] dark:text-white text-sm">{shareUrl}</code>
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <button
@@ -707,7 +757,7 @@ export function BackendFeedPost({
                   </button>
                   <button
                     onClick={() => setShowShareSheet(false)}
-                    className="py-4 bg-zinc-800 text-white font-bold rounded-2xl hover:bg-zinc-700 transition-colors"
+                    className="py-4 bg-[var(--card)] dark:bg-zinc-800 text-[var(--popover-foreground)] dark:text-white font-bold rounded-2xl hover:bg-zinc-100 dark:hover:bg-zinc-700 transition-colors"
                   >
                     {t.close}
                   </button>
@@ -740,19 +790,19 @@ function CommentThread({ comment, onToggleLike, depth = 0 }: CommentThreadProps)
   return (
     <div className={`space-y-4 ${isReply ? 'ml-12' : ''}`}>
       <div className="flex gap-3">
-        <div className="w-10 h-10 bg-zinc-800 rounded-full flex-shrink-0" />
+        <div className="w-10 h-10 bg-[var(--card)] dark:bg-zinc-800 rounded-full flex-shrink-0" />
         <div className="flex-1 space-y-1">
           <div className="flex items-center justify-between gap-3">
-            <h4 className="text-sm font-bold text-white">@{comment.username}</h4>
+            <h4 className="text-sm font-bold text-[var(--popover-foreground)] dark:text-white">@{comment.username}</h4>
             <button onClick={() => onToggleLike(comment.id)} className="flex flex-col items-center gap-0.5">
-              <Heart className={`w-4 h-4 ${comment.liked_by_me ? 'text-red-500 fill-red-500' : 'text-zinc-500'}`} />
-              <span className="text-[10px] text-zinc-500">{comment.like_count}</span>
+              <Heart className={`w-4 h-4 ${comment.liked_by_me ? 'text-red-500 fill-red-500' : 'text-[var(--muted-foreground)]'}`} />
+              <span className="text-[10px] text-[var(--muted-foreground)]">{comment.like_count}</span>
             </button>
           </div>
-          <p className="text-sm text-zinc-300">{comment.content}</p>
-          <div className="flex items-center gap-4 text-xs font-bold text-zinc-500">
+          <p className="text-sm text-[var(--muted-foreground)]">{comment.content}</p>
+          <div className="flex items-center gap-4 text-xs font-bold text-[var(--muted-foreground)]">
             <span>{relativeLabel(comment.created_at, t.now)}</span>
-            <button className="hover:text-white transition-colors">{t.reply}</button>
+            <button className="hover:text-[var(--popover-foreground)] dark:hover:text-white transition-colors">{t.reply}</button>
           </div>
         </div>
       </div>

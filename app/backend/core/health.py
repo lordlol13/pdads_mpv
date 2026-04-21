@@ -184,6 +184,68 @@ async def check_llm_health() -> ComponentHealth:
         )
 
 
+async def check_parser_health() -> ComponentHealth:
+    """Check when parser last ran and report status.
+
+    - healthy: last run within Scheduler interval * 2
+    - degraded: within * 3
+    - unhealthy: older than * 3
+    """
+    start = datetime.now()
+    try:
+        async with SessionLocal() as session:
+            result = await session.execute(
+                text("SELECT last_parsed_at FROM system_state WHERE name = :name"),
+                {"name": "parser"},
+            )
+            last = result.scalar_one_or_none()
+
+        response_time = (datetime.now() - start).total_seconds() * 1000
+
+        if not last:
+            return ComponentHealth(
+                name="parser",
+                status=HealthStatus.DEGRADED,
+                message="Parser has not reported a last run",
+                response_time_ms=response_time,
+            )
+
+        # Normalize timezone
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=timezone.utc)
+
+        now = datetime.now(timezone.utc)
+        age = now - last
+        base = timedelta(minutes=max(1, settings.SCHEDULER_INTERVAL_MINUTES))
+
+        if age <= base * 2:
+            status = HealthStatus.HEALTHY
+            msg = f"Parser last run {age} ago"
+        elif age <= base * 3:
+            status = HealthStatus.DEGRADED
+            msg = f"Parser last run {age} ago (delayed)"
+        else:
+            status = HealthStatus.UNHEALTHY
+            msg = f"Parser last run {age} ago (stale)"
+
+        return ComponentHealth(
+            name="parser",
+            status=status,
+            message=msg,
+            response_time_ms=response_time,
+            details={"last_parsed_at": str(last)},
+        )
+    except Exception as e:
+        response_time = (datetime.now() - start).total_seconds() * 1000
+        return ComponentHealth(
+            name="parser",
+            status=HealthStatus.DEGRADED,
+            message=f"Parser health check failed: {str(e)}",
+            response_time_ms=response_time,
+            details={"error": str(e)[:100]},
+        )
+
+
 async def get_system_health() -> SystemHealth:
     """Get overall system health."""
     # Run health checks in parallel
@@ -192,6 +254,7 @@ async def get_system_health() -> SystemHealth:
         check_redis_health(),
         check_news_api_health(),
         check_llm_health(),
+        check_parser_health(),
     )
     
     # Determine overall status

@@ -4,6 +4,7 @@ from bs4 import BeautifulSoup
 from urllib.parse import urlparse, quote
 import httpx
 import json
+import re
 
 
 # daryo-specific noise/ad markers to aggressively filter out
@@ -30,6 +31,25 @@ DARYO_AD_KEYWORDS = [
     "sponsor",
     "advertisement",
 ]
+
+# extra site-specific UI / nav markers
+DARYO_UI_MARKERS = [
+    "kabinet",
+    "bosh sahifa",
+    "tasma",
+    "menyu",
+    "videolar",
+    "izoh",
+    "ro'yxatdan",
+]
+
+
+def _strip_edit_labels(s: str) -> str:
+    # remove editorial labels like "Eksklyuziv:" or "Eksklyuzivi"
+    if not s:
+        return s
+    s2 = re.sub(r"^\s*(ekskluziv(?:i)?[:\-\s]+)", "", s, flags=re.I)
+    return s2
 
 
 def _join_paragraphs(el) -> str:
@@ -95,6 +115,9 @@ def extract_daryo(soup: BeautifulSoup, url: Optional[str] = None) -> Optional[st
         for b in DARYO_AD_KEYWORDS:
             if b in low:
                 return True
+        for b in DARYO_UI_MARKERS:
+            if b in low:
+                return True
         return False
 
     remove_selectors = [
@@ -156,6 +179,8 @@ def extract_daryo(soup: BeautifulSoup, url: Optional[str] = None) -> Optional[st
         try:
             ps = [p.get_text(" ", strip=True) for p in el.find_all("p")]
             good = [p for p in ps if p and not _is_ui_text(p)]
+            # strip editorial labels from paragraph starts
+            good = [_strip_edit_labels(p) for p in good]
             if good:
                 joined = "\n".join(good)
                 low_joined = joined.lower()
@@ -171,6 +196,7 @@ def extract_daryo(soup: BeautifulSoup, url: Optional[str] = None) -> Optional[st
         # fallback to existing joiner but after cleaning
         try:
             txt = _join_paragraphs(el)
+            txt = _strip_edit_labels(txt)
             if txt:
                 low_txt = txt.lower()
                 if any(k in low_txt for k in DARYO_AD_KEYWORDS):
