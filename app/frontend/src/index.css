@@ -68,13 +68,58 @@
     --input: #e4e4e7;
     --ring: #18181b;
     --radius: 0.75rem;
+    /* Light-theme reference variables used for safe dark-mode swapping. */
+    --light-background: var(--background);
+    --light-foreground: var(--foreground);
+    --light-card: var(--card);
+    --light-card-foreground: var(--card-foreground);
+    --light-popover: var(--popover);
+    --light-popover-foreground: var(--popover-foreground);
+    --light-primary: var(--primary);
+    --light-primary-foreground: var(--primary-foreground);
+    --light-secondary: var(--secondary);
+    --light-secondary-foreground: var(--secondary-foreground);
+    --light-muted: var(--muted);
+    --light-muted-foreground: var(--muted-foreground);
+    --light-accent: var(--accent);
+    --light-accent-foreground: var(--accent-foreground);
+    --light-destructive: var(--destructive);
+    --light-border: var(--border);
+    --light-input: var(--input);
+    --light-ring: var(--ring);
 }
 
+/* Dark mode: swap variables with the light-theme references so the dark
+   theme is an exact color inversion of the light theme without using CSS
+   filters. This preserves images and media and avoids global filter issues. */
 .dark {
-  /* Dark mode implemented as a visual inversion of the light theme.
-     Do not override CSS variables here — keep light mode intact.
-     Use `filter` to invert colors; media and icons are re-inverted below. */
-  filter: invert(1) hue-rotate(180deg) !important;
+  --background: var(--light-foreground);
+  --foreground: var(--light-background);
+
+  --card: var(--light-card-foreground);
+  --card-foreground: var(--light-card);
+
+  --popover: var(--light-popover-foreground);
+  --popover-foreground: var(--light-popover);
+
+  --primary: var(--light-primary-foreground);
+  --primary-foreground: var(--light-primary);
+
+  --secondary: var(--light-secondary-foreground);
+  --secondary-foreground: var(--light-secondary);
+
+  --muted: var(--light-muted-foreground);
+  --muted-foreground: var(--light-muted);
+
+  --accent: var(--light-accent-foreground);
+  --accent-foreground: var(--light-accent);
+
+  --destructive: var(--light-destructive);
+
+  /* Tweak borders/inputs for dark look */
+  --border: rgba(0, 0, 0, 0.08);
+  --input: rgba(0, 0, 0, 0.06);
+  --ring: var(--foreground);
 }
 
 @layer base {
@@ -122,24 +167,9 @@
 .animate-twinkle {
   animation: twinkle 4s ease-in-out infinite;
 }
-/* Dark-mode inversion -------------------------------------------------------- */
-/* Keep light mode as-is. Dark mode is implemented as a visual inversion
-   of the light theme to ensure every color is swapped. This uses CSS
-   `filter: invert()` on the root marker(s) used by the app. */
+/* Dark-mode: no global filter inversion here anymore — we rely on the
+   variable swaps defined earlier in the file. Leaving this block empty
+   prevents accidental double-inversion or image artifacts. */
 @layer base {
-  /* Invert everything inside when root has `.dark` or `.text-white`. */
-  .dark, .text-white {
-    filter: invert(1) hue-rotate(180deg) !important;
-  }
-
-  /* Re-invert media and icons so images/logos and SVG icons remain natural. */
-  .dark img, .dark video, .dark picture, .dark svg, .dark .no-invert,
-  .text-white img, .text-white video, .text-white picture, .text-white svg, .text-white .no-invert {
-    filter: invert(1) hue-rotate(180deg) !important;
-  }
-
-  /* Selection readability tweak (optional): keeps selection visible after inversion. */
-  .dark ::selection, .text-white ::selection {
-    background: rgba(255,255,255,0.12) !important;
-  }
+  /* no-op: theme swapping handled by CSS variables in `.dark` */
 }
