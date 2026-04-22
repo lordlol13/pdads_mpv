@@ -71,24 +71,10 @@
 }
 
 .dark {
-    --background: #000000;
-    --foreground: #ffffff;
-    --card: #09090b;
-    --card-foreground: #ffffff;
-    --popover: #09090b;
-    --popover-foreground: #ffffff;
-    --primary: #ffffff;
-    --primary-foreground: #09090b;
-    --secondary: #27272a;
-    --secondary-foreground: #ffffff;
-    --muted: #18181b;
-    --muted-foreground: #a1a1aa;
-    --accent: #27272a;
-    --accent-foreground: #ffffff;
-    --destructive: #7f1d1d;
-    --border: rgba(255, 255, 255, 0.1);
-    --input: rgba(255, 255, 255, 0.1);
-    --ring: #ffffff;
+  /* Dark mode implemented as a visual inversion of the light theme.
+     Do not override CSS variables here — keep light mode intact.
+     Use `filter` to invert colors; media and icons are re-inverted below. */
+  filter: invert(1) hue-rotate(180deg) !important;
 }
 
 @layer base {
@@ -136,47 +122,24 @@
 .animate-twinkle {
   animation: twinkle 4s ease-in-out infinite;
 }
-/* Theme inversion helpers ----------------------------------------------------- */
+/* Dark-mode inversion -------------------------------------------------------- */
+/* Keep light mode as-is. Dark mode is implemented as a visual inversion
+   of the light theme to ensure every color is swapped. This uses CSS
+   `filter: invert()` on the root marker(s) used by the app. */
 @layer base {
-  /* === Dark container (root has `text-white`) ===
-     - Make default text white.
-     - Invert explicit white/black utility backgrounds so white cards become dark
-       and dark buttons become white (with contrasting text).
-     - Remove white rounded borders on controls. */
-  .text-white * {
-    color: #ffffff !important;
+  /* Invert everything inside when root has `.dark` or `.text-white`. */
+  .dark, .text-white {
+    filter: invert(1) hue-rotate(180deg) !important;
   }
-  .text-white .bg-white {
-    background-color: #000000 !important;
-    color: #ffffff !important;
-  }
-  .text-white .bg-black {
-    background-color: #ffffff !important;
-    color: #000000 !important;
-  }
-  .text-white .rounded-full.border,
-  .text-white .rounded-xl.border,
-  .text-white .rounded-3xl.border {
-    border-color: transparent !important;
-  }
-  .text-white .fill-black { fill: #ffffff !important; }
-  .text-white .fill-white { fill: #000000 !important; }
-  .text-white .stroke-black { stroke: #ffffff !important; }
-  .text-white .stroke-white { stroke: #000000 !important; }
 
-  /* === Light container (root has `text-black`) ===
-     - Make default text black.
-     - Ensure any truly dark backgrounds keep readable white text. */
-  .text-black * {
-    color: #000000 !important;
+  /* Re-invert media and icons so images/logos and SVG icons remain natural. */
+  .dark img, .dark video, .dark picture, .dark svg, .dark .no-invert,
+  .text-white img, .text-white video, .text-white picture, .text-white svg, .text-white .no-invert {
+    filter: invert(1) hue-rotate(180deg) !important;
   }
-  .text-black .bg-black,
-  .text-black .bg-zinc-900,
-  .text-black .bg-zinc-800 {
-    color: #ffffff !important;
+
+  /* Selection readability tweak (optional): keeps selection visible after inversion. */
+  .dark ::selection, .text-white ::selection {
+    background: rgba(255,255,255,0.12) !important;
   }
-  .text-black .fill-white { fill: #000000 !important; }
-  .text-black .fill-black { fill: #ffffff !important; }
-  .text-black .stroke-white { stroke: #000000 !important; }
-  .text-black .stroke-black { stroke: #ffffff !important; }
 }
