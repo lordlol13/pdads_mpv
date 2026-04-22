@@ -842,15 +842,37 @@ async def toggle_saved_news(session: AsyncSession, user_id: int, ai_news_id: int
         return False
 
     now_sql = sql_timestamp_now(session)
-    await session.execute(
+    # Use INSERT ... ON CONFLICT DO NOTHING to avoid race-condition unique violations.
+    # If the row was inserted by a concurrent request, fall back to checking existence
+    # and treat the result as 'saved' (True).
+    insert_result = await session.execute(
         text(
             f"""
             INSERT INTO saved_news (user_id, ai_news_id, created_at)
             VALUES (:user_id, :ai_news_id, {now_sql})
+            ON CONFLICT (user_id, ai_news_id) DO NOTHING
+            RETURNING id
             """
         ),
         {"user_id": user_id, "ai_news_id": ai_news_id},
     )
+
+    inserted_id = insert_result.scalar_one_or_none()
+    if inserted_id is None:
+        # Either a concurrent insert happened, or something prevented insertion.
+        # Ensure the row now exists and treat as saved.
+        existing_after = await session.execute(
+            text(
+                "SELECT id FROM saved_news WHERE user_id = :user_id AND ai_news_id = :ai_news_id LIMIT 1"
+            ),
+            {"user_id": user_id, "ai_news_id": ai_news_id},
+        )
+        existing_after_id = existing_after.scalar_one_or_none()
+        if existing_after_id is None:
+            # Nothing was inserted — raise to signal failure.
+            await session.rollback()
+            raise RuntimeError("failed_to_save_news")
+
     await session.commit()
     try:
         await refresh_user_embedding(session, user_id)
