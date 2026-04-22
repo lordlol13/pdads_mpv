@@ -57,7 +57,29 @@ export function BackendMainFeed({ currentUser, onLogout }: BackendMainFeedProps)
   const [activeTab, setActiveTab] = useState<'home' | 'search' | 'profile'>('home');
   const [showSavedOnly, setShowSavedOnly] = useState(false);
   const [activePostIndex, setActivePostIndex] = useState(0);
-  const [theme, setTheme] = useState<'dark' | 'light'>('dark');
+  const [theme, setTheme] = useState<'dark' | 'light'>(() => {
+    try {
+      if (typeof window === 'undefined') return 'light';
+      const saved = localStorage.getItem('theme');
+      if (saved === 'dark' || saved === 'light') return saved as 'dark' | 'light';
+      return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    } catch {
+      return 'light';
+    }
+  });
+
+  useEffect(() => {
+    try {
+      if (theme === 'dark') {
+        document.documentElement.classList.add('dark');
+      } else {
+        document.documentElement.classList.remove('dark');
+      }
+      localStorage.setItem('theme', theme);
+    } catch {
+      // noop
+    }
+  }, [theme]);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<FeedItem[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);

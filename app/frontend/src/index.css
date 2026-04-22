@@ -173,3 +173,33 @@
 @layer base {
   /* no-op: theme swapping handled by CSS variables in `.dark` */
 }
+
+/* Dark-mode overrides for explicit utility classes that were added
+   directly in components (e.g. "bg-white text-black"). These
+   rules run after Tailwind utilities and keep the light theme
+   unchanged while visually inverting those elements for .dark. */
+.dark .bg-white.text-black,
+.dark .bg-white.text-black:focus,
+.dark .bg-white.text-black:active,
+.dark .bg-white.text-black:hover {
+  background-color: var(--card) !important;
+  color: var(--foreground) !important;
+  border-color: var(--border) !important;
+}
+
+/* Common text color fixes for dark mode */
+.dark .text-black { color: var(--foreground) !important; }
+.dark .text-zinc-500, .dark .text-zinc-400, .dark .text-zinc-300 { color: var(--muted-foreground) !important; }
+
+/* Background / border tweaks commonly present in light-theme classes */
+.dark .bg-zinc-50, .dark .bg-white\/5, .dark .bg-white\/10 { background-color: var(--card) !important; }
+.dark .border-zinc-200 { border-color: var(--border) !important; }
+
+/* Ensure small muted texts in dark mode are readable */
+.dark .text-white\/60 { color: rgba(255,255,255,0.6) !important; }
+.dark .text-white\/50 { color: rgba(255,255,255,0.5) !important; }
+
+/* Keep accent color icons (yellow, red, etc.) intact by not overriding
+   utility classes that explicitly set those colors (e.g. text-yellow-500).
+   The rules above only target common neutral utilities used for structural
+   elements so accents remain unchanged. */

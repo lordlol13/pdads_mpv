@@ -4,6 +4,7 @@ from hashlib import sha256
 from typing import Any
 
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.backend.db.sql_helpers import sql_timestamp_now
@@ -845,19 +846,35 @@ async def toggle_saved_news(session: AsyncSession, user_id: int, ai_news_id: int
     # Use INSERT ... ON CONFLICT DO NOTHING to avoid race-condition unique violations.
     # If the row was inserted by a concurrent request, fall back to checking existence
     # and treat the result as 'saved' (True).
-    insert_result = await session.execute(
-        text(
-            f"""
-            INSERT INTO saved_news (user_id, ai_news_id, created_at)
-            VALUES (:user_id, :ai_news_id, {now_sql})
-            ON CONFLICT (user_id, ai_news_id) DO NOTHING
-            RETURNING id
-            """
-        ),
-        {"user_id": user_id, "ai_news_id": ai_news_id},
-    )
+    try:
+        insert_result = await session.execute(
+            text(
+                f"""
+                INSERT INTO saved_news (user_id, ai_news_id, created_at)
+                VALUES (:user_id, :ai_news_id, {now_sql})
+                ON CONFLICT (user_id, ai_news_id) DO NOTHING
+                RETURNING id
+                """
+            ),
+            {"user_id": user_id, "ai_news_id": ai_news_id},
+        )
+        inserted_id = insert_result.scalar_one_or_none()
+    except IntegrityError:
+        # Defensive: in case of race where a concurrent plain INSERT (older code)
+        # caused a UniqueViolation, rollback and treat as 'saved' if row exists.
+        await session.rollback()
+        existing_after = await session.execute(
+            text(
+                "SELECT id FROM saved_news WHERE user_id = :user_id AND ai_news_id = :ai_news_id LIMIT 1"
+            ),
+            {"user_id": user_id, "ai_news_id": ai_news_id},
+        )
+        existing_after_id = existing_after.scalar_one_or_none()
+        if existing_after_id is None:
+            # Re-raise as we couldn't find the row after rollback
+            raise
+        inserted_id = existing_after_id
 
-    inserted_id = insert_result.scalar_one_or_none()
     if inserted_id is None:
         # Either a concurrent insert happened, or something prevented insertion.
         # Ensure the row now exists and treat as saved.
