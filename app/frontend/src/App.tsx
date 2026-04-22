@@ -19,6 +19,7 @@ import { BackendMainFeed } from "./components/BackendMainFeed";
 import { AuthFormData, AuthStep, UserPublic } from "./types";
 import { LanguageProvider, useLanguage } from "./context/LanguageContext";
 import { clearAuthToken, getAuthToken, setAuthToken } from "./api/client";
+import { SpeedInsights } from "@vercel/speed-insights/react";
 
 const PENDING_VERIFICATION_KEY = "pending_verification";
 
@@ -445,6 +446,7 @@ function AppContent() {
 export default function App() {
   return (
     <LanguageProvider>
+      <SpeedInsights />
       <AppContent />
     </LanguageProvider>
   );
