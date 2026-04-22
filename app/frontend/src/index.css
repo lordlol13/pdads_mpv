@@ -136,3 +136,33 @@
 .animate-twinkle {
   animation: twinkle 4s ease-in-out infinite;
 }
+
+/* Dark-theme visibility fixes ------------------------------------------------- */
+@layer base {
+  /* If a container sets text to white (dark theme), make any nested literal black text visible */
+  .text-white .text-black {
+    color: var(--foreground) !important;
+  }
+
+  /* In dark-themed roots, turn elements that explicitly use bg-black into light buttons
+     (white background + dark text) so they stand out and remain readable). */
+  .text-white .bg-black {
+    background-color: var(--foreground) !important; /* usually white in dark theme */
+    color: var(--background) !important; /* usually black in dark theme */
+  }
+
+  /* Remove white circular/rounded borders in dark mode for button-like controls */
+  .text-white .rounded-full.border,
+  .text-white .rounded-xl.border,
+  .text-white .rounded-3xl.border {
+    border-color: transparent !important;
+  }
+
+  /* Ensure SVG icons that were filled/stroked black become visible */
+  .text-white .fill-black {
+    fill: var(--foreground) !important;
+  }
+  .text-white .stroke-black {
+    stroke: var(--foreground) !important;
+  }
+}
