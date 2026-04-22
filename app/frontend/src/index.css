@@ -136,33 +136,47 @@
 .animate-twinkle {
   animation: twinkle 4s ease-in-out infinite;
 }
-
-/* Dark-theme visibility fixes ------------------------------------------------- */
+/* Theme inversion helpers ----------------------------------------------------- */
 @layer base {
-  /* If a container sets text to white (dark theme), make any nested literal black text visible */
-  .text-white .text-black {
-    color: var(--foreground) !important;
+  /* === Dark container (root has `text-white`) ===
+     - Make default text white.
+     - Invert explicit white/black utility backgrounds so white cards become dark
+       and dark buttons become white (with contrasting text).
+     - Remove white rounded borders on controls. */
+  .text-white * {
+    color: #ffffff !important;
   }
-
-  /* In dark-themed roots, turn elements that explicitly use bg-black into light buttons
-     (white background + dark text) so they stand out and remain readable). */
+  .text-white .bg-white {
+    background-color: #000000 !important;
+    color: #ffffff !important;
+  }
   .text-white .bg-black {
-    background-color: var(--foreground) !important; /* usually white in dark theme */
-    color: var(--background) !important; /* usually black in dark theme */
+    background-color: #ffffff !important;
+    color: #000000 !important;
   }
-
-  /* Remove white circular/rounded borders in dark mode for button-like controls */
   .text-white .rounded-full.border,
   .text-white .rounded-xl.border,
   .text-white .rounded-3xl.border {
     border-color: transparent !important;
   }
+  .text-white .fill-black { fill: #ffffff !important; }
+  .text-white .fill-white { fill: #000000 !important; }
+  .text-white .stroke-black { stroke: #ffffff !important; }
+  .text-white .stroke-white { stroke: #000000 !important; }
 
-  /* Ensure SVG icons that were filled/stroked black become visible */
-  .text-white .fill-black {
-    fill: var(--foreground) !important;
+  /* === Light container (root has `text-black`) ===
+     - Make default text black.
+     - Ensure any truly dark backgrounds keep readable white text. */
+  .text-black * {
+    color: #000000 !important;
   }
-  .text-white .stroke-black {
-    stroke: var(--foreground) !important;
+  .text-black .bg-black,
+  .text-black .bg-zinc-900,
+  .text-black .bg-zinc-800 {
+    color: #ffffff !important;
   }
+  .text-black .fill-white { fill: #000000 !important; }
+  .text-black .fill-black { fill: #ffffff !important; }
+  .text-black .stroke-white { stroke: #000000 !important; }
+  .text-black .stroke-black { stroke: #ffffff !important; }
 }
