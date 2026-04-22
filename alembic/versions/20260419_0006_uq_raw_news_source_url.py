@@ -55,8 +55,26 @@ def upgrade() -> None:
             LOOP
                 ids := rec.ids;
                 keep_id := ids[1];
-                -- Reassign ai_news to the kept raw_news id
-                UPDATE ai_news SET raw_news_id = keep_id WHERE raw_news_id = ANY(ids) AND raw_news_id <> keep_id;
+
+                -- If multiple raw_news rows produced ai_news for the same persona, merging them into keep_id
+                -- would violate uq_ai_news_raw_persona. Keep only the newest ai_news per persona across this group.
+                WITH ranked AS (
+                    SELECT id,
+                           row_number() OVER (
+                               PARTITION BY target_persona
+                               ORDER BY coalesce(created_at, to_timestamp(0)) DESC, id DESC
+                           ) AS rn
+                    FROM ai_news
+                    WHERE raw_news_id = ANY(ids)
+                )
+                DELETE FROM ai_news
+                WHERE id IN (SELECT id FROM ranked WHERE rn > 1);
+
+                -- Reassign remaining ai_news to the kept raw_news id
+                UPDATE ai_news
+                SET raw_news_id = keep_id
+                WHERE raw_news_id = ANY(ids) AND raw_news_id <> keep_id;
+
                 -- Delete duplicate raw_news rows (keep the chosen one)
                 DELETE FROM raw_news WHERE id = ANY(ids) AND id <> keep_id;
             END LOOP;
