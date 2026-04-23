@@ -2,17 +2,34 @@ import json
 import re
 from hashlib import sha256
 from typing import Any
+from urllib.parse import urlparse
 
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.backend.db.sql_helpers import sql_timestamp_now
-from app.backend.services.recommender_service import rank_feed_rows, refresh_user_embedding, ensure_user_embedding
+from app.backend.services.recommender_service import (
+    rank_feed_rows,
+    refresh_user_embedding,
+    ensure_user_embedding,
+    cosine_similarity,
+    vector_from_json,
+    text_to_embedding,
+    _news_weight_from_signal,
+    _freshness_score,
+    build_news_embedding_text,
+    compute_score,
+)
+from app.backend.services.user_behavior import compute_user_preferences, add_exploration
+from app.backend.core.config import settings
 from app.backend.services.media_service import canonical_image_key
 
 
 _SOCIAL_TABLES_READY_DIALECTS: set[str] = set()
+LOCAL_FALLBACK_IMAGE_URL = "/PR.ADS.png"
+EMERGENCY_SOURCE_URL_BASE = "https://pdads-mpv.vercel.app/emergency"
+MIN_FEED_ITEMS = 20
 
 
 def _normalize_topics(values: list[str]) -> list[str]:
@@ -196,6 +213,247 @@ def _dedupe_feed_rows(rows: list[dict[str, Any]], limit: int) -> list[dict[str, 
         reverse=True,
     )
     return deduped[:limit]
+
+
+def normalize_raw_news(item: dict[str, Any]) -> dict[str, Any]:
+    """Normalize a raw_news row dict into the feed row shape used by the recommender.
+
+    Keeps keys compatible with the rest of the feed pipeline (final_title/final_text,
+    image_urls, raw_news_id, etc.).
+    """
+    return {
+        "user_feed_id": 0,
+        "user_id": 0,
+        "ai_news_id": 0,
+        "ai_score": 0.0,
+        "created_at": item.get("created_at"),
+        "raw_news_id": item.get("id"),
+        "source_url": item.get("source_url"),
+        "target_persona": None,
+        "final_title": item.get("title") or "",
+        "final_text": item.get("raw_text") or "",
+        "image_urls": [item.get("image_url")] if item.get("image_url") else [],
+        "image_url": item.get("image_url"),
+        "video_urls": None,
+        "category": item.get("category"),
+        "embedding_vector": None,
+        "vector_status": None,
+        "liked": None,
+        "like_count": 0,
+        "saved": False,
+        "comment_count": 0,
+        "is_ai": False,
+    }
+
+
+def _is_valid_image_url(value: Any) -> bool:
+    if not value:
+        return False
+    raw = str(value).strip()
+    if not raw:
+        return False
+    low = raw.lower()
+    if low.startswith("data:") or "base64" in low or ".svg" in low:
+        return False
+    if any(bad in low for bad in ("logo", "icon", "sprite", "placeholder")):
+        return False
+    if raw.startswith("/"):
+        return True
+    try:
+        parsed = urlparse(raw)
+    except Exception:
+        return False
+    if parsed.scheme not in {"http", "https"}:
+        return False
+    return bool(parsed.netloc)
+
+
+def _pick_primary_image(item: dict[str, Any]) -> str:
+    image_urls = item.get("image_urls")
+    if isinstance(image_urls, list):
+        for value in image_urls:
+            if _is_valid_image_url(value):
+                return str(value).strip()
+    elif isinstance(image_urls, str):
+        try:
+            parsed = json.loads(image_urls)
+            if isinstance(parsed, list):
+                for value in parsed:
+                    if _is_valid_image_url(value):
+                        return str(value).strip()
+        except Exception:
+            if _is_valid_image_url(image_urls):
+                return image_urls.strip()
+
+    direct = item.get("image_url")
+    if _is_valid_image_url(direct):
+        return str(direct).strip()
+    return LOCAL_FALLBACK_IMAGE_URL
+
+
+def normalize_feed_item(item: dict[str, Any], *, source: str = "ai") -> dict[str, Any]:
+    title = str(item.get("final_title") or item.get("title") or "").strip()
+    text_value = str(item.get("final_text") or item.get("text") or item.get("raw_text") or "").strip()
+    if not title:
+        title = "News update"
+    if not text_value:
+        text_value = title
+
+    source_url = str(item.get("source_url") or "").strip()
+    if not source_url:
+        source_url = f"{EMERGENCY_SOURCE_URL_BASE}/{source}"
+
+    primary_image = _pick_primary_image(item)
+    ai_score = float(item.get("ai_score") or 0.0)
+    is_ai = bool(item.get("is_ai")) if item.get("is_ai") is not None else ai_score > 0.0
+
+    return {
+        "user_feed_id": int(item.get("user_feed_id") or 0),
+        "user_id": int(item.get("user_id") or 0),
+        "ai_news_id": int(item.get("ai_news_id") or 0),
+        "raw_news_id": int(item.get("raw_news_id") or 0) or None,
+        "target_persona": item.get("target_persona"),
+        "final_title": title,
+        "title": title,
+        "final_text": text_value,
+        "text": text_value,
+        "source_url": source_url,
+        "image_urls": [primary_image],
+        "image_url": primary_image,
+        "video_urls": item.get("video_urls"),
+        "category": item.get("category") or "general",
+        "ai_score": ai_score,
+        "is_ai": is_ai,
+        "vector_status": item.get("vector_status"),
+        "liked": item.get("liked"),
+        "like_count": int(item.get("like_count") or 0),
+        "saved": bool(item.get("saved")),
+        "comment_count": int(item.get("comment_count") or 0),
+        "created_at": item.get("created_at"),
+        "rank_score": float(item.get("rank_score") or 0.0),
+    }
+
+
+def _emergency_card(index: int, user_id: int) -> dict[str, Any]:
+    slot = index + 1
+    return {
+        "user_feed_id": -slot,
+        "user_id": int(user_id or 0),
+        "ai_news_id": 0,
+        "raw_news_id": None,
+        "target_persona": "general",
+        "final_title": f"Top story #{slot}",
+        "title": f"Top story #{slot}",
+        "final_text": "Fresh updates are being prepared. Please refresh in a moment for live stories.",
+        "text": "Fresh updates are being prepared. Please refresh in a moment for live stories.",
+        "source_url": f"{EMERGENCY_SOURCE_URL_BASE}/{slot}",
+        "image_urls": [LOCAL_FALLBACK_IMAGE_URL],
+        "image_url": LOCAL_FALLBACK_IMAGE_URL,
+        "video_urls": [],
+        "category": "general",
+        "ai_score": 0.0,
+        "is_ai": False,
+        "vector_status": "fallback",
+        "liked": None,
+        "like_count": 0,
+        "saved": False,
+        "comment_count": 0,
+        "rank_score": max(0.0, 1.0 - (slot * 0.01)),
+    }
+
+
+def _build_emergency_cards(limit: int, user_id: int) -> list[dict[str, Any]]:
+    target = max(int(limit or 0), MIN_FEED_ITEMS)
+    return [_emergency_card(index, user_id) for index in range(target)]
+
+
+def _finalize_feed_rows(rows: list[dict[str, Any]], *, limit: int, user_id: int) -> list[dict[str, Any]]:
+    normalized = [normalize_feed_item(row, source="feed") for row in rows]
+    deduped = _dedupe_feed_rows(normalized, max(int(limit or 0), MIN_FEED_ITEMS))
+
+    required_total = max(int(limit or 0), MIN_FEED_ITEMS)
+    if len(deduped) < required_total:
+        emergency = _build_emergency_cards(required_total, user_id=user_id)
+        combined = deduped + emergency
+        deduped = _dedupe_feed_rows(combined, required_total)
+
+    # Final strict guard: never emit broken items.
+    safe_rows: list[dict[str, Any]] = []
+    for row in deduped:
+        fixed = normalize_feed_item(row, source="guard")
+        if not fixed["final_title"] or not fixed["final_text"] or not fixed["source_url"]:
+            continue
+        if not fixed["image_urls"]:
+            fixed["image_urls"] = [LOCAL_FALLBACK_IMAGE_URL]
+            fixed["image_url"] = LOCAL_FALLBACK_IMAGE_URL
+        safe_rows.append(fixed)
+
+    if not safe_rows:
+        safe_rows = _build_emergency_cards(required_total, user_id=user_id)
+
+    return safe_rows[:required_total]
+
+
+def rank_feed(rows: list[dict[str, Any]], user: dict | None = None) -> list[dict[str, Any]]:
+    if not rows:
+        return []
+
+    for r in rows:
+        try:
+            r["score"] = compute_score(r)
+        except Exception:
+            r["score"] = float(r.get("rank_score") or 0.0)
+
+    rows.sort(key=lambda x: float(x.get("score") or 0.0), reverse=True)
+    return rows
+
+
+def dedupe_similar_titles(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen = set()
+    result: list[dict[str, Any]] = []
+    for r in rows:
+        title = str(r.get("final_title") or r.get("title") or "").strip()
+        key = title[:50].lower() if title else ""
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        result.append(r)
+    return result
+
+
+def diversify(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    last_category = None
+    for r in rows:
+        cat = r.get("category") or None
+        if cat == last_category:
+            continue
+        result.append(r)
+        last_category = cat
+    return result
+
+
+def build_feed(rows: list[dict[str, Any]], user_events: list[dict] | None = None) -> list[dict[str, Any]]:
+    # derive lightweight user preferences from recent events
+    user_pref = compute_user_preferences(user_events or [])
+
+    for r in rows:
+        try:
+            r["score"] = compute_score(r, user_pref=user_pref)
+        except Exception:
+            r["score"] = float(r.get("rank_score") or 0.0)
+
+        # add small exploration noise
+        try:
+            r["score"] = add_exploration(r["score"])
+        except Exception:
+            pass
+
+    # final ordering + dedupe/diversity
+    rows.sort(key=lambda x: float(x.get("score") or 0.0), reverse=True)
+    rows = dedupe_similar_titles(rows)
+    rows = diversify(rows)
+    return rows[:20]
 
 
 async def _backfill_user_feed_if_empty(session: AsyncSession, *, user_id: int, user_topics: list[str]) -> int:
@@ -767,28 +1025,99 @@ async def get_user_feed(session: AsyncSession, user_id: int, limit: int = 50) ->
 
     user_embedding = await ensure_user_embedding(session, user_id)
 
-    if user_topics:
-        filtered: list[dict[str, Any]] = []
-        for row in rows:
-            if bool(row.get("saved")):
-                filtered.append(row)
-                continue
-            if _persona_matches_topics(row.get("target_persona"), user_topics):
-                filtered.append(row)
+    # Prefer loading all candidate rows (including previously viewed)
+    # — we will rank everything instead of hard-filtering.
+    rows = await _load_rows(False)
+    if not rows:
+        inserted = await _backfill_user_feed_if_empty(session, user_id=user_id, user_topics=user_topics)
+        if inserted > 0:
+            rows = await _load_rows(False)
 
-        if filtered:
-            rows = filtered
+    # Try to top-up user's feed if it's running low; do not treat failures
+    # as fatal — ranking should continue with what we have.
+    try:
+        current_count = len(rows or [])
+        if current_count < int(limit or 50):
+            needed = int(limit or 50) - current_count
+            if needed > 0:
+                try:
+                    added = await _top_up_user_feed(session, user_id=user_id, user_topics=user_topics, needed=needed)
+                    if added > 0:
+                        rows = await _load_rows(False)
+                except Exception:
+                    pass
 
-    ranked_rows = rank_feed_rows(rows, user_embedding=user_embedding, limit=limit, user_topics=user_topics)
-    deduped_rows = _dedupe_feed_rows(ranked_rows, limit)
+            if (len(rows or []) < int(limit or 50)):
+                try:
+                    from brain.tasks.pipeline_tasks import scheduled_ingestion as _scheduled_ingestion_task
+                    try:
+                        _scheduled_ingestion_task.delay()
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    # Unified scoring weights (configurable via env if needed)
+    ai_w = float(getattr(settings, "FEED_AI_WEIGHT", 0.6))
+    freshness_w = float(getattr(settings, "FEED_FRESHNESS_WEIGHT", 0.3))
+    similarity_w = float(getattr(settings, "FEED_SIMILARITY_WEIGHT", 0.1))
+    engagement_w = float(getattr(settings, "FEED_ENGAGEMENT_WEIGHT", 0.05))
+    persona_boost_val = float(getattr(settings, "FEED_PERSONA_BOOST", 0.08))
+    fallback_score = float(getattr(settings, "FEED_FALLBACK_AI_SCORE", 0.3))
+
+    # Compute unified rank_score for every candidate (no hard filters)
+    for r in rows:
+        try:
+            ai_s = float(r.get("ai_score") or 0.0)
+        except Exception:
+            ai_s = 0.0
+        base = ai_s if ai_s > 0.0 else fallback_score
+
+        freshness = _freshness_score(r.get("created_at"))
+
+        news_vector = vector_from_json(r.get("embedding_vector"))
+        if not news_vector:
+            text_value = build_news_embedding_text(
+                title=str(r.get("final_title") or ""),
+                final_text=str(r.get("final_text") or r.get("raw_text") or ""),
+                category=str(r.get("category") or ""),
+                target_persona=str(r.get("target_persona") or ""),
+                raw_text=str(r.get("final_text") or r.get("raw_text") or ""),
+            )
+            news_vector = text_to_embedding(text_value)
+
+        similarity = cosine_similarity(user_embedding, news_vector) if user_embedding else 0.0
+
+        engagement_raw = _news_weight_from_signal(r)
+        engagement = min(float(engagement_raw) / 3.0, 1.0)
+
+        persona_bonus = 0.0
+        if user_topics and _persona_matches_topics(r.get("target_persona"), user_topics):
+            persona_bonus = persona_boost_val
+
+        final_score = (
+            base * ai_w
+            + freshness * freshness_w
+            + similarity * similarity_w
+            + engagement * engagement_w
+            + persona_bonus
+        )
+
+        r["similarity_score"] = round(similarity, 6)
+        r["freshness_score"] = round(freshness, 6)
+        r["engagement_score"] = round(engagement, 6)
+        r["rank_score"] = round(final_score, 6)
+
+    # Let dedupe logic and final sorting pick the best unique rows.
+    deduped_rows = _dedupe_feed_rows(rows, limit)
 
     try:
         await _log_feed_impressions(session, user_id=user_id, rows=deduped_rows)
     except Exception:
-        # Metrics logging must not break feed serving.
         await session.rollback()
 
-    # Inject `is_ai` flag for API consumers: consider item AI-generated when ai_score > 0
     for row in deduped_rows:
         try:
             row_ai = float(row.get("ai_score") or 0.0)
@@ -796,7 +1125,176 @@ async def get_user_feed(session: AsyncSession, user_id: int, limit: int = 50) ->
         except Exception:
             row["is_ai"] = False
 
-    return deduped_rows
+    # CRITICAL FALLBACK: if feed is empty or too small, append recent raw_news
+    try:
+        if not deduped_rows or len(deduped_rows) < 10:
+            q = """
+            SELECT id, title, raw_text, image_url, source_url, category, region, created_at
+            FROM raw_news
+            ORDER BY created_at DESC
+            LIMIT :limit
+            """
+            res = await session.execute(text(q), {"limit": int(limit or 50)})
+            raw_rows = [dict(r) for r in res.mappings().all()]
+            mapped = []
+            for raw in raw_rows:
+                m = normalize_raw_news(raw)
+                # give fallback rank so these show up when AI results are scarce
+                try:
+                    m["rank_score"] = float(getattr(locals().get('fallback_score'), 'real', 0) or 0.0)
+                except Exception:
+                    # fallback_score is defined earlier in this function scope
+                    try:
+                        m["rank_score"] = float(fallback_score)
+                    except Exception:
+                        m["rank_score"] = 0.0
+                mapped.append(m)
+
+            if mapped:
+                combined = list(deduped_rows) + mapped
+                deduped_rows = _dedupe_feed_rows(combined, limit)
+                try:
+                    await _log_feed_impressions(session, user_id=user_id, rows=deduped_rows)
+                except Exception:
+                    await session.rollback()
+
+                for row in deduped_rows:
+                    try:
+                        row_ai = float(row.get("ai_score") or 0.0)
+                        row["is_ai"] = bool(row_ai > 0.0)
+                    except Exception:
+                        row["is_ai"] = False
+
+                deduped_rows = deduped_rows[: int(limit or 50)]
+    except Exception:
+        # non-fatal: don't break feed serving
+        pass
+
+    # If still empty, build a broader fallback pool from recent ai_news
+    # and (when ai_news are few) recent raw_news so front never shows blank.
+    if not deduped_rows:
+        ai_count_res = await session.execute(text("SELECT COUNT(1) FROM ai_news"))
+        try:
+            ai_total = int(ai_count_res.scalar_one() or 0)
+        except Exception:
+            ai_total = 0
+
+        fb_limit = int(limit or 50)
+        fb_rows: list[dict[str, Any]] = []
+
+        if ai_total > 0:
+            ai_q = """
+            SELECT
+                an.id AS ai_news_id,
+                an.ai_score,
+                an.created_at,
+                an.raw_news_id,
+                rn.source_url AS source_url,
+                an.target_persona,
+                an.final_title,
+                an.final_text,
+                an.image_urls,
+                an.video_urls,
+                an.category,
+                an.embedding_vector,
+                an.vector_status
+            FROM ai_news an
+            LEFT JOIN raw_news rn ON an.raw_news_id = rn.id
+            ORDER BY an.created_at DESC, an.id DESC
+            LIMIT :limit
+            """
+            res = await session.execute(text(ai_q), {"limit": fb_limit})
+            fb_rows.extend([dict(row) for row in res.mappings().all()])
+
+        if ai_total < int(getattr(settings, "FEED_MIN_AI_NEWS_FOR_RAW_FALLBACK", 20)):
+            raw_q = """
+            SELECT id, title, raw_text, source_url, category, region, created_at
+            FROM raw_news
+            ORDER BY created_at DESC
+            LIMIT :limit
+            """
+            res = await session.execute(text(raw_q), {"limit": fb_limit})
+            raw_rows = [dict(row) for row in res.mappings().all()]
+            mapped: list[dict[str, Any]] = []
+            for raw in raw_rows:
+                mapped.append(
+                    {
+                        "user_feed_id": None,
+                        "user_id": None,
+                        "ai_news_id": 0,
+                        "ai_score": 0.0,
+                        "created_at": raw.get("created_at"),
+                        "raw_news_id": raw.get("id"),
+                        "source_url": raw.get("source_url"),
+                        "target_persona": None,
+                        "final_title": raw.get("title"),
+                        "final_text": raw.get("raw_text"),
+                        "image_urls": None,
+                        "video_urls": None,
+                        "category": raw.get("category"),
+                        "embedding_vector": None,
+                        "vector_status": None,
+                        "liked": None,
+                        "like_count": 0,
+                        "saved": False,
+                        "comment_count": 0,
+                    }
+                )
+            fb_rows.extend(mapped)
+
+        if fb_rows:
+            # Score + dedupe fallback rows the same way
+            for r in fb_rows:
+                try:
+                    ai_s = float(r.get("ai_score") or 0.0)
+                except Exception:
+                    ai_s = 0.0
+                base = ai_s if ai_s > 0.0 else fallback_score
+
+                freshness = _freshness_score(r.get("created_at"))
+                news_vector = vector_from_json(r.get("embedding_vector"))
+                if not news_vector:
+                    text_value = build_news_embedding_text(
+                        title=str(r.get("final_title") or ""),
+                        final_text=str(r.get("final_text") or r.get("raw_text") or ""),
+                        category=str(r.get("category") or ""),
+                        target_persona=str(r.get("target_persona") or ""),
+                        raw_text=str(r.get("final_text") or r.get("raw_text") or ""),
+                    )
+                    news_vector = text_to_embedding(text_value)
+
+                similarity = cosine_similarity(user_embedding, news_vector) if user_embedding else 0.0
+                engagement_raw = _news_weight_from_signal(r)
+                engagement = min(float(engagement_raw) / 3.0, 1.0)
+                persona_bonus = persona_boost_val if user_topics and _persona_matches_topics(r.get("target_persona"), user_topics) else 0.0
+
+                final_score = (
+                    base * ai_w
+                    + freshness * freshness_w
+                    + similarity * similarity_w
+                    + engagement * engagement_w
+                    + persona_bonus
+                )
+                r["rank_score"] = round(final_score, 6)
+
+            fb_rows.sort(key=lambda item: (float(item.get("rank_score") or 0.0), bool(item.get("saved")), int(item.get("user_feed_id") or 0)), reverse=True)
+            fb_deduped = _dedupe_feed_rows(fb_rows, limit)
+
+            try:
+                await _log_feed_impressions(session, user_id=user_id, rows=fb_deduped)
+            except Exception:
+                await session.rollback()
+
+            for row in fb_deduped:
+                try:
+                    row_ai = float(row.get("ai_score") or 0.0)
+                    row["is_ai"] = bool(row_ai > 0.0)
+                except Exception:
+                    row["is_ai"] = False
+
+            deduped_rows = fb_deduped
+
+    return _finalize_feed_rows(deduped_rows, limit=int(limit or 50), user_id=user_id)
 
 
 async def record_interaction(session: AsyncSession, payload: dict[str, Any]) -> dict[str, Any]:
