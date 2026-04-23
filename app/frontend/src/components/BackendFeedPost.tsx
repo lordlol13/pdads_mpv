@@ -1,6 +1,6 @@
 ﻿import { useEffect, useMemo, useRef, useState, type MouseEvent, type WheelEvent } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { Bookmark, ChevronLeft, ChevronRight, Heart, MessageCircle, Play, Send, Share2 } from 'lucide-react';
+import { Bookmark, ChevronLeft, ChevronRight, Heart, MessageCircle, Play, Send, Share2, ExternalLink } from 'lucide-react';
 import { useDoubleTap } from 'use-double-tap';
 
 import { newsService } from '../api/services';
@@ -544,6 +544,24 @@ export function BackendFeedPost({
             <Share2 className="w-6 h-6 sm:w-7 sm:h-7 text-[var(--popover-foreground)] dark:text-white" />
           </button>
           <span className="text-[10px] sm:text-xs font-bold text-[var(--popover-foreground)] dark:text-white drop-shadow-md">{t.share}</span>
+        </div>
+        <div className="flex flex-col items-center gap-1">
+          <button
+            onClick={(event) => {
+              event.stopPropagation();
+              try {
+                const url = item.source_url;
+                if (typeof window !== 'undefined' && url && String(url).startsWith('http')) {
+                  window.open(String(url), '_blank', 'noopener');
+                }
+              } catch (e) {
+                // noop
+              }
+            }}
+            className="p-2.5 sm:p-3 bg-white/10 dark:bg-black/40 backdrop-blur-xl rounded-full border border-border dark:border-white/5 hover:scale-110 active:scale-95 transition-all"
+          >
+            <ExternalLink className="w-6 h-6 sm:w-7 sm:h-7 text-[var(--popover-foreground)] dark:text-white" />
+          </button>
         </div>
       </div>
 

@@ -76,6 +76,7 @@ export interface FeedItem {
   target_persona?: string | null;
   final_title?: string | null;
   final_text?: string | null;
+  source_url?: string | null;
   image_urls?: string[] | null;
   video_urls?: string[] | null;
   category?: string | null;

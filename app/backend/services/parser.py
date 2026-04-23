@@ -141,8 +141,8 @@ async def run_parser_async(
                         payload = {
                             "title": item.get("title") or "",
                             "raw_text": item.get("content"),
-                            "source_url": item.get("url"),
-                            "image_url": None,
+                            "source_url": item.get("source_url") or item.get("url"),
+                            "image_url": item.get("image_url"),
                             "category": None,
                             "region": None,
                             "is_urgent": False,

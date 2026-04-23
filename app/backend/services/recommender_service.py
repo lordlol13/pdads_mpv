@@ -527,10 +527,13 @@ async def refresh_user_embedding(
 
 
 async def ensure_user_embedding(session: AsyncSession, user_id: int) -> list[float]:
+    # Try to return existing stored embedding; if missing, return a fast
+    # deterministic fallback and enqueue a background task to compute the
+    # authoritative embedding so requests are not blocked by external APIs.
     result = await session.execute(
         text(
             """
-            SELECT embedding_vector
+            SELECT embedding_vector, interests, location, country_code, region_code, username
             FROM users
             WHERE id = :user_id
             LIMIT 1
@@ -542,7 +545,31 @@ async def ensure_user_embedding(session: AsyncSession, user_id: int) -> list[flo
     vector = vector_from_json(row.get("embedding_vector")) if row else None
     if vector:
         return _normalize_vector(vector)
-    return await refresh_user_embedding(session, user_id)
+
+    # Build lightweight profile text from available columns for a cheap local
+    # embedding fallback (no external API calls).
+    profile_text = build_user_profile_text(
+        interests=row.get("interests") if row else None,
+        location=row.get("location") if row else None,
+        country_code=row.get("country_code") if row else None,
+        region_code=row.get("region_code") if row else None,
+        username=row.get("username") if row else None,
+    )
+
+    # Local deterministic embedding as fast fallback
+    fallback_vector = text_to_embedding(profile_text)
+
+    # Enqueue a background Celery task to compute and persist the full
+    # embedding. Use a runtime import to avoid import-time cycles.
+    try:
+        from app.backend.core.celery_app import celery_app
+
+        celery_app.send_task("recommender.refresh_user_embedding", args=[user_id])
+    except Exception:
+        # If sending the task fails, we simply return the fallback.
+        pass
+
+    return _normalize_vector(fallback_vector)
 
 
 def rank_feed_rows(

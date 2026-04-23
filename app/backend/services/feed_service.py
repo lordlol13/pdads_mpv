@@ -659,6 +659,7 @@ async def get_user_feed(session: AsyncSession, user_id: int, limit: int = 50) ->
         uf.ai_score,
         uf.created_at,
         an.raw_news_id,
+        rn.source_url AS source_url,
         an.target_persona,
         an.final_title,
         an.final_text,
@@ -688,6 +689,7 @@ async def get_user_feed(session: AsyncSession, user_id: int, limit: int = 50) ->
         ON duf.id = uf.id
         AND duf.rn = 1
     JOIN ai_news an ON an.id = uf.ai_news_id
+    LEFT JOIN raw_news rn ON an.raw_news_id = rn.id
     LEFT JOIN latest_interactions li
         ON li.user_id = uf.user_id
         AND li.ai_news_id = uf.ai_news_id
@@ -786,6 +788,14 @@ async def get_user_feed(session: AsyncSession, user_id: int, limit: int = 50) ->
         # Metrics logging must not break feed serving.
         await session.rollback()
 
+    # Inject `is_ai` flag for API consumers: consider item AI-generated when ai_score > 0
+    for row in deduped_rows:
+        try:
+            row_ai = float(row.get("ai_score") or 0.0)
+            row["is_ai"] = bool(row_ai > 0.0)
+        except Exception:
+            row["is_ai"] = False
+
     return deduped_rows
 
 
@@ -808,7 +818,9 @@ async def record_interaction(session: AsyncSession, payload: dict[str, Any]) -> 
     user_id = int(payload.get("user_id") or 0)
     if user_id > 0:
         try:
-            await refresh_user_embedding(session, user_id)
+            from app.backend.core.celery_app import celery_app
+
+            celery_app.send_task("recommender.refresh_user_embedding", args=[user_id])
         except Exception:
             pass
     return dict(row) if row is not None else {"id": -1, "status": "created"}
@@ -837,7 +849,9 @@ async def toggle_saved_news(session: AsyncSession, user_id: int, ai_news_id: int
         )
         await session.commit()
         try:
-            await refresh_user_embedding(session, user_id)
+            from app.backend.core.celery_app import celery_app
+
+            celery_app.send_task("recommender.refresh_user_embedding", args=[user_id])
         except Exception:
             pass
         return False
@@ -892,7 +906,9 @@ async def toggle_saved_news(session: AsyncSession, user_id: int, ai_news_id: int
 
     await session.commit()
     try:
-        await refresh_user_embedding(session, user_id)
+        from app.backend.core.celery_app import celery_app
+
+        celery_app.send_task("recommender.refresh_user_embedding", args=[user_id])
     except Exception:
         pass
     return True

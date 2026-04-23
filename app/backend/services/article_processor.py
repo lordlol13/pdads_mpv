@@ -9,6 +9,7 @@ from app.backend.services.today_pipeline_utils import extract_date
 from app.backend.services.site_parsers import parse_article_by_domain
 from app.backend.services.article_detector import ArticleDetector
 from app.backend.services.content_filters import is_advertisement
+from app.backend.utils.extractors import extract_article_async
 
 LOG = logging.getLogger("article_processor")
 LOG.addHandler(logging.NullHandler())
@@ -58,6 +59,18 @@ async def process_article(session, url: str, fetch: Callable[[Optional[object], 
         LOG.exception("extract_by_domain failed for %s", url)
         content = None
 
+    # try to extract image/title metadata using the production extractor
+    image_url = None
+    try:
+        meta = await extract_article_async(html, url)
+        if isinstance(meta, dict):
+            image_url = meta.get("image_url")
+            # prefer extractor title if our parsed title is empty
+            if not title and meta.get("title"):
+                title = meta.get("title")
+    except Exception:
+        LOG.exception("extract_article_async failed for %s", url)
+
     if not content or len(content) < 300:
         print(f"[ARTICLE] SKIP (short): {url}")
         return None, "short"
@@ -78,7 +91,14 @@ async def process_article(session, url: str, fetch: Callable[[Optional[object], 
         published = None
 
     print(f"[ARTICLE] OK: {url}")
-    return {"url": url, "title": title, "content": content, "published_at": published}, None
+    return {
+        "url": url,
+        "title": title,
+        "content": content,
+        "published_at": published,
+        "image_url": image_url,
+        "source_url": url,
+    }, None
 
 
 async def process_all(session, urls: List[str], fetch: Callable[[Optional[object], str], Awaitable[Optional[str]]], concurrency: int = 10) -> tuple[List[dict], dict]:

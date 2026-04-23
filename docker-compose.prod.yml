@@ -1,0 +1,58 @@
+version: '3.8'
+
+services:
+  web:
+    image: ${WEB_IMAGE:-ghcr.io/<owner>/pdads_mpv:latest}
+    restart: always
+    env_file: .env
+    ports:
+      - "8000:8000"
+    depends_on:
+      - db
+      - redis
+    command: uvicorn app.backend.main:app --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers --forwarded-allow-ips='*'
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1024M
+
+  worker:
+    image: ${WORKER_IMAGE:-ghcr.io/<owner>/pdads_mpv:latest}
+    restart: always
+    env_file: .env
+    depends_on:
+      - db
+      - redis
+    command: python -m celery -A app.backend.core.celery_app:celery_app worker --loglevel=info --pool=solo
+
+  beat:
+    image: ${WORKER_IMAGE:-ghcr.io/<owner>/pdads_mpv:latest}
+    restart: always
+    env_file: .env
+    depends_on:
+      - db
+      - redis
+    command: python -m celery -A app.backend.core.celery_app:celery_app beat --loglevel=info
+
+  db:
+    image: postgres:15
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ai_news_db
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+    driver: local
+
+# Notes:
+# - Replace <owner> with your GitHub org/user or set WEB_IMAGE/WORKER_IMAGE env when deploying.
+# - Use `.env` (not committed) to provide DATABASE_URL, REDIS_URL and secret keys in production host.

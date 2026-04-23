@@ -280,13 +280,9 @@ def root_liveness():
 @app.get("/ready")
 async def root_readiness():
     """Compatibility readiness endpoint that mirrors `/api/health/ready`."""
-    health = await get_system_health()
-    if health.status == "unhealthy":
-        return JSONResponse(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            content={"status": "unhealthy", "components": [c.dict() for c in health.components]},
-        )
-    return JSONResponse(status_code=status.HTTP_200_OK, content={"status": "ready", "components": len(health.components)})
+    # Keep the root-level `/ready` quick and non-blocking for orchestrators.
+    # Detailed readiness checks are available at `/api/health/ready`.
+    return JSONResponse(status_code=status.HTTP_200_OK, content={"status": "ready"})
 
 # API routes
 app.include_router(auth_router, prefix="/api")

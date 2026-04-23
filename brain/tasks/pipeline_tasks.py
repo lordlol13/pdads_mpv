@@ -2,6 +2,8 @@ import asyncio
 import hashlib
 import json
 import logging
+import re
+import os
 from typing import Optional, Any
 
 from sqlalchemy import text
@@ -24,6 +26,140 @@ from app.backend.services.recommender_service import refresh_ai_news_embedding
 from app.backend.db.session import SessionLocal
 
 logger = logging.getLogger(__name__)
+LOG = logger
+
+
+BAD_PHRASES = [
+    "reklama",
+    "реклама",
+    "подписывайтесь",
+    "obuna",
+    "batafsil",
+    "batafsil o‘qish",
+    "telegram",
+    "instagram",
+    "youtube",
+]
+
+
+def simple_clean(text: str, max_len: int = 400) -> str:
+    if not text:
+        return ""
+
+    # collapse whitespace
+    s = re.sub(r"\s+", " ", str(text))
+
+    # remove URLs
+    s = re.sub(r"http\S+", "", s)
+
+    # remove bad phrases (case-insensitive)
+    for phrase in BAD_PHRASES:
+        try:
+            s = re.sub(re.escape(phrase), "", s, flags=re.IGNORECASE)
+        except Exception:
+            s = s.replace(phrase, "")
+
+    # remove short/meaningless sentence fragments
+    parts = [p.strip() for p in s.split(".")]
+    parts = [p for p in parts if len(p) > 40]
+
+    s = ". ".join(parts)
+
+    # truncate and append ellipsis
+    return s[:max_len].strip() + "..."
+
+
+def fix_cut_words(text: str) -> str:
+    if not text:
+        return text
+
+    if not text.endswith((".", "!", "?")):
+        # drop the trailing partial word
+        if " " in text:
+            text = text.rsplit(" ", 1)[0]
+    return text
+
+
+def clean_title(title: str) -> str:
+    if not title:
+        return ""
+
+    t = str(title).strip()
+    # remove site suffixes like "| Site" or "- Site"
+    t = re.sub(r"\|.*$", "", t).strip()
+    t = re.sub(r"-.*$", "", t).strip()
+    return t[:120]
+
+
+STOPWORDS = {
+    "the", "and", "or", "but", "is", "are", "a", "an",
+    "va", "ham", "lekin", "bu", "shu",
+    "и", "в", "на", "с", "это",
+}
+
+
+SMART_HIGHLIGHT_ENABLED = str(os.getenv("SMART_HIGHLIGHT") or "").lower() in ("1", "true", "yes")
+
+
+def score_sentence(sentence: str) -> int:
+    words = re.findall(r"\w+", sentence.lower())
+    return sum(1 for w in words if w not in STOPWORDS)
+
+
+def smart_summary(text: str, max_sentences: int = 3) -> str:
+    if not text:
+        return ""
+
+    sentences = re.split(r"[.!?]", text)
+    # Build scored list with original positions to preserve order later
+    scored: list[tuple[str, int, int]] = []
+    for idx, s in enumerate(sentences):
+        s_str = s.strip()
+        if len(s_str) > 40:
+            scored.append((s_str, score_sentence(s_str), idx))
+
+    if not scored:
+        return (text or "")[:400].strip() + "..."
+
+    # sort by informativeness (score desc) and pick top candidates
+    scored.sort(key=lambda x: x[1], reverse=True)
+    top = scored[:max_sentences]
+
+    # preserve original document order for readability
+    top_sorted_by_pos = sorted(top, key=lambda x: x[2])
+    top_sentences = [s for s, _, _ in top_sorted_by_pos]
+
+    # dedupe near-duplicate sentences (fingerprint by prefix)
+    def dedupe_sentences(sentences_list: list[str]) -> list[str]:
+        seen: set[str] = set()
+        result: list[str] = []
+        for s in sentences_list:
+            key = s[:50]
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(s)
+        return result
+
+    top_sentences = dedupe_sentences(top_sentences)
+    if not top_sentences:
+        # fallback to first scored sentence
+        return scored[0][0][:400].strip() + "."
+
+    return ". ".join(top_sentences).strip() + "."
+
+
+def highlight_keywords(text: str, keywords: list[str]) -> str:
+    if not text or not keywords:
+        return text
+    for kw in keywords:
+        try:
+            # use word boundaries to avoid mid-word matches; wrap with <b> for safe HTML
+            pattern = re.compile(rf"\b({re.escape(kw)})\b", flags=re.IGNORECASE)
+            text = pattern.sub(lambda m: f"<b>{m.group(1)}</b>", text)
+        except Exception:
+            pass
+    return text
 
 
 def _extract_image_urls_payload(value: Any) -> list[str]:
@@ -313,17 +449,67 @@ async def _generate_with_quality_loop(
     geo: str | None,
 ) -> dict[str, Any]:
     best_result: dict[str, Any] | None = None
+    def _fallback_generated() -> dict[str, Any]:
+        # Simple fallback that uses raw text/title when LLM unavailable or fails
+        raw_text = str(raw_row.get("raw_text") or "")
+        title = str(raw_row.get("title") or "").strip()
+
+        # apply improved non-AI cleaning
+        cleaned = simple_clean(raw_text)
+        cleaned = fix_cut_words(cleaned)
+
+        # create smart summary from cleaned text
+        summary = smart_summary(cleaned)
+
+        # optional lightweight highlight using title-derived keywords
+        final_title = clean_title(title) or clean_title((summary or "").split("\n", 1)[0][:120])
+        final_text = summary or (cleaned or simple_clean(raw_text[:2000]))
+        if SMART_HIGHLIGHT_ENABLED and final_title and final_text:
+            # derive keywords from title (simple heuristic)
+            kws = [w for w in re.findall(r"\w+", final_title) if len(w) > 3 and w.lower() not in STOPWORDS]
+            if kws:
+                final_text = highlight_keywords(final_text, kws[:8])
+
+        return {
+            "final_title": final_title,
+            "final_text": final_text,
+            "category": str(raw_row.get("category") or "").strip() or None,
+            "combined_score": 0.0,
+            "ai_score": 0.0,
+            "is_ai": False,
+        }
+
+    # If there is no AI key configured, return fallback immediately (AI is optional)
+    ai_present = bool((settings.OPENAI_API_KEY or "").strip() or (settings.GEMINI_API_KEY or "").strip())
+    if not ai_present:
+        LOG.info("LLM keys not found, using raw fallback for raw_news_id=%s", raw_row.get("id"))
+        return _fallback_generated()
+
     for rewrite_round in range(1, settings.PIPELINE_MAX_REWRITE_ROUNDS + 1):
-        generated = await generate_news(
-            raw_text=raw_row.get("raw_text") or "",
-            title=raw_row.get("title") or "",
-            category=raw_row.get("category"),
-            target_persona=topic,
-            region=raw_row.get("region"),
-            profession=profession,
-            user_geo=geo,
-            rewrite_round=rewrite_round,
-        )
+        try:
+            generated = await generate_news(
+                raw_text=raw_row.get("raw_text") or "",
+                title=raw_row.get("title") or "",
+                category=raw_row.get("category"),
+                target_persona=topic,
+                region=raw_row.get("region"),
+                profession=profession,
+                user_geo=geo,
+                rewrite_round=rewrite_round,
+            )
+        except Exception as e:
+            LOG.exception("generate_news failed for raw_news_id=%s round=%s: %s", raw_row.get("id"), rewrite_round, e)
+            # try next round; if all rounds fail we'll fallback below
+            generated = None
+
+        if not generated:
+            continue
+
+        # Mark AI-generated payload explicitly
+        try:
+            generated["is_ai"] = True
+        except Exception:
+            pass
 
         combined_score = float(generated.get("combined_score", generated.get("ai_score", 0.0)))
         if best_result is None or combined_score > float(best_result.get("combined_score", 0.0)):
@@ -332,13 +518,28 @@ async def _generate_with_quality_loop(
         if combined_score >= settings.PIPELINE_TARGET_SCORE:
             return generated
 
+    # If we did not get any successful generation, fallback to raw if configured
     if best_result is None:
+        if settings.LLM_FALLBACK_ENABLED:
+            LOG.warning("LLM generation failed, falling back to raw for raw_news_id=%s", raw_row.get("id"))
+            return _fallback_generated()
         raise ValueError("generation_failed")
 
+    # If generated but score is too low, allow fallback when enabled
     if float(best_result.get("combined_score", 0.0)) < settings.PIPELINE_MIN_SCORE:
-        raise ValueError(
-            f"low_generation_score:{best_result.get('combined_score')}"
-        )
+        if settings.LLM_FALLBACK_ENABLED:
+            LOG.warning(
+                "LLM generation score too low (%.2f), falling back to raw for raw_news_id=%s",
+                float(best_result.get("combined_score", 0.0)),
+                raw_row.get("id"),
+            )
+            return _fallback_generated()
+        raise ValueError(f"low_generation_score:{best_result.get('combined_score')}")
+
+    try:
+        best_result.setdefault("is_ai", True)
+    except Exception:
+        pass
 
     return best_result
 
@@ -1070,4 +1271,36 @@ def scheduled_cleanup_ai_products() -> dict:
         return result
     except Exception as e:
         logger.error("scheduled_cleanup_ai_products failed: %s", e)
+        raise
+
+
+@celery_app.task(
+    name="recommender.refresh_user_embedding",
+    bind=False,
+    autoretry_for=(ConnectionError, TimeoutError, Exception),
+    retry_backoff=True,
+    max_retries=3,
+)
+def refresh_user_embedding_task(user_id: int, history_limit: int | None = None) -> dict:
+    logger.info("recommender.refresh_user_embedding task started user_id=%s", user_id)
+    try:
+        loop = asyncio.new_event_loop()
+        try:
+            async def _run():
+                async with SessionLocal() as session:
+                    # Import at runtime to reduce import-time coupling
+                    from app.backend.services.recommender_service import refresh_user_embedding
+
+                    await refresh_user_embedding(session, int(user_id), history_limit=history_limit)
+
+            result = loop.run_until_complete(_run())
+        finally:
+            try:
+                loop.close()
+            except Exception:
+                pass
+        logger.info("recommender.refresh_user_embedding finished user_id=%s", user_id)
+        return {"status": "ok", "user_id": user_id}
+    except Exception as e:
+        logger.exception("recommender.refresh_user_embedding failed user_id=%s: %s", user_id, e)
         raise
