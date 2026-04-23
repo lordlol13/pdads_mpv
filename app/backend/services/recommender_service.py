@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import random
 import re
 from datetime import datetime, timezone
 from typing import Any, Iterable, Sequence
@@ -653,3 +654,56 @@ def rank_feed_rows(
         reverse=True,
     )
     return filtered[:limit]
+
+
+# --- Simple TikTok-style helpers (lightweight alternative) ---
+def compute_freshness(published_at):
+    """Lightweight freshness (hours decay)."""
+    try:
+        if not published_at:
+            return 0.5
+        if isinstance(published_at, str):
+            # best-effort parse ISO-ish
+            try:
+                published = datetime.fromisoformat(published_at.replace("Z", "+00:00"))
+            except Exception:
+                return 0.5
+        elif isinstance(published_at, datetime):
+            published = published_at
+        else:
+            return 0.5
+
+        hours = (datetime.utcnow() - published.replace(tzinfo=None)).total_seconds() / 3600.0
+        return math.exp(-hours / 24.0)
+    except Exception:
+        return 0.5
+
+
+def compute_score(
+    item: dict[str, Any], user_pref: dict | None = None, user_embedding: Sequence[float] | None = None
+) -> float:
+    """Combined score including lightweight user preference boost.
+
+    We intentionally keep this simple and deterministic; exploration noise
+    should be injected at the pipeline level via `add_exploration`.
+    """
+    ai_score = float(item.get("ai_score") or 0.3)
+    freshness = compute_freshness(item.get("created_at") or item.get("published_at"))
+
+    similarity = float(item.get("similarity") or item.get("similarity_score") or 0.5)
+
+    category = str(item.get("category") or "general").strip().lower()
+    user_boost = 0.0
+    if user_pref:
+        try:
+            user_boost = float(user_pref.get(category, 0.0) or 0.0)
+        except Exception:
+            user_boost = 0.0
+
+    score = (
+        0.3 * ai_score
+        + 0.25 * freshness
+        + 0.2 * similarity
+        + 0.25 * user_boost
+    )
+    return float(score)

@@ -565,41 +565,43 @@ export function BackendFeedPost({
         </div>
       </div>
 
-      <div className="absolute bottom-0 left-0 w-full p-4 md:p-6 dark:bg-gradient-to-t dark:from-black/80 dark:via-black/40 dark:to-transparent bg-transparent z-30">
+      <div className="absolute bottom-0 left-0 w-full p-4 md:p-6 bg-gradient-to-t from-white/80 via-white/40 to-transparent dark:bg-gradient-to-t dark:from-black/80 dark:via-black/40 dark:to-transparent z-30">
         <div className="max-w-[80%] space-y-3">
-          <h3 className="font-bold text-lg text-[var(--popover-foreground)] dark:text-white">{author}</h3>
-          {personaMeta.toc.length > 0 ? (
-            <div className="flex flex-wrap gap-2">
-              {((showAllTags ? personaMeta.toc : personaMeta.toc.slice(0, isWide ? 3 : 2))).map((topic) => (
-                <span
-                  key={topic}
-                  className="rounded-full border border-border dark:border-white/25 dark:bg-black/35 bg-[var(--popover)] px-2.5 py-1 text-[10px] sm:text-[10px] font-semibold uppercase tracking-wide text-[var(--popover-foreground)] dark:text-white/90"
-                >
-                  {topic}
-                </span>
-              ))}
-              {!showAllTags && personaMeta.toc.length > (isWide ? 3 : 2) ? (
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setShowAllTags(true);
-                  }}
-                  className="rounded-full border border-border dark:border-white/25 dark:bg-black/35 bg-[var(--popover)] px-2.5 py-1 text-[10px] sm:text-[10px] font-semibold uppercase tracking-wide text-[var(--popover-foreground)] dark:text-white/90"
-                >
-                  +{personaMeta.toc.length - (isWide ? 3 : 2)}
-                </button>
-              ) : null}
-            </div>
-          ) : null}
-          <p
-            className={`text-[var(--popover-foreground)] dark:text-white/90 ${isWide ? 'text-sm' : 'text-xs'} ${isWide ? 'line-clamp-2' : 'line-clamp-1'} cursor-pointer hover:text-white transition-colors`}
-            onClick={(event) => {
-              event.stopPropagation();
-              setShowDescription(true);
-            }}
-          >
-            {stripToPreview(title)}
-          </p>
+          <div className="bg-white/80 dark:bg-black/70 backdrop-blur-sm rounded-2xl p-3 md:p-4">
+            <h3 className="font-bold text-lg text-[var(--popover-foreground)] dark:text-white">{author}</h3>
+            {personaMeta.toc.length > 0 ? (
+              <div className="flex flex-wrap gap-2">
+                {((showAllTags ? personaMeta.toc : personaMeta.toc.slice(0, isWide ? 3 : 2))).map((topic) => (
+                  <span
+                    key={topic}
+                    className="rounded-full border border-border dark:border-white/25 bg-[rgba(255,255,255,0.12)] dark:bg-zinc-900/60 px-2.5 py-1 text-[10px] sm:text-[10px] font-semibold uppercase tracking-wide text-[var(--popover-foreground)] dark:text-zinc-200"
+                  >
+                    {topic}
+                  </span>
+                ))}
+                {!showAllTags && personaMeta.toc.length > (isWide ? 3 : 2) ? (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowAllTags(true);
+                    }}
+                    className="rounded-full border border-border dark:border-white/25 bg-[rgba(255,255,255,0.12)] dark:bg-zinc-900/60 px-2.5 py-1 text-[10px] sm:text-[10px] font-semibold uppercase tracking-wide text-[var(--popover-foreground)] dark:text-zinc-200"
+                  >
+                    +{personaMeta.toc.length - (isWide ? 3 : 2)}
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+            <p
+              className={`text-[var(--popover-foreground)] dark:text-white/90 ${isWide ? 'text-sm' : 'text-xs'} ${isWide ? 'line-clamp-2' : 'line-clamp-1'} cursor-pointer hover:text-white transition-colors mt-2`}
+              onClick={(event) => {
+                event.stopPropagation();
+                setShowDescription(true);
+              }}
+            >
+              {stripToPreview(title)}
+            </p>
+          </div>
         </div>
       </div>
 
@@ -656,13 +658,13 @@ export function BackendFeedPost({
                   </div>
                 ) : null}
                 <div className="prose prose-invert max-w-none">
-                  <p className="text-[var(--muted-foreground)] leading-relaxed text-base md:text-lg whitespace-pre-wrap">
+                  <p className="text-[var(--muted-foreground)] dark:text-zinc-200 leading-relaxed text-base md:text-lg whitespace-pre-wrap bg-white/90 dark:bg-black/70 p-4 rounded-lg">
                     {previewText || t.noComments}
                   </p>
                 </div>
                 <button
                   onClick={() => setShowDescription(false)}
-                  className="w-full py-4 bg-white text-black font-bold rounded-2xl hover:bg-zinc-200 transition-colors"
+                  className="w-full py-4 bg-white text-black dark:bg-zinc-800 dark:text-white font-bold rounded-2xl hover:bg-zinc-200 dark:hover:bg-zinc-700 transition-colors"
                 >
                   {t.close}
                 </button>

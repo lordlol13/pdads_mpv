@@ -3,6 +3,7 @@ import asyncio
 import logging
 from typing import Optional, Callable, Awaitable, List
 from bs4 import BeautifulSoup
+from app.backend.services.image_pipeline import resolve_image
 
 from app.backend.services.content_extractors import extract_by_domain
 from app.backend.services.today_pipeline_utils import extract_date
@@ -89,6 +90,17 @@ async def process_article(session, url: str, fetch: Callable[[Optional[object], 
     except Exception:
         LOG.exception("date extraction failed for %s", url)
         published = None
+
+    # Resolve final image (prefer extractor-provided, fall back to HTML/meta/unsplash)
+    try:
+        resolved = resolve_image(html=html, title=title, base_url=url, candidate_url=image_url)
+        image_url = resolved
+    except Exception:
+        LOG.exception("image resolve failed for %s", url)
+
+    # Final safety: guarantee we always return some image
+    if not image_url:
+        image_url = "https://source.unsplash.com/800x600/?news"
 
     print(f"[ARTICLE] OK: {url}")
     return {

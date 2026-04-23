@@ -28,6 +28,7 @@ from app.backend.api.routes.ingestion import router as ingestion_router
 from app.backend.api.routes.pipeline import router as pipeline_router
 from app.backend.api.routes.llm import router as llm_router
 from app.backend.api.ai_batch import router as ai_router
+from app.backend.api.routes import events
 from app.backend.core.config import settings
 from app.backend.core.errors import (
     AppException,
@@ -292,6 +293,7 @@ app.include_router(feed_router, prefix="/api")
 app.include_router(pipeline_router, prefix="/api")
 app.include_router(llm_router, prefix="/api")
 app.include_router(ai_router)
+app.include_router(events.router, prefix="/api")
 
 
 # =====================================================================

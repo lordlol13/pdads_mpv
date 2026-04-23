@@ -1,6 +1,6 @@
 import hashlib
 from typing import Any
-from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
+from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode, urljoin
 
 from fastapi import HTTPException, status
 from sqlalchemy import text
@@ -10,9 +10,18 @@ from app.backend.db.sql_helpers import sql_timestamp_now
 
 
 RAW_NEWS_SELECT_COLUMNS = """
-id, title, source_url, image_url, raw_text, category, region, is_urgent,
+id, title, source_url, image_url, image_hash, raw_text, category, region, is_urgent,
 created_at, process_status, error_message, attempt_count, content_hash
 """
+
+
+def get_image_hash(url: str | None) -> str | None:
+    if not url:
+        return None
+    try:
+        return hashlib.md5(url.strip().lower().encode("utf-8")).hexdigest()
+    except Exception:
+        return None
 
 
 def build_content_hash(title: str, raw_text: str | None, source_url: str | None) -> str:
@@ -44,6 +53,19 @@ def _normalize_source_url(raw: str | None) -> str | None:
 async def create_raw_news(session: AsyncSession, payload: dict[str, Any]) -> dict[str, Any]:
     source_url = payload.get("source_url") or None
     normalized_url = _normalize_source_url(source_url)
+
+    # sanitize and normalize provided image URL (protect against short/broken values)
+    image_url = payload.get("image_url") or None
+    if image_url:
+        image_url = image_url.strip()
+        if len(image_url) < 10:
+            image_url = None
+        elif image_url.startswith("//"):
+            image_url = "https:" + image_url
+        elif image_url.startswith("/") and (normalized_url or source_url):
+            image_url = urljoin(normalized_url or source_url, image_url)
+
+    image_hash = get_image_hash(image_url)
 
     # 1) If we have a source URL — try to find existing by URL first (simple dedupe by URL)
     if normalized_url:
@@ -84,14 +106,14 @@ async def create_raw_news(session: AsyncSession, payload: dict[str, Any]) -> dic
     # Try atomic insert with ON CONFLICT DO NOTHING to avoid race conditions.
     insert_query_pg = f"""
     INSERT INTO raw_news (
-        title, source_url, image_url, raw_text, category, region, is_urgent,
+        title, source_url, image_url, image_hash, raw_text, category, region, is_urgent,
         created_at, process_status, error_message, attempt_count, content_hash
     )
     VALUES (
-        :title, :source_url, :image_url, :raw_text, :category, :region, :is_urgent,
+        :title, :source_url, :image_url, :image_hash, :raw_text, :category, :region, :is_urgent,
         {now_sql}, 'pending', NULL, 0, :content_hash
     )
-    ON CONFLICT DO NOTHING
+    ON CONFLICT (image_hash) DO NOTHING
     RETURNING
         {RAW_NEWS_SELECT_COLUMNS}
     """
@@ -100,7 +122,8 @@ async def create_raw_news(session: AsyncSession, payload: dict[str, Any]) -> dic
         "title": payload["title"],
         # store normalized URL when possible
         "source_url": normalized_url or payload.get("source_url"),
-        "image_url": payload.get("image_url"),
+        "image_url": image_url,
+        "image_hash": image_hash,
         "raw_text": payload.get("raw_text"),
         "category": payload.get("category"),
         "region": payload.get("region"),
@@ -115,11 +138,11 @@ async def create_raw_news(session: AsyncSession, payload: dict[str, Any]) -> dic
         # If INSERT with ON CONFLICT isn't supported or fails, fall back to safe INSERT without ON CONFLICT
         insert_query = f"""
         INSERT INTO raw_news (
-            title, source_url, image_url, raw_text, category, region, is_urgent,
+            title, source_url, image_url, image_hash, raw_text, category, region, is_urgent,
             created_at, process_status, error_message, attempt_count, content_hash
         )
         VALUES (
-            :title, :source_url, :image_url, :raw_text, :category, :region, :is_urgent,
+            :title, :source_url, :image_url, :image_hash, :raw_text, :category, :region, :is_urgent,
             {now_sql}, 'pending', NULL, 0, :content_hash
         )
         RETURNING
