@@ -14,6 +14,15 @@ id, title, source_url, image_url, image_hash, raw_text, category, region, is_urg
 created_at, process_status, error_message, attempt_count, content_hash
 """
 
+# Fallback select columns when DB doesn't have `image_hash` (migration not applied yet)
+RAW_NEWS_SELECT_COLUMNS_NO_IMAGE = """
+id, title, source_url, image_url, raw_text, category, region, is_urgent,
+created_at, process_status, error_message, attempt_count, content_hash
+"""
+
+# Cache result of schema check to avoid repeated information_schema queries
+_IMAGE_HASH_EXISTS: bool | None = None
+
 
 def get_image_hash(url: str | None) -> str | None:
     if not url:
@@ -67,6 +76,23 @@ async def create_raw_news(session: AsyncSession, payload: dict[str, Any]) -> dic
 
     image_hash = get_image_hash(image_url)
 
+    # Determine whether DB has `image_hash` column (cache the result)
+    global _IMAGE_HASH_EXISTS
+    if _IMAGE_HASH_EXISTS is None:
+        try:
+            q = """
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'raw_news' AND column_name = 'image_hash'
+            LIMIT 1
+            """
+            res = await session.execute(text(q))
+            _IMAGE_HASH_EXISTS = bool(res.scalar())
+        except Exception:
+            _IMAGE_HASH_EXISTS = False
+
+    # choose columns SQL based on schema
+    select_columns = RAW_NEWS_SELECT_COLUMNS if _IMAGE_HASH_EXISTS else RAW_NEWS_SELECT_COLUMNS_NO_IMAGE
+
     # 1) If we have a source URL — try to find existing by URL first (simple dedupe by URL)
     if normalized_url:
         existing_by_url_q = """
@@ -76,7 +102,7 @@ async def create_raw_news(session: AsyncSession, payload: dict[str, Any]) -> dic
         WHERE source_url = :source_url
         ORDER BY id
         LIMIT 1
-        """.format(columns=RAW_NEWS_SELECT_COLUMNS)
+        """.format(columns=select_columns)
         existing_by_url = await session.execute(text(existing_by_url_q), {"source_url": normalized_url})
         existing_row = existing_by_url.mappings().first()
         if existing_row is not None:
@@ -96,7 +122,7 @@ async def create_raw_news(session: AsyncSession, payload: dict[str, Any]) -> dic
     WHERE content_hash = :content_hash
     ORDER BY id
     LIMIT 1
-    """.format(columns=RAW_NEWS_SELECT_COLUMNS)
+    """.format(columns=select_columns)
     existing_result = await session.execute(text(existing_query), {"content_hash": content_hash})
     existing_row = existing_result.mappings().first()
     if existing_row is not None:
@@ -104,19 +130,33 @@ async def create_raw_news(session: AsyncSession, payload: dict[str, Any]) -> dic
 
     now_sql = sql_timestamp_now(session)
     # Try atomic insert with ON CONFLICT DO NOTHING to avoid race conditions.
-    insert_query_pg = f"""
-    INSERT INTO raw_news (
-        title, source_url, image_url, image_hash, raw_text, category, region, is_urgent,
-        created_at, process_status, error_message, attempt_count, content_hash
-    )
-    VALUES (
-        :title, :source_url, :image_url, :image_hash, :raw_text, :category, :region, :is_urgent,
-        {now_sql}, 'pending', NULL, 0, :content_hash
-    )
-    ON CONFLICT (image_hash) DO NOTHING
-    RETURNING
-        {RAW_NEWS_SELECT_COLUMNS}
-    """
+    if _IMAGE_HASH_EXISTS:
+        insert_query_pg = f"""
+        INSERT INTO raw_news (
+            title, source_url, image_url, image_hash, raw_text, category, region, is_urgent,
+            created_at, process_status, error_message, attempt_count, content_hash
+        )
+        VALUES (
+            :title, :source_url, :image_url, :image_hash, :raw_text, :category, :region, :is_urgent,
+            {now_sql}, 'pending', NULL, 0, :content_hash
+        )
+        ON CONFLICT (image_hash) DO NOTHING
+        RETURNING
+            {select_columns}
+        """
+    else:
+        insert_query_pg = f"""
+        INSERT INTO raw_news (
+            title, source_url, image_url, raw_text, category, region, is_urgent,
+            created_at, process_status, error_message, attempt_count, content_hash
+        )
+        VALUES (
+            :title, :source_url, :image_url, :raw_text, :category, :region, :is_urgent,
+            {now_sql}, 'pending', NULL, 0, :content_hash
+        )
+        RETURNING
+            {select_columns}
+        """
 
     params = {
         "title": payload["title"],
@@ -136,18 +176,33 @@ async def create_raw_news(session: AsyncSession, payload: dict[str, Any]) -> dic
         await session.commit()
     except Exception:
         # If INSERT with ON CONFLICT isn't supported or fails, fall back to safe INSERT without ON CONFLICT
-        insert_query = f"""
-        INSERT INTO raw_news (
-            title, source_url, image_url, image_hash, raw_text, category, region, is_urgent,
-            created_at, process_status, error_message, attempt_count, content_hash
-        )
-        VALUES (
-            :title, :source_url, :image_url, :image_hash, :raw_text, :category, :region, :is_urgent,
-            {now_sql}, 'pending', NULL, 0, :content_hash
-        )
-        RETURNING
-            {RAW_NEWS_SELECT_COLUMNS}
-        """
+        # Fallback insert without ON CONFLICT
+        if _IMAGE_HASH_EXISTS:
+            insert_query = f"""
+            INSERT INTO raw_news (
+                title, source_url, image_url, image_hash, raw_text, category, region, is_urgent,
+                created_at, process_status, error_message, attempt_count, content_hash
+            )
+            VALUES (
+                :title, :source_url, :image_url, :image_hash, :raw_text, :category, :region, :is_urgent,
+                {now_sql}, 'pending', NULL, 0, :content_hash
+            )
+            RETURNING
+                {select_columns}
+            """
+        else:
+            insert_query = f"""
+            INSERT INTO raw_news (
+                title, source_url, image_url, raw_text, category, region, is_urgent,
+                created_at, process_status, error_message, attempt_count, content_hash
+            )
+            VALUES (
+                :title, :source_url, :image_url, :raw_text, :category, :region, :is_urgent,
+                {now_sql}, 'pending', NULL, 0, :content_hash
+            )
+            RETURNING
+                {select_columns}
+            """
         result = await session.execute(text(insert_query), params)
         await session.commit()
 

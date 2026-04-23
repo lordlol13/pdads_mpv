@@ -1,3 +1,15 @@
+from __future__ import annotations
+
+from pathlib import Path
+import sys
+
+# Ensure repository root is on sys.path when script is executed directly
+# so imports like `from app.backend...` work regardless of CWD.
+REPO_ROOT = Path(__file__).resolve().parents[2]
+repo_root_str = str(REPO_ROOT)
+if repo_root_str not in sys.path:
+    sys.path.insert(0, repo_root_str)
+
 import asyncio
 from sqlalchemy import text
 from app.backend.db.session import SessionLocal
