@@ -167,6 +167,10 @@ async def _process_article(session, article_url: str, html: str | None) -> dict 
         logger.info("Ingested article", title=title, url=article_url, id=result.get("id"))
         return result
     except Exception as exc:  # pragma: no cover - DB or constraint issues
+        try:
+            await session.rollback()
+        except Exception:
+            pass
         logger.exception("Failed creating raw_news", error=str(exc), url=article_url, title=title)
         return None
 
@@ -184,58 +188,58 @@ async def ingest_rss_feed(session, rss_url: str, limit: int = 10) -> int:
 
     entries = getattr(feed, "entries", []) or []
     count = 0
-    sem = asyncio.Semaphore(8)
-
     async def _handle(entry):
         nonlocal count
-        async with sem:
-            link = entry.get("link") or entry.get("id")
-            if not link or not _LINK_FILTER_RE.match(link):
-                return
-            title = _clean_text(entry.get("title") or "")
-            content = ""
-            if entry.get("content"):
-                try:
-                    content = entry.get("content")[0].get("value", "")
-                except Exception:
-                    content = entry.get("summary", "")
-            else:
-                content = entry.get("summary", "")
-
-            # try feed-provided images
-            image_url = None
-            if entry.get("media_content"):
-                try:
-                    media = entry.get("media_content")
-                    if isinstance(media, (list, tuple)) and media:
-                        image_url = media[0].get("url")
-                except Exception:
-                    image_url = None
-
-            if not image_url:
-                candidates = await fetch_media_urls(title or link, limit=1, source_url=link)
-                image_url = candidates[0] if candidates else None
-
-            payload = {
-                "title": title or link,
-                "source_url": link,
-                "image_url": image_url,
-                "raw_text": content,
-                "category": None,
-                "region": None,
-                "is_urgent": False,
-            }
-
+        link = entry.get("link") or entry.get("id")
+        if not link or not _LINK_FILTER_RE.match(link):
+            return
+        title = _clean_text(entry.get("title") or "")
+        content = ""
+        if entry.get("content"):
             try:
-                await create_raw_news(session, payload)
-                count += 1
-                logger.info("Ingested RSS entry", feed=rss_url, url=link, title=title)
-            except Exception as exc:
-                logger.exception("Failed to create raw_news from RSS entry", error=str(exc), url=link)
+                content = entry.get("content")[0].get("value", "")
+            except Exception:
+                content = entry.get("summary", "")
+        else:
+            content = entry.get("summary", "")
 
-    tasks = [asyncio.create_task(_handle(e)) for e in entries[:limit]]
-    if tasks:
-        await asyncio.gather(*tasks)
+        # try feed-provided images
+        image_url = None
+        if entry.get("media_content"):
+            try:
+                media = entry.get("media_content")
+                if isinstance(media, (list, tuple)) and media:
+                    image_url = media[0].get("url")
+            except Exception:
+                image_url = None
+
+        if not image_url:
+            candidates = await fetch_media_urls(title or link, limit=1, source_url=link)
+            image_url = candidates[0] if candidates else None
+
+        payload = {
+            "title": title or link,
+            "source_url": link,
+            "image_url": image_url,
+            "raw_text": content,
+            "category": None,
+            "region": None,
+            "is_urgent": False,
+        }
+
+        try:
+            await create_raw_news(session, payload)
+            count += 1
+            logger.info("Ingested RSS entry", feed=rss_url, url=link, title=title)
+        except Exception as exc:
+            try:
+                await session.rollback()
+            except Exception:
+                pass
+            logger.exception("Failed to create raw_news from RSS entry", error=str(exc), url=link)
+
+    for entry in entries[:limit]:
+        await _handle(entry)
 
     return count
 
@@ -276,21 +280,17 @@ async def ingest_site_frontpage(session, base_url: str, limit_links: int = 20) -
             break
 
     count = 0
-    sem = asyncio.Semaphore(SITE_CONCURRENCY)
-
     async def _handle_link(link: str):
         nonlocal count
-        async with sem:
-            html = await _fetch_text(link)
-            if not html:
-                return
-            result = await _process_article(session, link, html)
-            if result:
-                count += 1
+        html = await _fetch_text(link)
+        if not html:
+            return
+        result = await _process_article(session, link, html)
+        if result:
+            count += 1
 
-    tasks = [asyncio.create_task(_handle_link(l)) for l in links]
-    if tasks:
-        await asyncio.gather(*tasks)
+    for link in links:
+        await _handle_link(link)
 
     return count
 
@@ -313,19 +313,29 @@ async def ingest_many(
         "https://podrobno.uz",
     ]
 
-    tasks = []
-    for rss in rss_sources:
-        tasks.append(asyncio.create_task(ingest_rss_feed(session, rss, limit=per_rss_limit)))
-    for site in site_sources:
-        tasks.append(asyncio.create_task(ingest_site_frontpage(session, site, limit_links=per_site_limit)))
-
-    results = await asyncio.gather(*tasks, return_exceptions=True)
     summary = {"completed": [], "errors": []}
-    for src, res in zip(rss_sources + site_sources, results):
-        if isinstance(res, Exception):
-            logger.exception("Source ingest failed", source=src, error=str(res))
-            summary["errors"].append({"source": src, "error": str(res)})
-        else:
+    for src in rss_sources:
+        try:
+            res = await ingest_rss_feed(session, src, limit=per_rss_limit)
             summary["completed"].append({"source": src, "count": int(res)})
+        except Exception as exc:
+            try:
+                await session.rollback()
+            except Exception:
+                pass
+            logger.exception("Source ingest failed", source=src, error=str(exc))
+            summary["errors"].append({"source": src, "error": str(exc)})
+
+    for src in site_sources:
+        try:
+            res = await ingest_site_frontpage(session, src, limit_links=per_site_limit)
+            summary["completed"].append({"source": src, "count": int(res)})
+        except Exception as exc:
+            try:
+                await session.rollback()
+            except Exception:
+                pass
+            logger.exception("Source ingest failed", source=src, error=str(exc))
+            summary["errors"].append({"source": src, "error": str(exc)})
 
     return summary

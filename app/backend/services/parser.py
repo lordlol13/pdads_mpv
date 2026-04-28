@@ -182,6 +182,10 @@ async def run_parser_async(
                     logger.info("[PARSER] RSS %s saved: %s articles", rss_url, count)
                 except Exception as e:
                     logger.exception("[PARSER] RSS failed %s: %s", rss_url, e)
+                    try:
+                        await session.rollback()
+                    except Exception:
+                        pass
                     errors.append(f"rss:{rss_url}:{e}")
 
             # Process site sources
@@ -219,6 +223,10 @@ async def run_parser_async(
                             logger.warning("[PARSER] Duplicate or failed: %s", url)
                     except Exception as e:
                         logger.exception("[PARSER] Error processing %s: %s", url, e)
+                        try:
+                            await session.rollback()
+                        except Exception:
+                            pass
                         errors.append(f"{url}:{e}")
 
             # record parser heartbeat

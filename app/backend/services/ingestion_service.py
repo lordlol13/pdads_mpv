@@ -175,6 +175,11 @@ async def create_raw_news(session: AsyncSession, payload: dict[str, Any]) -> dic
         result = await session.execute(text(insert_query_pg), params)
         await session.commit()
     except Exception:
+        # Transaction is now in failed state in PostgreSQL; clear it before retry.
+        try:
+            await session.rollback()
+        except Exception:
+            pass
         # If INSERT with ON CONFLICT isn't supported or fails, fall back to safe INSERT without ON CONFLICT
         # Fallback insert without ON CONFLICT
         if _IMAGE_HASH_EXISTS:
@@ -203,8 +208,15 @@ async def create_raw_news(session: AsyncSession, payload: dict[str, Any]) -> dic
             RETURNING
                 {select_columns}
             """
-        result = await session.execute(text(insert_query), params)
-        await session.commit()
+        try:
+            result = await session.execute(text(insert_query), params)
+            await session.commit()
+        except Exception:
+            try:
+                await session.rollback()
+            except Exception:
+                pass
+            raise
 
     row = result.mappings().first()
     if row is not None:
