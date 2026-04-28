@@ -28,6 +28,10 @@ try:
 except Exception:
     pass
 
+# FIX: Ensure UTF-8 encoding for PostgreSQL
+if "postgres" in db_url:
+    pool_kwargs["connect_args"] = {"server_settings": {"client_encoding": "utf8"}}
+
 engine = create_async_engine(settings.DATABASE_URL, **pool_kwargs)
 SessionLocal = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
 

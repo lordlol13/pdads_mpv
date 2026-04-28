@@ -545,6 +545,19 @@ async def _generate_with_quality_loop(
     return best_result
 
 
+def _fix_encoding(text: str | None) -> str:
+    """Fix UTF-8/Latin-1 encoding issues (Mojibake)."""
+    if not text:
+        return ""
+    text = str(text)
+    try:
+        # Common case: UTF-8 text was decoded as Latin-1
+        # Try to encode as Latin-1 (which accepts any byte) then decode as UTF-8
+        return text.encode('latin1').decode('utf-8', errors='ignore')
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return text
+
+
 async def _upsert_ai_news_for_persona(
     session: AsyncSession,
     raw_row: dict[str, Any],
@@ -579,11 +592,15 @@ async def _upsert_ai_news_for_persona(
         }
         print(f"[DEBUG] UPSERT FALLBACK: title={fallback_title[:50]}")
 
+    # FIX: Ensure UTF-8 encoding for database storage
+    final_title = _fix_encoding(generated.get("final_title"))
+    final_text = _fix_encoding(generated.get("final_text"))
+
     params = {
         "raw_news_id": raw_row["id"],
         "target_persona": target_persona,
-        "final_title": generated["final_title"],
-        "final_text": generated["final_text"],
+        "final_title": final_title,
+        "final_text": final_text,
         "category": generated["category"],
         "ai_score": generated["combined_score"],
         "embedding_id": None,

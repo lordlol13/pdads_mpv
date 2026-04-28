@@ -1316,13 +1316,13 @@ async def record_interaction(session: AsyncSession, payload: dict[str, Any]) -> 
     await session.commit()
     row = result.mappings().first()
     user_id = int(payload.get("user_id") or 0)
-    if user_id > 0:
-        try:
-            from app.backend.core.celery_app import celery_app
-
-            celery_app.send_task("recommender.refresh_user_embedding", args=[user_id])
-        except Exception:
-            pass
+    # NOTE: Celery disabled - Redis not available
+    # if user_id > 0:
+    #     try:
+    #         from app.backend.core.celery_app import celery_app
+    #         celery_app.send_task("recommender.refresh_user_embedding", args=[user_id])
+    #     except Exception:
+    #         pass
     return dict(row) if row is not None else {"id": -1, "status": "created"}
 
 
@@ -1348,12 +1348,12 @@ async def toggle_saved_news(session: AsyncSession, user_id: int, ai_news_id: int
             {"id": existing_id},
         )
         await session.commit()
-        try:
-            from app.backend.core.celery_app import celery_app
-
-            celery_app.send_task("recommender.refresh_user_embedding", args=[user_id])
-        except Exception:
-            pass
+        # NOTE: Celery disabled - Redis not available
+        # try:
+        #     from app.backend.core.celery_app import celery_app
+        #     celery_app.send_task("recommender.refresh_user_embedding", args=[user_id])
+        # except Exception:
+        #     pass
         return False
 
     now_sql = sql_timestamp_now(session)
@@ -1405,12 +1405,12 @@ async def toggle_saved_news(session: AsyncSession, user_id: int, ai_news_id: int
             raise RuntimeError("failed_to_save_news")
 
     await session.commit()
-    try:
-        from app.backend.core.celery_app import celery_app
-
-        celery_app.send_task("recommender.refresh_user_embedding", args=[user_id])
-    except Exception:
-        pass
+    # NOTE: Celery disabled - Redis not available
+    # try:
+    #     from app.backend.core.celery_app import celery_app
+    #     celery_app.send_task("recommender.refresh_user_embedding", args=[user_id])
+    # except Exception:
+    #     pass
     return True
 
 
