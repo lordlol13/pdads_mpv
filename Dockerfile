@@ -20,6 +20,7 @@ RUN python -m pip install --no-cache-dir -r requirements.txt
 FROM python:3.11-slim
 WORKDIR /app
 ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app
 RUN apt-get update && apt-get install -y libpq5 && rm -rf /var/lib/apt/lists/*
 
 # copy installed python packages from builder
@@ -36,7 +37,7 @@ EXPOSE 8000
 # Railway assigns runtime port via $PORT. Use shell form to expand env var.
 CMD ["sh", "-c", "\
 if [ \"$SERVICE_TYPE\" = \"worker\" ]; then \
-	celery -A app.backend.core.celery_app worker --loglevel=info --concurrency=2; \
+	celery -A app.backend.core.celery_app worker --loglevel=info --concurrency=2 --pool=solo; \
 elif [ \"$SERVICE_TYPE\" = \"beat\" ]; then \
 	celery -A app.backend.core.celery_app beat --loglevel=info; \
 else \
