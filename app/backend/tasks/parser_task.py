@@ -16,6 +16,7 @@ LOG = logging.getLogger("parser_task")
     max_retries=2,
 )
 def parse_news_task() -> dict[str, Any]:
+    print("[DEBUG] PARSER STARTED")
     print("[TASK] parse_news_task started")
     """Celery task entrypoint that runs the parser and returns a summary."""
     LOG.info("[PARSER] parse_news_task started - saving to DB (dry_run=False)")
@@ -28,7 +29,14 @@ def parse_news_task() -> dict[str, Any]:
         # CRITICAL: dry_run=False ensures data is actually saved to raw_news table
         result = run_parser(per_rss_limit=5, per_site_limit=10, dry_run=False)
         saved_count = result.get("saved", 0) if isinstance(result, dict) else 0
+        items_found = result.get("items_found", 0) if isinstance(result, dict) else 0
+        if items_found == 0:
+            items_found = saved_count
+        print(f"[DEBUG] ITEMS FOUND: {items_found}")
+        print(f"[DEBUG] SAVED COUNT: {saved_count}")
         LOG.info("[PARSER] parse_news_task finished: saved=%s, result=%s", saved_count, result)
+        if saved_count == 0:
+            raise RuntimeError("NO NEWS SAVED - pipeline broken")
         
         # NOTE: Auto-processing temporarily disabled - use /api/pipeline/process-all endpoint instead
         # This avoids event loop conflicts in eager mode

@@ -1,4 +1,5 @@
 import hashlib
+import logging
 from typing import Any
 from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode, urljoin
 
@@ -8,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.backend.db.sql_helpers import sql_timestamp_now
 
+logger = logging.getLogger(__name__)
 
 RAW_NEWS_SELECT_COLUMNS = """
 id, title, source_url, image_url, image_hash, raw_text, category, region, is_urgent,
@@ -31,6 +33,13 @@ def get_image_hash(url: str | None) -> str | None:
         return hashlib.md5(url.strip().lower().encode("utf-8")).hexdigest()
     except Exception:
         return None
+
+
+def _looks_like_logo_url(url: str | None) -> bool:
+    value = (url or "").strip().lower()
+    if not value:
+        return False
+    return any(token in value for token in ("logo", "favicon", "apple-touch-icon"))
 
 
 def build_content_hash(title: str, raw_text: str | None, source_url: str | None) -> str:
@@ -73,6 +82,9 @@ async def create_raw_news(session: AsyncSession, payload: dict[str, Any]) -> dic
             image_url = "https:" + image_url
         elif image_url.startswith("/") and (normalized_url or source_url):
             image_url = urljoin(normalized_url or source_url, image_url)
+    if _looks_like_logo_url(image_url):
+        logger.warning("[DEBUG] image_url looks like logo, dropping it: %s", image_url)
+        image_url = None
 
     image_hash = get_image_hash(image_url)
 
@@ -170,11 +182,15 @@ async def create_raw_news(session: AsyncSession, payload: dict[str, Any]) -> dic
         "is_urgent": payload.get("is_urgent", False),
         "content_hash": content_hash,
     }
+    print(f"[DEBUG] SAVING: {params['title']}")
+    print(f"[DEBUG] SAVING image_url: {params.get('image_url')}")
 
     try:
         result = await session.execute(text(insert_query_pg), params)
         await session.commit()
-    except Exception:
+    except Exception as e:
+        logger.exception("[ERROR] create_raw_news primary insert failed: %s", e)
+        print(f"[ERROR] create_raw_news: {e}")
         # Transaction is now in failed state in PostgreSQL; clear it before retry.
         try:
             await session.rollback()
@@ -211,7 +227,9 @@ async def create_raw_news(session: AsyncSession, payload: dict[str, Any]) -> dic
         try:
             result = await session.execute(text(insert_query), params)
             await session.commit()
-        except Exception:
+        except Exception as e:
+            logger.exception("[ERROR] create_raw_news fallback insert failed: %s", e)
+            print(f"[ERROR] create_raw_news: {e}")
             try:
                 await session.rollback()
             except Exception:

@@ -171,6 +171,7 @@ async def run_parser_async(
                     return None
 
             total_saved = 0
+            items_found = 0
             errors = []
 
             # Process RSS feeds first (if any)
@@ -193,6 +194,8 @@ async def run_parser_async(
                 logger.info("[PARSER] Processing site: %s", s)
                 links = await _collect_site_links(s, per_site_limit)
                 logger.info("[PARSER] Site %s found %s links", s, len(links))
+                if not links:
+                    logger.warning("[DEBUG] EMPTY_LINKS source=%s", s)
                 
                 for url in links[:per_site_limit]:
                     try:
@@ -204,6 +207,7 @@ async def run_parser_async(
                         # Clean text before saving
                         title = clean_text(item.get("title") or "")
                         raw_text = clean_text(item.get("content") or "")
+                        items_found += 1
 
                         payload = {
                             "title": title,
@@ -214,6 +218,8 @@ async def run_parser_async(
                             "region": None,
                             "is_urgent": False,
                         }
+                        print(f"[DEBUG] ITEM: {title}")
+                        print(f"[DEBUG] ITEM image_url: {payload.get('image_url')}")
 
                         result = await create_raw_news(session, payload)
                         if result and result.get("id"):
@@ -238,8 +244,9 @@ async def run_parser_async(
 
             print(f"[PARSER] saved {total_saved}")
             logger.info("[PARSER] saved %s", total_saved)
+            print(f"[DEBUG] ITEMS FOUND: {items_found}")
             logger.info("[PARSER] Total saved: %s, errors: %s", total_saved, len(errors))
-            return {"status": "ok", "saved": total_saved, "errors": errors[:10]}
+            return {"status": "ok", "saved": total_saved, "items_found": items_found, "errors": errors[:10]}
         except Exception as e:
             logger.exception("[PARSER] Fatal error: %s", e)
             return {"status": "error", "error": str(e)}

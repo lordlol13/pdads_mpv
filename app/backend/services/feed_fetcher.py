@@ -187,6 +187,11 @@ async def ingest_rss_feed(session, rss_url: str, limit: int = 10) -> int:
         return 0
 
     entries = getattr(feed, "entries", []) or []
+    print(f"[DEBUG] RSS SOURCE: {rss_url}")
+    print(f"[DEBUG] ITEMS FOUND: {len(entries)}")
+    if not entries:
+        preview = (resp.text or "")[:300].replace("\n", " ")
+        logger.warning("RSS feed returned no entries", url=rss_url, status_code=resp.status_code, preview=preview)
     count = 0
     async def _handle(entry):
         nonlocal count
@@ -226,6 +231,8 @@ async def ingest_rss_feed(session, rss_url: str, limit: int = 10) -> int:
             "region": None,
             "is_urgent": False,
         }
+        print(f"[DEBUG] ITEM: {payload['title']}")
+        print(f"[DEBUG] ITEM image_url: {payload.get('image_url')}")
 
         try:
             await create_raw_news(session, payload)
