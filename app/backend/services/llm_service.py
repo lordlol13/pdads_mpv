@@ -150,6 +150,37 @@ def is_valid_news(text: str) -> bool:
     return True
 
 
+def is_valid_title(title: str) -> bool:
+    """Validate generated news title.
+
+    Title rules are intentionally lighter than body text validation.
+    """
+    if not title or not isinstance(title, str):
+        return False
+
+    value = title.strip()
+    if not value:
+        return False
+
+    # Check for broken encoding (Mojibake)
+    if "Ã" in value or "Ã¢" in value or "Ãƒ" in value or "Ã‚" in value:
+        return False
+
+    # Check for HTML tags
+    if "<" in value and ">" in value:
+        return False
+
+    words = [w for w in value.split() if w.strip()]
+    if len(words) < 2:
+        return False
+    if len(words) > 24:
+        return False
+    if len(value) > 220:
+        return False
+
+    return True
+
+
 def validate_ai_response(data: dict) -> tuple[bool, str]:
     """Validate AI response data.
 
@@ -164,7 +195,7 @@ def validate_ai_response(data: dict) -> tuple[bool, str]:
     if not title or not text:
         return False, "Missing title or text"
 
-    if not is_valid_news(title):
+    if not is_valid_title(title):
         return False, f"Invalid title: {title[:50]}..."
 
     if not is_valid_news(text):

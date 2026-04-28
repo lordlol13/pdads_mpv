@@ -490,11 +490,11 @@ async def _generate_with_quality_loop(
         try:
             # Clean text before sending to AI
             clean_raw_text = clean_text(raw_row.get("raw_text") or "")
-            clean_title = clean_text(raw_row.get("title") or "")
+            cleaned_title = clean_text(raw_row.get("title") or "")
 
             generated = await generate_news(
                 raw_text=clean_raw_text,
-                title=clean_title,
+                title=cleaned_title,
                 category=raw_row.get("category"),
                 target_persona=topic,
                 region=raw_row.get("region"),
