@@ -38,6 +38,14 @@ from app.backend.core.errors import (
 from app.backend.core.health import metrics, get_system_health
 from app.backend.core.logging import ContextLogger
 
+# Import celery_app at module load time so that:
+# 1. Task modules listed in include= are imported and @celery_app.task decorators run.
+# 2. autodiscover_tasks() executes, making all tasks visible to this process.
+# This is a no-op for the worker/beat processes (they import celery_app directly),
+# but ensures the web process also has tasks registered — required for .delay() calls
+# made from API route handlers.
+from app.backend.core.celery_app import celery_app as _celery_app  # noqa: F401
+
 # Initialize structured logger
 logger = ContextLogger(__name__)
 
@@ -325,6 +333,25 @@ async def startup():
         cors_allow_origins=settings.cors_allow_origins,
         cors_allow_origin_regex=settings.CORS_ALLOW_ORIGIN_REGEX or None,
     )
+
+    # Confirm Celery task registration so misconfiguration is visible at startup.
+    try:
+        registered_tasks = sorted(_celery_app.tasks.keys())
+        logger.info(
+            "[CELERY] Task registry verified at startup — %d tasks registered",
+            len(registered_tasks),
+        )
+        # Warn loudly if the two critical scheduled tasks are missing.
+        expected = {
+            "app.backend.tasks.parser_task.parse_news_task",
+            "brain.scheduled_ingestion",
+            "brain.scheduled_feed_ingestion",
+        }
+        missing = expected - set(registered_tasks)
+        if missing:
+            logger.warning("[CELERY] WARNING — expected tasks NOT registered: %s", sorted(missing))
+    except Exception as _exc:
+        logger.warning("[CELERY] Could not verify task registry at startup: %s", _exc)
 
 
 @app.on_event("shutdown")
