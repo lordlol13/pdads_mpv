@@ -1,29 +1,26 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-import math
 from email.utils import parsedate_to_datetime
+import json
+import logging
 import re
 from typing import Any
-from urllib.parse import parse_qs, unquote, urlparse, urljoin
-import html as html_lib
+from urllib.parse import parse_qs, unquote, urlparse
 from xml.etree import ElementTree as ET
 
 import httpx
-from app.backend.services.http_client import get_async_client
+from openai import AsyncOpenAI
 
 from app.backend.core.config import settings
-from app.backend.core.logging import ContextLogger
 from app.backend.services.orchestrator_service import build_cache_key, get_or_set_json
-from app.backend.services.recommender_service import cosine_similarity, text_to_embedding
-from app.backend.services.resilience_service import (
-    check_rate_limit,
-    retry_async,
-    _news_api_limiter,
-)
 
 NEWS_API_URL = "https://newsapi.org/v2/everything"
-logger = ContextLogger(__name__)
+logger = logging.getLogger(__name__)
+_GROQ_BACKOFF_UNTIL: datetime | None = None
+MIN_IMAGE_WIDTH_HINT = 640
+MIN_IMAGE_HEIGHT_HINT = 360
+LOW_QUALITY_IMAGE_TERMS = ("thumbnail", "thumb", "small", "tiny", "preview", "sprite")
 
 RSS_SOURCE_WHITELIST: dict[str, list[dict[str, Any]]] = {
     "global": [
@@ -36,18 +33,13 @@ RSS_SOURCE_WHITELIST: dict[str, list[dict[str, Any]]] = {
     ],
     "uz": [
         {"name": "Kun.uz", "url": "https://kun.uz/news/rss", "priority": 106},
-        {"name": "Gazeta.uz (ru)", "url": "https://www.gazeta.uz/ru/rss", "priority": 108},
         {"name": "Gazeta.uz", "url": "https://www.gazeta.uz/rss/", "priority": 104},
-        {"name": "Daryo (rss)", "url": "https://daryo.uz/rss", "priority": 106},
-        {"name": "Daryo (feed)", "url": "https://daryo.uz/feed", "priority": 102},
-        {"name": "Uz24", "url": "https://uz24.uz/rss", "priority": 102},
-        {"name": "Uznews", "url": "https://uznews.uz/rss", "priority": 100},
-        {"name": "Podrobno.uz", "url": "https://podrobno.uz/rss", "priority": 98},
+        {"name": "Daryo", "url": "https://daryo.uz/feed", "priority": 102},
     ],
 }
 
 COUNTRY_NEWS_DOMAINS: dict[str, list[str]] = {
-    "UZ": ["uz24.uz", "uznews.uz", "kun.uz", "daryo.uz", "gazeta.uz", "podrobno.uz"],
+    "UZ": ["kun.uz", "gazeta.uz", "daryo.uz", "uznews.uz"],
     "RU": ["ria.ru", "rbc.ru", "lenta.ru", "vesti.ru"],
     "KZ": ["tengrinews.kz", "inform.kz"],
     "US": ["apnews.com", "reuters.com", "cnn.com"],
@@ -133,6 +125,31 @@ def _merge_topics_preserving_order(primary: list[str], secondary: list[str]) -> 
     return merged
 
 
+def _build_interest_classifier_client() -> tuple[AsyncOpenAI | None, str | None]:
+    global _GROQ_BACKOFF_UNTIL
+
+    if not settings.GROQ_API_KEY:
+        return None, None
+
+    if _GROQ_BACKOFF_UNTIL and datetime.now(timezone.utc) < _GROQ_BACKOFF_UNTIL:
+        return None, None
+
+    return (
+        AsyncOpenAI(api_key=settings.GROQ_API_KEY, base_url="https://api.groq.com/openai/v1"),
+        settings.GROQ_MODEL,
+    )
+
+
+def _mark_groq_backoff_if_needed(exc: Exception) -> None:
+    global _GROQ_BACKOFF_UNTIL
+
+    message = str(exc).lower()
+    if "rate limit" not in message and "429" not in message and "rate_limit" not in message:
+        return
+
+    _GROQ_BACKOFF_UNTIL = datetime.now(timezone.utc) + timedelta(minutes=10)
+
+
 async def _classify_interest_topics(topics: list[str]) -> list[str]:
     normalized_topics = _normalize_topics(topics)
     if not normalized_topics:
@@ -141,29 +158,75 @@ async def _classify_interest_topics(topics: list[str]) -> list[str]:
     if "general" in normalized_topics and len(normalized_topics) == 1:
         return ["general"]
 
-    expanded: list[str] = []
-    seen: set[str] = set()
-    for topic in normalized_topics:
-        for variant in _topic_variants(topic):
-            if variant in seen:
-                continue
-            seen.add(variant)
-            expanded.append(variant)
+    client, model_name = _build_interest_classifier_client()
+    if client is None or not model_name:
+        return normalized_topics
 
-    return expanded or normalized_topics
+    try:
+        response = await client.chat.completions.create(
+            model=model_name,
+            temperature=0.1,
+            response_format={"type": "json_object"},
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You classify user interests for news ranking. "
+                        "Return strict JSON: {\"query_terms\": string[], \"strict_topics\": string[]}. "
+                        "query_terms: 4-10 expanded search phrases for NewsAPI; "
+                        "strict_topics: 2-8 canonical topics for strict filtering. "
+                        "Do not add topics that are not present in the original interests."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {
+                            "interests": normalized_topics,
+                            "language": "uz",
+                            "goal": "pick relevant newsapi news",
+                        },
+                        ensure_ascii=False,
+                    ),
+                },
+            ],
+        )
+        payload = json.loads(response.choices[0].message.content or "{}")
+
+        strict_topics = payload.get("strict_topics") if isinstance(payload, dict) else []
+        query_terms = payload.get("query_terms") if isinstance(payload, dict) else []
+
+        combined: list[str] = []
+        seen: set[str] = set()
+        for raw_value in [*(strict_topics or []), *(query_terms or [])]:
+            value = _normalize_topic_value(str(raw_value))
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            combined.append(value)
+
+        if combined:
+            return combined[:12]
+    except Exception as exc:
+        _mark_groq_backoff_if_needed(exc)
+        logger.warning("interest classification fallback triggered: %s", exc)
+
+    return normalized_topics
 
 
 async def _classify_interest_topics_cached(topics: list[str]) -> list[str]:
     normalized_topics = _normalize_topics(topics)
     if not normalized_topics:
         return ["general"]
+    if not settings.GROQ_API_KEY:
+        return normalized_topics
 
     cache_key = build_cache_key(
         "newsapi:interest-classifier",
         {
             "topics": normalized_topics,
-            "model": "embedding-heuristic-v1",
-            "provider": "local",
+            "model": settings.GROQ_MODEL,
+            "provider": "groq",
         },
     )
 
@@ -189,36 +252,79 @@ async def _ai_select_newsapi_articles(
     if not newsapi_articles:
         return []
 
+    client, model_name = _build_interest_classifier_client()
+    if client is None or not model_name:
+        return newsapi_articles[:max_items]
+
     sampled = newsapi_articles[: min(len(newsapi_articles), 30)]
-    topic_text = " ".join(_normalize_topics(topics)) or "general news"
-    topic_vector = text_to_embedding(topic_text)
-
-    scored: list[tuple[float, dict[str, Any]]] = []
-    for article in sampled:
-        article_text = " ".join(
-            [
-                str(article.get("title") or ""),
-                str(article.get("description") or ""),
-                str(article.get("content") or ""),
-                str((article.get("source") or {}).get("name") or ""),
-            ]
+    compact_articles = []
+    for idx, article in enumerate(sampled):
+        compact_articles.append(
+            {
+                "idx": idx,
+                "title": str(article.get("title") or "")[:240],
+                "description": str(article.get("description") or "")[:280],
+                "content": str(article.get("content") or "")[:360],
+            }
         )
-        article_vector = text_to_embedding(article_text)
-        similarity = cosine_similarity(topic_vector, article_vector)
-        topical_match = 1.0 if _article_matches_topics(article, topics) else 0.0
-        source_priority = float(article.get("_source_priority") or 0) / 100.0
-        freshness_boost = 0.0
-        published_at = _parse_newsapi_datetime(article.get("publishedAt"))
-        if published_at is not None:
-            age_hours = max(0.0, (datetime.now(timezone.utc) - published_at).total_seconds() / 3600.0)
-            freshness_boost = max(0.0, 1.0 - min(age_hours / 96.0, 1.0))
 
-        score = (similarity * 1.8) + (topical_match * 1.2) + source_priority + freshness_boost
-        scored.append((score, article))
+    try:
+        response = await client.chat.completions.create(
+            model=model_name,
+            temperature=0.0,
+            response_format={"type": "json_object"},
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You rank article relevance for a user profile. Return strict JSON as "
+                        "{\"selected_indices\": number[]}. Select only truly relevant articles "
+                        "for the provided user interests."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {
+                            "topics": topics,
+                            "limit": int(max_items),
+                            "articles": compact_articles,
+                        },
+                        ensure_ascii=False,
+                    ),
+                },
+            ],
+        )
+        payload = json.loads(response.choices[0].message.content or "{}")
+        selected_indices = payload.get("selected_indices") if isinstance(payload, dict) else []
 
-    scored.sort(key=lambda item: item[0], reverse=True)
-    selected = [article for score, article in scored[:max_items] if score >= 0.15]
-    return selected or sampled[:max_items]
+        selected: list[dict[str, Any]] = []
+        seen_idx: set[int] = set()
+        for raw_idx in selected_indices or []:
+            try:
+                idx = int(raw_idx)
+            except (TypeError, ValueError):
+                continue
+            if idx < 0 or idx >= len(sampled) or idx in seen_idx:
+                continue
+            seen_idx.add(idx)
+            selected.append(sampled[idx])
+            if len(selected) >= max_items:
+                break
+
+        if selected:
+            for idx, article in enumerate(sampled):
+                if idx in seen_idx:
+                    continue
+                selected.append(article)
+                if len(selected) >= max_items:
+                    break
+            return selected[:max_items]
+    except Exception as exc:
+        _mark_groq_backoff_if_needed(exc)
+        logger.warning("news selection fallback triggered: %s", exc)
+
+    return sampled[:max_items]
 
 
 def _normalize_article(article: dict[str, Any]) -> dict[str, Any]:
@@ -238,6 +344,149 @@ def _normalize_article(article: dict[str, Any]) -> dict[str, Any]:
         "image_url": article.get("urlToImage"),
         "published_at": article.get("publishedAt"),
     }
+
+
+def _extract_image_size_hints(url: str) -> tuple[int | None, int | None]:
+    parsed = urlparse(str(url or "").strip())
+    if not parsed.netloc:
+        return (None, None)
+
+    query = parse_qs(parsed.query)
+    width: int | None = None
+    height: int | None = None
+
+    for key in ("w", "width", "imgw", "maxwidth"):
+        value = (query.get(key) or [None])[0]
+        if value and str(value).isdigit():
+            width = int(str(value))
+            break
+
+    for key in ("h", "height", "imgh", "maxheight"):
+        value = (query.get(key) or [None])[0]
+        if value and str(value).isdigit():
+            height = int(str(value))
+            break
+
+    if width is None or height is None:
+        match = re.search(r"(?<!\d)(\d{2,4})[xX](\d{2,4})(?!\d)", f"{parsed.path} {parsed.query}")
+        if match:
+            width = width if width is not None else int(match.group(1))
+            height = height if height is not None else int(match.group(2))
+
+    return (width, height)
+
+
+def _is_image_candidate_quality_ok(raw_url: str | None) -> bool:
+    url = str(raw_url or "").strip()
+    if not url:
+        return False
+
+    if not re.match(r"^https?://", url, flags=re.IGNORECASE):
+        return False
+
+    lowered = url.lower()
+    if any(term in lowered for term in LOW_QUALITY_IMAGE_TERMS):
+        return False
+
+    parsed = urlparse(url)
+    path = parsed.path.lower()
+    if path.endswith((".svg", ".ico", ".gif")):
+        return False
+
+    width, height = _extract_image_size_hints(url)
+    if width is not None and width < MIN_IMAGE_WIDTH_HINT:
+        return False
+    if height is not None and height < MIN_IMAGE_HEIGHT_HINT:
+        return False
+
+    return True
+
+
+def _extract_meta_content(html: str, marker: str) -> str | None:
+    if not html:
+        return None
+
+    marker_pattern = re.escape(marker)
+    patterns = [
+        rf"<meta[^>]+(?:property|name)=[\"']{marker_pattern}[\"'][^>]+content=[\"']([^\"']+)[\"'][^>]*>",
+        rf"<meta[^>]+content=[\"']([^\"']+)[\"'][^>]+(?:property|name)=[\"']{marker_pattern}[\"'][^>]*>",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, html, flags=re.IGNORECASE)
+        if match:
+            value = str(match.group(1) or "").strip()
+            if value:
+                return value
+    return None
+
+
+async def _extract_og_image_url(article_url: str, client: httpx.AsyncClient) -> str | None:
+    url = _unwrap_redirect_url(article_url)
+    if not url:
+        return None
+
+    try:
+        response = await client.get(url, params={})
+        response.raise_for_status()
+    except httpx.HTTPError:
+        return None
+
+    content_type = str(response.headers.get("content-type") or "").lower()
+    if "html" not in content_type:
+        return None
+
+    html = str(getattr(response, "text", "") or "")
+    if not html:
+        return None
+
+    raw_og_image = (
+        _extract_meta_content(html, "og:image")
+        or _extract_meta_content(html, "og:image:url")
+        or _extract_meta_content(html, "twitter:image")
+        or _extract_meta_content(html, "twitter:image:src")
+    )
+    if not raw_og_image:
+        return None
+
+    normalized = raw_og_image.strip()
+    if normalized.startswith("//"):
+        normalized = f"https:{normalized}"
+    elif normalized.startswith("/"):
+        normalized = urljoin(url, normalized)
+
+    if not _is_image_candidate_quality_ok(normalized):
+        return None
+
+    og_width = _extract_meta_content(html, "og:image:width")
+    og_height = _extract_meta_content(html, "og:image:height")
+    if og_width and og_width.isdigit() and int(og_width) < MIN_IMAGE_WIDTH_HINT:
+        return None
+    if og_height and og_height.isdigit() and int(og_height) < MIN_IMAGE_HEIGHT_HINT:
+        return None
+
+    return normalized
+
+
+async def _enrich_articles_with_best_images(articles: list[dict[str, Any]], max_candidates: int) -> list[dict[str, Any]]:
+    if not articles:
+        return articles
+
+    candidates = articles[:max(1, min(len(articles), max_candidates))]
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        for article in candidates:
+            current_image = str(article.get("urlToImage") or "").strip()
+            if _is_image_candidate_quality_ok(current_image):
+                continue
+
+            article_url = str(article.get("url") or "").strip()
+            og_image = await _extract_og_image_url(article_url, client)
+            if og_image:
+                article["urlToImage"] = og_image
+                continue
+
+            article["urlToImage"] = None
+
+    return articles
 
 
 def _unwrap_redirect_url(url: str) -> str:
@@ -381,11 +630,9 @@ def _article_matches_topics(article: dict[str, Any], topics: list[str]) -> bool:
 def _rss_sources_for_country_codes(country_codes: list[str] | None) -> list[dict[str, Any]]:
     normalized_codes = {code.strip().upper() for code in (country_codes or []) if code and code.strip()}
 
-    # If a specific country is requested, prefer that country's sources first.
-    if "UZ" in normalized_codes:
-        selected = list(RSS_SOURCE_WHITELIST["uz"]) + list(RSS_SOURCE_WHITELIST["global"])
-    else:
-        selected = list(RSS_SOURCE_WHITELIST["global"]) + list(RSS_SOURCE_WHITELIST["uz"])
+    selected = list(RSS_SOURCE_WHITELIST["global"])
+    # Uzbekistan sources are explicitly prioritized for this product's target audience.
+    selected.extend(RSS_SOURCE_WHITELIST["uz"])
 
     deduped: list[dict[str, Any]] = []
     seen_urls: set[str] = set()
@@ -435,94 +682,6 @@ def _parse_rss_payload(payload: str, source_name: str, source_priority: int) -> 
                 "_source_priority": source_priority,
             }
         )
-
-    return items
-
-
-def _html_extract_links(html_text: str, base_url: str) -> list[tuple[str, str]]:
-    results: list[tuple[str, str]] = []
-    for m in re.finditer(r'<a[^>]+href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', html_text, flags=re.I | re.S):
-        href = (m.group(1) or "").strip()
-        inner = (m.group(2) or "").strip()
-        if not href:
-            continue
-        # strip tags from inner HTML
-        text = re.sub(r"<[^>]+>", "", inner)
-        text = html_lib.unescape(text).strip()
-        resolved = urljoin(base_url, href)
-        results.append((resolved, text))
-
-    # dedupe while preserving order
-    seen: set[str] = set()
-    out: list[tuple[str, str]] = []
-    for u, t in results:
-        u_norm = u.split('#')[0]
-        if u_norm in seen:
-            continue
-        seen.add(u_norm)
-        out.append((u_norm, t))
-    return out
-
-
-async def _scrape_site_for_articles(base_url: str, source_name: str, source_priority: int, limit: int) -> list[dict[str, Any]]:
-    parsed_base = urlparse(base_url)
-    base = f"{parsed_base.scheme}://{parsed_base.netloc}"
-    client = await get_async_client()
-    try:
-        resp = await client.get(base)
-        resp.raise_for_status()
-        html_text = getattr(resp, "text", "") or ""
-        final_base = str(resp.url) if getattr(resp, "url", None) else base
-    except Exception:
-        return []
-
-    candidates = _html_extract_links(html_text, final_base)
-    items: list[dict[str, Any]] = []
-    seen_urls: set[str] = set()
-
-    def _netloc_norm(n: str) -> str:
-        n = (n or "").lower()
-        return n[4:] if n.startswith("www.") else n
-
-    base_net = _netloc_norm(parsed_base.netloc)
-
-    for url, title in candidates:
-        try:
-            p = urlparse(url)
-        except Exception:
-            continue
-        if p.scheme not in ("http", "https"):
-            continue
-        if _netloc_norm(p.netloc) != base_net:
-            continue
-        path = p.path or ""
-        # skip likely non-articles
-        if re.search(r"\.(jpg|jpeg|png|gif|webp|svg)$", path, flags=re.I):
-            continue
-        # heuristics: article-like path contains year or '/news/' or has dashes or multiple segments
-        if not (re.search(r"/\d{4}/", path) or "/news/" in path or ("-" in path) or len([s for s in path.split('/') if s]) >= 2):
-            continue
-
-        u_norm = url.split('#')[0]
-        if u_norm in seen_urls:
-            continue
-        seen_urls.add(u_norm)
-
-        items.append(
-            {
-                "source": {"name": source_name},
-                "title": title or u_norm,
-                "description": "",
-                "content": title or "",
-                "url": u_norm,
-                "urlToImage": None,
-                "publishedAt": None,
-                "_source_priority": source_priority,
-            }
-        )
-
-        if len(items) >= limit:
-            break
 
     return items
 
@@ -591,44 +750,31 @@ async def _fetch_rss_whitelist_articles(
         return []
 
     items: list[dict[str, Any]] = []
-    client = await get_async_client()
-    for source in sources:
-        source_name = str(source.get("name") or "RSS")
-        source_url = str(source.get("url") or "").strip()
-        source_priority = int(source.get("priority") or 0)
-        if not source_url:
-            continue
+    async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+        for source in sources:
+            source_name = str(source.get("name") or "RSS")
+            source_url = str(source.get("url") or "").strip()
+            source_priority = int(source.get("priority") or 0)
+            if not source_url:
+                continue
 
-        try:
-            response = await client.get(source_url, params={})
-            response.raise_for_status()
-        except httpx.HTTPError:
-            continue
+            try:
+                response = await client.get(source_url, params={})
+                response.raise_for_status()
+            except httpx.HTTPError:
+                continue
 
-        response_text = getattr(response, "text", "")
-        if not isinstance(response_text, str) or not response_text.strip():
-            continue
+            response_text = getattr(response, "text", "")
+            if not isinstance(response_text, str) or not response_text.strip():
+                continue
 
-        parsed = _parse_rss_payload(response_text, source_name, source_priority)
-        if parsed:
+            parsed = _parse_rss_payload(response_text, source_name, source_priority)
             for article in parsed:
                 if _article_matches_topics(article, topics):
                     items.append(article)
-        else:
-            # If the response is HTML or RSS parsing failed, attempt to scrape the site for article links.
-            try:
-                parsed_src = urlparse(source_url)
-                base_site = f"{parsed_src.scheme}://{parsed_src.netloc}"
-                scraped = await _scrape_site_for_articles(base_site, source_name, source_priority, limit)
-            except Exception:
-                scraped = []
 
-            for article in scraped:
-                if _article_matches_topics(article, topics):
-                    items.append(article)
-
-        if len(items) >= limit * 2:
-            break
+            if len(items) >= limit * 2:
+                break
 
     deduped = _dedupe_articles_by_url_or_title(items)
     return _prioritize_recent_articles(deduped)[:limit]
@@ -640,20 +786,6 @@ async def _fetch_newsapi_articles(
     preferred_domains: list[str],
 ) -> list[dict[str, Any]]:
     if not settings.NEWS_API_KEY:
-        return []
-
-    # Rate limit check
-    allowed = await check_rate_limit(
-        f"newsapi:topics:{','.join(topics[:3])}",
-        limiter=_news_api_limiter,
-        limit=settings.NEWS_API_RATE_LIMIT_PER_MINUTE,
-        window_seconds=60,
-    )
-    if not allowed:
-        logger.warning(f"News API rate limit exceeded for topics: {topics}")
-        if settings.NEWS_API_FALLBACK_TO_RSS:
-            logger.info("Falling back to RSS sources")
-            return []
         return []
 
     query_terms = _expand_topics_for_query(topics)
@@ -673,8 +805,7 @@ async def _fetch_newsapi_articles(
         "apiKey": settings.NEWS_API_KEY,
     }
 
-    async def _make_requests():
-        client = await get_async_client()
+    async with httpx.AsyncClient(timeout=30.0) as client:
         if not preferred_domains:
             response = await client.get(
                 NEWS_API_URL,
@@ -725,22 +856,6 @@ async def _fetch_newsapi_articles(
             (country_payload.get("articles") or []) + (global_payload.get("articles") or [])
         )
 
-    try:
-        articles = await retry_async(
-            _make_requests,
-            max_attempts=settings.API_RETRY_MAX_ATTEMPTS,
-            base_delay_seconds=settings.API_RETRY_BASE_DELAY_SECONDS,
-            max_delay_seconds=settings.API_RETRY_MAX_DELAY_SECONDS,
-            retry_on_exceptions=(httpx.HTTPError, Exception),
-        )
-        return articles
-    except Exception as e:
-        logger.error(f"News API fetch failed after retries: {e}")
-        if settings.NEWS_API_FALLBACK_TO_RSS:
-            logger.info("Falling back to RSS sources")
-            return []
-        raise
-
 
 async def fetch_articles_for_topics(
     topics: list[str],
@@ -767,121 +882,27 @@ async def fetch_articles_for_topics(
             limit=max(page_size * 2, 24),
         )
 
-        normalized_codes = [code.strip().upper() for code in (country_codes or []) if code and code.strip()]
-        is_regional_query = bool(normalized_codes)
-        is_uz = "UZ" in normalized_codes
-
-        newsapi_articles: list[dict[str, Any]] = []
-        # Only call NewsAPI for global queries (no country codes). For UZ we will rely on RSS-only.
-        if not is_regional_query:
-            try:
-                newsapi_articles = await _fetch_newsapi_articles(
-                    effective_topics,
-                    page_size=max(page_size, 12),
-                    preferred_domains=preferred_domains,
-                )
-            except httpx.HTTPError:
-                newsapi_articles = []
-
-            newsapi_articles = [item for item in newsapi_articles if _article_matches_topics(item, effective_topics)]
-            newsapi_articles = await _ai_select_newsapi_articles(
+        try:
+            newsapi_articles = await _fetch_newsapi_articles(
                 effective_topics,
-                newsapi_articles,
-                max_items=max(page_size, 12),
+                page_size=max(page_size, 12),
+                preferred_domains=preferred_domains,
             )
+        except httpx.HTTPError:
+            newsapi_articles = []
 
-        # Uzbekistan-specific mix: prefer 3 regional (from specific UZ domains) and 2 global for 5 posts.
-        if is_uz:
-            total = max(1, page_size)
-            regional_count = math.ceil(total * 3 / 5)
-            global_count = max(0, total - regional_count)
-            uz_domains = {"uz24.uz", "uznews.uz", "kun.uz", "daryo.uz", "gazeta.uz", "podrobno.uz"}
+        newsapi_articles = [item for item in newsapi_articles if _article_matches_topics(item, effective_topics)]
+        newsapi_articles = await _ai_select_newsapi_articles(
+            effective_topics,
+            newsapi_articles,
+            max_items=max(page_size, 12),
+        )
 
-            def _domain_of_article(article: dict[str, Any]) -> str:
-                try:
-                    netloc = urlparse(str(article.get("url") or "")).netloc.lower()
-                    if netloc.startswith("www."):
-                        netloc = netloc[4:]
-                    return netloc
-                except Exception:
-                    return ""
-
-            regional_pool: list[dict[str, Any]] = []
-            seen_urls: set[str] = set()
-
-            # Prefer RSS articles from the UZ whitelist domains first
-            for a in rss_articles:
-                u = str(a.get("url") or "").strip().lower()
-                if not u or u in seen_urls:
-                    continue
-                if _domain_of_article(a) in uz_domains:
-                    regional_pool.append(a)
-                    seen_urls.add(u)
-
-            # Then include NewsAPI articles from UZ domains
-            for a in newsapi_articles:
-                u = str(a.get("url") or "").strip().lower()
-                if not u or u in seen_urls:
-                    continue
-                if _domain_of_article(a) in uz_domains:
-                    regional_pool.append(a)
-                    seen_urls.add(u)
-
-            # If still not enough regional items, relax and include other RSS/newsapi items as fallback
-            if len(regional_pool) < regional_count:
-                for a in rss_articles:
-                    u = str(a.get("url") or "").strip().lower()
-                    if not u or u in seen_urls:
-                        continue
-                    regional_pool.append(a)
-                    seen_urls.add(u)
-                    if len(regional_pool) >= regional_count:
-                        break
-                for a in newsapi_articles:
-                    u = str(a.get("url") or "").strip().lower()
-                    if not u or u in seen_urls:
-                        continue
-                    regional_pool.append(a)
-                    seen_urls.add(u)
-                    if len(regional_pool) >= regional_count:
-                        break
-
-            regional_selected = regional_pool[:regional_count]
-
-            # Build global pool from NewsAPI (excluding UZ domains and already selected)
-            global_pool: list[dict[str, Any]] = []
-            for a in newsapi_articles:
-                u = str(a.get("url") or "").strip().lower()
-                if not u or u in seen_urls:
-                    continue
-                if _domain_of_article(a) in uz_domains:
-                    continue
-                global_pool.append(a)
-                seen_urls.add(u)
-                if len(global_pool) >= global_count:
-                    break
-
-            # Fallback to RSS for global if needed
-            if len(global_pool) < global_count:
-                for a in rss_articles:
-                    u = str(a.get("url") or "").strip().lower()
-                    if not u or u in seen_urls:
-                        continue
-                    global_pool.append(a)
-                    seen_urls.add(u)
-                    if len(global_pool) >= global_count:
-                        break
-
-            merged_articles = _dedupe_articles_by_url_or_title(regional_selected + global_pool)
-            return {"articles": merged_articles}
-
-        # If regional query for non-UZ country: prefer RSS-only (avoid NewsAPI usage)
-        if is_regional_query:
-            merged_articles = _dedupe_articles_by_url_or_title(rss_articles)
-            return {"articles": merged_articles}
-
-        # Global query: combine NewsAPI results with RSS whitelist
         merged_articles = _dedupe_articles_by_url_or_title(rss_articles + newsapi_articles)
+        merged_articles = await _enrich_articles_with_best_images(
+            merged_articles,
+            max_candidates=max(page_size * 3, 24),
+        )
         return {"articles": merged_articles}
 
     cache_key = build_cache_key(
@@ -895,7 +916,6 @@ async def fetch_articles_for_topics(
             "domains": preferred_domains,
             "global_mix": bool(preferred_domains),
             "rss_whitelist": True,
-            "regional_only": bool(country_codes),
         },
     )
     payload = await get_or_set_json(cache_key, ttl_seconds=900, fetcher=_fetch)

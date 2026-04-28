@@ -5,15 +5,24 @@ from app.backend.core.config import settings
 
 logger = logging.getLogger(__name__)
 
+
 celery_app = Celery(
     "news_brain",
     broker=settings.CELERY_BROKER_URL,
     backend=settings.CELERY_RESULT_BACKEND,
-    include=["brain.tasks.pipeline_tasks", "app.backend.tasks.parser_task"],
 )
 
+# Корректная регистрация задач
+celery_app.autodiscover_tasks([
+    "brain.tasks",
+    "app.backend.tasks",
+])
+
+
 # Log configuration
-is_eager = (os.getenv("CELERY_TASK_ALWAYS_EAGER", "").lower() == "true") or (str(settings.APP_ENV).lower() == "dev")
+is_eager = False  # Принудительно отключаем eager-режим для production
+if (os.getenv("CELERY_TASK_ALWAYS_EAGER", "").lower() == "true") or (str(settings.APP_ENV).lower() == "dev"):
+    is_eager = True
 logger.info("[CELERY] Starting with APP_ENV=%s, task_always_eager=%s, broker=%s", 
             settings.APP_ENV, is_eager, settings.CELERY_BROKER_URL)
 
@@ -29,29 +38,19 @@ celery_app.conf.update(
     accept_content=["json"],
         # For local development allow running tasks eagerly when Redis is not available.
         # Enable with CELERY_TASK_ALWAYS_EAGER=true or when APP_ENV=dev.
-        task_always_eager=(os.getenv("CELERY_TASK_ALWAYS_EAGER", "").lower() == "true") or (str(settings.APP_ENV).lower() == "dev"),
+        task_always_eager=is_eager,
     task_time_limit=int(os.getenv("CELERY_TASK_TIME_LIMIT", str(settings.CELERY_TASK_TIME_LIMIT))),
     worker_concurrency=int(os.getenv("CELERY_WORKER_CONCURRENCY", str(settings.CELERY_WORKER_CONCURRENCY))),
     broker_transport_options={"visibility_timeout": int(os.getenv("CELERY_BROKER_VISIBILITY_TIMEOUT", "3600"))},
 )
 
 celery_app.conf.beat_schedule = {
-    "scheduled-ingestion-every-15-minutes": {
-        "task": "brain.scheduled_ingestion",
-        "schedule": settings.SCHEDULER_INTERVAL_MINUTES * 60,
-    },
-    "scheduled-cleanup-ai-products": {
-        "task": "brain.scheduled_cleanup_ai_products",
-        "schedule": settings.SCHEDULER_CLEANUP_INTERVAL_HOURS * 60 * 60,
-    }
-    ,
-    "scheduled-feed-ingestion-every-15-minutes": {
-        "task": "brain.scheduled_feed_ingestion",
-        "schedule": settings.SCHEDULER_INTERVAL_MINUTES * 60,
-    }
-    ,
     "parse-news": {
         "task": "app.backend.tasks.parser_task.parse_news_task",
-        "schedule": 15 * 60,
-    }
+        "schedule": 300.0,
+    },
+    "process-news": {
+        "task": "brain.tasks.pipeline_tasks.process_all_task",
+        "schedule": 600.0,
+    },
 }

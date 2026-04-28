@@ -1,3 +1,5 @@
+# Гарантируем регистрацию задач Celery
+from app.backend.core.celery_app import celery_app
 """
 FastAPI application entry point with middleware, error handlers, and routing.
 
@@ -111,20 +113,27 @@ async def add_correlation_id_and_logging(request: Request, call_next):
     # Log request/response
     if response.status_code >= 500:
         logger.error(
-            f"{request.method} {request.url.path}",
+            "Request failed",
+            method=request.method,
+            path=request.url.path,
             status=response.status_code,
-            duration_ms=f"{duration_ms:.2f}",
+            duration_ms=f"{duration_ms:.2f}"
         )
     elif response.status_code >= 400:
         logger.warning(
-            f"{request.method} {request.url.path}",
+            "Request warning",
+            method=request.method,
+            path=request.url.path,
             status=response.status_code,
-            duration_ms=f"{duration_ms:.2f}",
+            duration_ms=f"{duration_ms:.2f}"
         )
     else:
         logger.info(
-            f"{request.method} {request.url.path} - {response.status_code}",
-            duration_ms=f"{duration_ms:.2f}",
+            "Request succeeded",
+            method=request.method,
+            path=request.url.path,
+            status=response.status_code,
+            duration_ms=f"{duration_ms:.2f}"
         )
     
     response.headers["X-Correlation-ID"] = correlation_id
@@ -314,11 +323,10 @@ else:
 async def startup():
     """Application startup hook."""
     logger.info(
-        f"Starting {settings.APP_NAME}",
-        extra={
-            "environment": settings.APP_ENV,
-            "debug": settings.DEBUG,
-        },
+        "Starting app",
+        app_name=settings.APP_NAME,
+        environment=settings.APP_ENV,
+        debug=settings.DEBUG,
     )
     logger.info(
         "CORS configured",

@@ -16,6 +16,7 @@ LOG = logging.getLogger("parser_task")
     max_retries=2,
 )
 def parse_news_task() -> dict[str, Any]:
+    print("[TASK] parse_news_task started")
     """Celery task entrypoint that runs the parser and returns a summary."""
     LOG.info("[PARSER] parse_news_task started - saving to DB (dry_run=False)")
     try:
