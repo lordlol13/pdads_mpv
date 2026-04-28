@@ -18,3 +18,8 @@ __pycache__/
 
 # venv
 .venv/
+
+# temp files
+server.err
+server.log
+run_local.py
