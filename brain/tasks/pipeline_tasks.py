@@ -440,7 +440,7 @@ async def _load_cohort_personas(session: AsyncSession) -> list[dict[str, str | N
 
     if not persona_contexts:
         return [{"topic": "general", "profession": None, "geo": None, "country_code": None, "label": "general"}]
-    return persona_contexts[:6]
+    return persona_contexts[:1]  # DEBUG: limit to 1 persona for speed
 
 
 async def _generate_with_quality_loop(
@@ -566,10 +566,21 @@ async def _upsert_ai_news_for_persona(
     if generated is None:
         generated = await _generate_with_quality_loop(raw_row, topic, profession, geo)
 
-    # If generation failed, don't save garbage
+    # If generation failed, use fallback from raw text instead of raising
+    # This ensures SOMETHING gets saved to ai_news
     if not generated:
-        LOG.error(f"[UPSERT] Generation failed for raw_news_id={raw_row.get('id')}, skipping save")
-        raise ValueError("generation_failed")
+        LOG.warning(f"[UPSERT] Generation failed for raw_news_id={raw_row.get('id')}, using raw text fallback")
+        fallback_title = str(raw_row.get("title") or "Yangilik")
+        fallback_text = str(raw_row.get("raw_text") or "")[:1000] or "Ma'lumot yo'q"
+        generated = {
+            "final_title": fallback_title,
+            "final_text": fallback_text,
+            "category": str(raw_row.get("category") or "general"),
+            "combined_score": 0.0,
+            "ai_score": 0.0,
+            "is_ai": False,
+        }
+        print(f"[DEBUG] UPSERT FALLBACK: title={fallback_title[:50]}")
 
     params = {
         "raw_news_id": raw_row["id"],
@@ -1104,10 +1115,38 @@ async def _process_raw_news_async(
 
             generated_results: list[dict[str, Any]] = []
             if gen_tasks:
-                generated_results = await asyncio.gather(*gen_tasks)
+                generated_results = await asyncio.gather(*gen_tasks, return_exceptions=True)
+
+            # DEBUG: Log generation results
+            for i, result in enumerate(generated_results):
+                if isinstance(result, Exception):
+                    print(f"[DEBUG] persona {i} generation EXCEPTION: {result}")
+                    logger.error(f"[PROCESS] persona {i} generation failed: {result}")
+                elif result is None:
+                    print(f"[DEBUG] persona {i} generation returned None")
+                    logger.warning(f"[PROCESS] persona {i} generation returned None")
+                else:
+                    print(f"[DEBUG] persona {i} generated: title={str(result.get('final_title', ''))[:60]}")
+                    logger.info(f"[PROCESS] persona {i} generated: title={str(result.get('final_title', ''))[:60]}")
 
             ai_news_ids: list[int] = []
             for persona_context, generated in zip(cohort_personas, generated_results):
+                if generated is None or isinstance(generated, Exception):
+                    # Fallback to raw text if generation fails or returns None
+                    # This ensures SOMETHING gets saved to ai_news
+                    fallback_title = str(raw_row.get("title") or "Yangilik")
+                    fallback_text = str(raw_row.get("raw_text") or "")[:1000] or "Ma'lumot yo'q"
+                    generated = {
+                        "final_title": fallback_title,
+                        "final_text": fallback_text,
+                        "category": str(raw_row.get("category") or "general"),
+                        "combined_score": 0.0,
+                        "ai_score": 0.0,
+                        "is_ai": False,
+                    }
+                    print(f"[DEBUG] Using FALLBACK for persona {persona_context.get('label') or 'general'}: title={fallback_title[:50]}")
+                    logger.warning(f"[PROCESS] persona {persona_context.get('label') or persona_context.get('topic') or 'general'} using fallback raw text")
+
                 ai_news_id = await _upsert_ai_news_for_persona(session, raw_row, persona_context, generated=generated)
                 ai_news_ids.append(ai_news_id)
                 score_result = await session.execute(

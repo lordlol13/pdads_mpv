@@ -90,7 +90,7 @@ class Settings(BaseSettings):
     PIPELINE_MAX_ATTEMPTS: int = 1
     PIPELINE_TARGET_SCORE: float = 8.0
     PIPELINE_MIN_SCORE: float = 6.0  # Lowered for testing
-    PIPELINE_MAX_REWRITE_ROUNDS: int = 2
+    PIPELINE_MAX_REWRITE_ROUNDS: int = 1  # DEBUG: 1 round for speed
     SCHEDULER_INTERVAL_MINUTES: int = 15
     SCHEDULER_CLEANUP_INTERVAL_HOURS: int = 24
     NEWS_FETCH_BATCH_SIZE: int = 20
@@ -98,8 +98,8 @@ class Settings(BaseSettings):
     NEWS_PRIORITY_MAX_AGE_HOURS: int = 24
     AI_PRODUCT_RETENTION_DAYS: int = 4
     RAW_NEWS_RETENTION_DAYS: int = 4
-    PIPELINE_TEXT_MIN_WORDS: int = 170
-    PIPELINE_TEXT_MAX_WORDS: int = 0
+    PIPELINE_TEXT_MIN_WORDS: int = 200
+    PIPELINE_TEXT_MAX_WORDS: int = 250
     PIPELINE_TEXT_MAX_CHARS: int = 0
 
     # Force editorial language for generated articles (set to 'uz', 'ru', or 'en').
@@ -114,9 +114,9 @@ class Settings(BaseSettings):
     RECOMMENDER_FRESHNESS_WEIGHT: float = 0.2
 
     # API Resilience & Retry Strategy
-    API_RETRY_MAX_ATTEMPTS: int = 3
-    API_RETRY_BASE_DELAY_SECONDS: int = 2
-    API_RETRY_MAX_DELAY_SECONDS: int = 60
+    API_RETRY_MAX_ATTEMPTS: int = 1  # DEBUG: no retries for speed
+    API_RETRY_BASE_DELAY_SECONDS: int = 1
+    API_RETRY_MAX_DELAY_SECONDS: int = 10
 
     # Rate Limiting
     NEWS_API_RATE_LIMIT_PER_MINUTE: int = 20

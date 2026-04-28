@@ -59,13 +59,15 @@ async def process_all_pending():
             sample_rows = sample_debug.mappings().all()
             LOG.info("[PROCESS_ALL] sample_rows=%s", sample_rows)
 
+            # DEBUG: process only 1 raw_news at a time for speed
             rows_result = await session.execute(
                 text(
                     """
-                    SELECT *
+                    SELECT id
                     FROM raw_news
                     WHERE process_status = 'pending'
                     ORDER BY id DESC
+                    LIMIT 1
                     """
                 )
             )
@@ -75,10 +77,11 @@ async def process_all_pending():
                 rows_result = await session.execute(
                     text(
                         """
-                        SELECT *
+                        SELECT id
                         FROM raw_news
                         WHERE process_status IS NULL OR process_status IN ('pending', 'new', 'parsed')
                         ORDER BY id DESC
+                        LIMIT 1
                         """
                     )
                 )

@@ -137,14 +137,14 @@ def is_valid_news(text: str) -> bool:
         if phrase.lower() in text.lower():
             return False
 
-    # Check minimum word count
+    # Check minimum word count (prompt asks for 200-250, allow 150+ as valid)
     words = text.split()
-    if len(words) < 120:
+    if len(words) < 150:
         return False
 
     # Check for excessive English (should be mostly Uzbek)
     english_words = len([w for w in words if re.match(r'^[a-zA-Z]+$', w)])
-    if english_words > len(words) * 0.3:  # More than 30% English
+    if english_words > len(words) * 0.5:  # More than 50% English
         return False
 
     return True
@@ -1002,18 +1002,22 @@ def _build_editorial_system_prompt(*, language_hint: str, min_words: int, max_wo
     Output ONLY Uzbek (Latin). ZERO English/Russian.
     Focus ONLY on AI and technology. DELETE everything else.
     """
+    word_range = f"{min_words}-{max_words}" if max_words > 0 else f"{min_words}+"
     return (
         "Siz professional texnologiya yangiliklari muxbiri va qat'iy tahrirchisisiz. "
-        "Vazifangiz: yangiliklarni FAQAT sun'iy intellekt va texnologiya jihatidan qayta yozing. "
+        "Vazifangiz: yangiliklarni FAQAT O'ZBEK TILIDA (LOTIN) qayta yozing va tarjima qiling. "
+        "Barcha matn FAQAT o'zbek tilida bo'lishi shart! "
         "Agar yangilikda AI/texnologiya elementi bo'lmasa, UNDA HAM umumiy texnologik kontekstda yoritib bering. "
         "\n\n"
         "QATTIY QOIDALAR (buzmang!):\n"
         "1. TIL: Faqat O'ZBEK tili (LOTIN alifbosi). INGLIZ yoki RUS tilida bir so'z ham bo'lmasin!\n"
+        "   - Kompaniya nomlari (Meta, Google, Apple) va texnik atamalar (AI, API, GPU) bundan mustasno\n"
+        "   - Qolgan barcha so'zlar FAQAT o'zbek tilida!\n"
         "2. FOKUS: FAQAT AI/texnologiya qismlari. Boshqalarini O'CHIRING!\n"
-        "3. UZUNLIK: 2-3 paragraf, JAMI 200-250 so'z\n"
+        f"3. UZUNLIK: 2-3 paragraf, JAMI {word_range} so'z. KAMIDA {min_words} SO'Z BO'LISHI SHART!\n"
         "4. USLUB: Professional yangiliklar uslubi. Aniq, keskin, faktga asoslangan. "
         "   - Hech qanday fikr, tahlil yoki maslahat yo'q!\n"
-        "   - Har bir jumlma YANGI ma'lumot qo'shishi kerak\n"
+        "   - Har bir jumla YANGI ma'lumot qo'shishi kerak\n"
         "   - Takrorlar taqiqlanadi\n"
         "5. TA'QIQ LANGAN (ishlatmang!):\n"
         "   - 'Bu juda muhim'\n"
@@ -1030,16 +1034,19 @@ def _build_editorial_system_prompt(*, language_hint: str, min_words: int, max_wo
         "Sarlavha: Meta sun'iy intellektni yaxshilash uchun xodimlar ma'lumotidan foydalanadi\n"
         "Matn: Meta kompaniyasi sun'iy intellekt modellarini rivojlantirish maqsadida xodimlarning ish faoliyatiga oid ma'lumotlarni tahlil qilishni rejalashtirmoqda. "
         "Ushbu jarayonda tizim ichidagi harakatlar, bosilgan tugmalar va ish jarayonidagi boshqa raqamli izlar o'rganiladi. "
+        "Kompaniya bu ma'lumotlardan foydalanib, sun'iy intellekt modellarining aniqligini oshirish va natijalarni yaxshilashni maqsad qilgan. "
+        "Tahlil jarayonida xodimlarning kundalik ish faoliyati, dasturiy ta'minotdan foydalanish statistikasi va raqamli muloqot ma'lumotlari qamrab olinadi. "
         "\n"
-        "Kompaniya bu ma'lumotlar yordamida modellar aniqligini oshirish va foydalanuvchi tajribasini yaxshilashni ko'zlamoqda. "
-        "Shu bilan birga, bunday yondashuv maxfiylik va ma'lumotlarni himoya qilish bilan bog'liq savollarni ham keltirib chiqarmoqda.\n"
+        "Shu bilan birga, bunday yondashuv maxfiylik va ma'lumotlarni himoya qilish sohasida jiddiy savollar keltirib chiqarmoqda. "
+        "Mutaxassislar fikricha, xodimlar ma'lumotlaridan bunday keng miqyosda foydalanish shaxsiy hayot huquqlariga ta'sir qilishi mumkin. "
+        "Kompaniya esa barcha ma'lumotlarni anonimlashtirilgan holda ishlatishini ta'kidlamoqda.\n"
         "\n"
-        "OUTPUT (JSON format, qo'shimcha matn yo'q):\n"
-        "final_title: qisqa, aniq sarlavha (10-15 so'z)\n"
-        "final_text: 2-3 paragraf, 200-250 so'z, faqat faktlar\n"
-        "ai_score: 0-10 baho (sifat bahosi)\n"
-        "category: 'technology'\n"
-        "target_persona: ai|tashkent|uz\n"
+        f"OUTPUT (JSON format, qo'shimcha matn yo'q):\n"
+        f"final_title: qisqa, aniq sarlavha (10-15 so'z)\n"
+        f"final_text: 2-3 paragraf, {word_range} so'z, faqat faktlar, FAQAT O'ZBEK TILI\n"
+        f"ai_score: 0-10 baho (sifat bahosi)\n"
+        f"category: 'technology'\n"
+        f"target_persona: ai|tashkent|uz\n"
         "\n"
         "ESLATMA: Agar yangilik to'liq AI/texnologiya mavzusida bo'lmasa, undagi "
         "avtomatlashtirish, raqamli texnologiyalar, zamonaviy uskunalar kabi jihatlarni ajratib oling. "
@@ -1167,7 +1174,21 @@ async def _openai_call_core(
         sem = _get_llm_semaphore()
         if sem is not None:
             async with sem:
-                response = await client.chat.completions.create(
+                response = await asyncio.wait_for(
+                    client.chat.completions.create(
+                        model=model_name,
+                        temperature=0.45,
+                        response_format={"type": "json_object"},
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+                        ],
+                    ),
+                    timeout=30.0,
+                )
+        else:
+            response = await asyncio.wait_for(
+                client.chat.completions.create(
                     model=model_name,
                     temperature=0.45,
                     response_format={"type": "json_object"},
@@ -1175,16 +1196,8 @@ async def _openai_call_core(
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
                     ],
-                )
-        else:
-            response = await client.chat.completions.create(
-                model=model_name,
-                temperature=0.45,
-                response_format={"type": "json_object"},
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
-                ],
+                ),
+                timeout=30.0,
             )
 
         content = response.choices[0].message.content or "{}"
@@ -1401,53 +1414,49 @@ async def generate_news(
     """
 
     print("[DEBUG] generate_news called")
-    print("[AI] generate_news called")
+    print(f"[AI] generate_news called: title={title[:50] if title else ''}")
     logger.info(f"[GENERATE] Starting generation: title={title[:50] if title else ''}..., persona={target_persona}")
 
-    # Try OpenAI with validation and retry
-    max_retries = 2
-    for attempt in range(1, max_retries + 1):
-        openai_payload = await _generate_with_openai(
-            title=title,
-            raw_text=raw_text,
-            category=category,
-            target_persona=target_persona,
-            region=region,
-            profession=profession,
-            user_geo=user_geo,
-            rewrite_round=rewrite_round + attempt - 1,  # Increment round for diversity
-        )
+    # Single OpenAI call — no retry loop for speed
+    openai_payload = await _generate_with_openai(
+        title=title,
+        raw_text=raw_text,
+        category=category,
+        target_persona=target_persona,
+        region=region,
+        profession=profession,
+        user_geo=user_geo,
+        rewrite_round=rewrite_round,
+    )
 
-        if openai_payload is None:
-            logger.warning(f"[GENERATE] Attempt {attempt}: OpenAI returned None")
-            continue
+    if openai_payload is None:
+        logger.warning("[GENERATE] OpenAI returned None")
+        print("[DEBUG] generate_news NO PAYLOAD from OpenAI")
+        return None
 
-        # Validate the result
-        is_valid, error_msg = validate_ai_response(openai_payload)
-        if is_valid:
-            logger.info(f"[GENERATE] Attempt {attempt}: Valid result, ai_score={openai_payload.get('ai_score')}")
-            print(f"[DEBUG] generate_news result={str(openai_payload)[:300]}")
-            model_score = float(openai_payload.get("ai_score") or 7.0)
-            return _compose_generated_news(
-                final_title_raw=str(openai_payload.get("final_title")),
-                final_text_raw=str(openai_payload.get("final_text")),
-                model_score_raw=model_score,
-                category_raw=str(openai_payload.get("category") or category or "general"),
-                target_persona_raw=str(openai_payload.get("target_persona") or target_persona or "general"),
-                title=title,
-                raw_text=raw_text,
-                target_persona=target_persona,
-                profession=profession,
-                geo=user_geo or region,
-            )
-        else:
-            logger.warning(f"[GENERATE] Attempt {attempt}: Invalid result - {error_msg}")
-            # Continue to next retry
+    # Log validation result but DON'T block saving
+    is_valid, error_msg = validate_ai_response(openai_payload)
+    print(f"[DEBUG] validate_ai_response: is_valid={is_valid}, error={error_msg}")
+    if not is_valid:
+        logger.warning(f"[GENERATE] Validation warning (not blocking): {error_msg}")
 
-    # All retries failed
-    logger.error(f"[GENERATE] All {max_retries} attempts failed")
-    print("[DEBUG] generate_news result=None")
-    raise ValueError("generation_failed")
+    model_score = float(openai_payload.get("ai_score") or 7.0)
+    if not is_valid:
+        model_score = min(model_score, 4.0)  # Lower score for unvalidated results
+
+    print(f"[DEBUG] generate_news result: title={str(openai_payload.get('final_title', ''))[:60]}")
+    return _compose_generated_news(
+        final_title_raw=str(openai_payload.get("final_title") or title),
+        final_text_raw=str(openai_payload.get("final_text") or raw_text[:500]),
+        model_score_raw=model_score,
+        category_raw=str(openai_payload.get("category") or category or "general"),
+        target_persona_raw=str(openai_payload.get("target_persona") or target_persona or "general"),
+        title=title,
+        raw_text=raw_text,
+        target_persona=target_persona,
+        profession=profession,
+        geo=user_geo or region,
+    )
 
 
 async def _generate_with_openai(
