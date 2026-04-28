@@ -1369,6 +1369,8 @@ async def generate_news(
     3. Return None if all attempts fail (caller should handle)
     """
 
+    print("[DEBUG] generate_news called")
+    print("[AI] generate_news called")
     logger.info(f"[GENERATE] Starting generation: title={title[:50] if title else ''}..., persona={target_persona}")
 
     # Try OpenAI with validation and retry
@@ -1393,6 +1395,7 @@ async def generate_news(
         is_valid, error_msg = validate_ai_response(openai_payload)
         if is_valid:
             logger.info(f"[GENERATE] Attempt {attempt}: Valid result, ai_score={openai_payload.get('ai_score')}")
+            print(f"[DEBUG] generate_news result={str(openai_payload)[:300]}")
             model_score = float(openai_payload.get("ai_score") or 7.0)
             return _compose_generated_news(
                 final_title_raw=str(openai_payload.get("final_title")),
@@ -1411,8 +1414,9 @@ async def generate_news(
             # Continue to next retry
 
     # All retries failed
-    logger.error(f"[GENERATE] All {max_retries} attempts failed, returning None")
-    return None
+    logger.error(f"[GENERATE] All {max_retries} attempts failed")
+    print("[DEBUG] generate_news result=None")
+    raise ValueError("generation_failed")
 
 
 async def _generate_with_openai(

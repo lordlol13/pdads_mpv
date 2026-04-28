@@ -567,7 +567,7 @@ async def _upsert_ai_news_for_persona(
         generated = await _generate_with_quality_loop(raw_row, topic, profession, geo)
 
     # If generation failed, don't save garbage
-    if generated is None:
+    if not generated:
         LOG.error(f"[UPSERT] Generation failed for raw_news_id={raw_row.get('id')}, skipping save")
         raise ValueError("generation_failed")
 
@@ -712,6 +712,11 @@ async def _upsert_ai_news_for_persona(
         """
         update_result = await session.execute(text(update_query), {**params, "id": existing_id})
         updated_ai_news_id = update_result.scalar_one()
+        print("[DEBUG] saving to ai_news")
+        await session.commit()
+        print("[DEBUG] commit done")
+        print("[AI] saved to ai_news")
+        LOG.info("[AI] saved to ai_news id=%s raw_news_id=%s", updated_ai_news_id, raw_row.get("id"))
         await refresh_ai_news_embedding(
             session,
             updated_ai_news_id,
@@ -753,6 +758,11 @@ async def _upsert_ai_news_for_persona(
     """
     insert_result = await session.execute(text(insert_query), params)
     ai_news_id = insert_result.scalar_one()
+    print("[DEBUG] saving to ai_news")
+    await session.commit()
+    print("[DEBUG] commit done")
+    print("[AI] saved to ai_news")
+    LOG.info("[AI] saved to ai_news id=%s raw_news_id=%s", ai_news_id, raw_row.get("id"))
     await refresh_ai_news_embedding(
         session,
         ai_news_id,
@@ -1338,8 +1348,8 @@ def process_all_task() -> dict:
 
     Uses its own event loop (no asyncio.run) to run async DB operations in the worker.
     """
-    print("[TASK] process_all_task started")
-    logger.info("process_all_task started")
+    print("[DEBUG] process_all_task started")
+    logger.info("[DEBUG] process_all_task started")
 
     # Create a new event loop via the event loop policy to avoid interfering
     # with any existing global loop. We'll ensure the loop is closed safely.
@@ -1354,15 +1364,44 @@ def process_all_task() -> dict:
 
             async with SessionLocal() as session:
                 # Load pending raw_news ids
-                pending_q = """
-                SELECT id
-                FROM raw_news
-                WHERE process_status = 'pending'
-                ORDER BY id ASC
-                """
-                res = await session.execute(text(pending_q))
-                rows = res.fetchall()
-                pending_ids = [r[0] for r in rows]
+                status_debug = await session.execute(
+                    text("SELECT process_status, COUNT(*) FROM raw_news GROUP BY process_status")
+                )
+                print(f"[PROCESS_ALL] status_counts {status_debug.mappings().all()}")
+
+                sample_debug = await session.execute(
+                    text("SELECT id, process_status, title FROM raw_news ORDER BY id DESC LIMIT 10")
+                )
+                print(f"[PROCESS_ALL] sample_rows {sample_debug.mappings().all()}")
+
+                res = await session.execute(
+                    text(
+                        """
+                        SELECT *
+                        FROM raw_news
+                        WHERE process_status = 'pending'
+                        ORDER BY id ASC
+                        """
+                    )
+                )
+                rows = res.mappings().all()
+
+                if not rows:
+                    res = await session.execute(
+                        text(
+                            """
+                            SELECT *
+                            FROM raw_news
+                            WHERE process_status IS NULL OR process_status IN ('pending', 'new', 'parsed')
+                            ORDER BY id ASC
+                            """
+                        )
+                    )
+                    rows = res.mappings().all()
+
+                print(f"[DEBUG] found {len(rows)} raw_news")
+                print(f"[PROCESS_ALL] found {len(rows)} rows")
+                pending_ids = [int(r["id"]) for r in rows]
 
                 if not pending_ids:
                     return {"status": "completed", "processed": 0, "failed": 0, "skipped": 0, "total": 0}
@@ -1373,10 +1412,12 @@ def process_all_task() -> dict:
                 if batch_size and total_pending > batch_size:
                     pending_ids = pending_ids[:batch_size]
 
-                logger.info("Processing batch", total=len(pending_ids), total_pending=total_pending)
+                logger.info("Processing batch total=%s total_pending=%s", len(pending_ids), total_pending)
 
                 for raw_id in pending_ids:
                     try:
+                        print(f"[DEBUG] processing raw_news_id={raw_id}")
+                        logger.info("[DEBUG] processing raw_news_id=%s", raw_id)
                         # Prevent duplicates: skip if ai_news already exists for raw_news
                         dup = await session.execute(
                             text("SELECT 1 FROM ai_news WHERE raw_news_id = :id LIMIT 1"),
@@ -1405,7 +1446,7 @@ def process_all_task() -> dict:
                                 {"st": "failed", "err": f"timeout after {timeout_seconds}s", "id": raw_id},
                             )
                             await session.commit()
-                            logger.error("Processing timed out", raw_news_id=raw_id, timeout=timeout_seconds)
+                            logger.error("Processing timed out raw_news_id=%s timeout=%s", raw_id, timeout_seconds)
                             failed += 1
                             continue
                         except Exception as e:
@@ -1415,7 +1456,7 @@ def process_all_task() -> dict:
                                 {"st": "failed", "err": str(e)[:2000], "id": raw_id},
                             )
                             await session.commit()
-                            logger.error("Processing failed", raw_news_id=raw_id, error=str(e))
+                            logger.exception("Processing failed raw_news_id=%s error=%s", raw_id, e)
                             failed += 1
                             continue
 
@@ -1428,6 +1469,7 @@ def process_all_task() -> dict:
                             await session.commit()
                             failed += 1
                             continue
+                        print(f"[DEBUG] generate_news result={str(result)[:300]}")
 
                         # Success — mark processed
                         await session.execute(
@@ -1435,6 +1477,7 @@ def process_all_task() -> dict:
                             {"st": "processed", "id": raw_id},
                         )
                         await session.commit()
+                        print("[DEBUG] commit done")
                         processed += 1
 
                     except Exception as e:
@@ -1447,8 +1490,8 @@ def process_all_task() -> dict:
                             await session.commit()
                         except Exception:
                             # suppress commit errors here — log and continue
-                            logger.error("Failed to persist failure status", raw_news_id=raw_id, error=str(e))
-                        logger.error("Processing failed", raw_news_id=raw_id, error=str(e))
+                            logger.exception("Failed to persist failure status raw_news_id=%s error=%s", raw_id, e)
+                        logger.exception("Processing failed raw_news_id=%s error=%s", raw_id, e)
                         failed += 1
 
                 return {"status": "completed", "processed": processed, "failed": failed, "skipped": skipped, "total": len(pending_ids)}
@@ -1463,11 +1506,11 @@ def process_all_task() -> dict:
                 pass
 
         logger.info(
-            "process_all_task finished",
-            processed=result.get("processed"),
-            failed=result.get("failed"),
-            skipped=result.get("skipped"),
-            total=result.get("total"),
+            "process_all_task finished processed=%s failed=%s skipped=%s total=%s",
+            result.get("processed"),
+            result.get("failed"),
+            result.get("skipped"),
+            result.get("total"),
         )
         return result
     finally:

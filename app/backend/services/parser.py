@@ -228,6 +228,8 @@ async def run_parser_async(
             except Exception:
                 logger.warning("[PARSER] Failed to update last_parsed_at")
 
+            print(f"[PARSER] saved {total_saved}")
+            logger.info("[PARSER] saved %s", total_saved)
             logger.info("[PARSER] Total saved: %s, errors: %s", total_saved, len(errors))
             return {"status": "ok", "saved": total_saved, "errors": errors[:10]}
         except Exception as e:

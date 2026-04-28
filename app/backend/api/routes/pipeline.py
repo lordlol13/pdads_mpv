@@ -46,19 +46,48 @@ async def trigger_parse():
 async def process_all_pending():
     """Process all raw_news with status 'pending'. Returns count of queued items."""
     try:
-        # Get all pending raw_news
-        query = """
-        SELECT id
-        FROM raw_news
-        WHERE process_status = 'pending'
-        ORDER BY id DESC
-        """
         async with SessionLocal() as session:
-            result = await session.execute(text(query))
-            pending_ids = [row[0] for row in result.fetchall()]
-        
-        LOG.info("[PROCESS-ALL] Found %s pending raw_news", len(pending_ids))
-        
+            status_debug = await session.execute(
+                text("SELECT process_status, COUNT(*) FROM raw_news GROUP BY process_status")
+            )
+            status_rows = status_debug.mappings().all()
+            LOG.info("[PROCESS_ALL] status_counts=%s", status_rows)
+
+            sample_debug = await session.execute(
+                text("SELECT id, process_status, title FROM raw_news ORDER BY id DESC LIMIT 10")
+            )
+            sample_rows = sample_debug.mappings().all()
+            LOG.info("[PROCESS_ALL] sample_rows=%s", sample_rows)
+
+            rows_result = await session.execute(
+                text(
+                    """
+                    SELECT *
+                    FROM raw_news
+                    WHERE process_status = 'pending'
+                    ORDER BY id DESC
+                    """
+                )
+            )
+            rows = rows_result.mappings().all()
+
+            if not rows:
+                rows_result = await session.execute(
+                    text(
+                        """
+                        SELECT *
+                        FROM raw_news
+                        WHERE process_status IS NULL OR process_status IN ('pending', 'new', 'parsed')
+                        ORDER BY id DESC
+                        """
+                    )
+                )
+                rows = rows_result.mappings().all()
+
+            print(f"[PROCESS_ALL] found {len(rows)} rows")
+            LOG.info("[PROCESS_ALL] found %s rows", len(rows))
+            pending_ids = [int(row["id"]) for row in rows]
+
         if not pending_ids:
             return {
                 "status": "completed",
@@ -70,40 +99,30 @@ async def process_all_pending():
         queued = 0
         errors = []
         
-        if celery_app.conf.task_always_eager:
-            # Dev mode: call async function directly (we're already in FastAPI's event loop)
-            LOG.info("[PROCESS-ALL] Eager mode: processing %s items", len(pending_ids))
-            for raw_id in pending_ids:
-                try:
-                    LOG.info("[PROCESS-ALL] Processing raw_news_id=%s", raw_id)
-                    result = await _process_raw_news_async(raw_id, attempt=1)
-                    LOG.info("[PROCESS-ALL] Success raw_news_id=%s", raw_id)
-                    queued += 1
-                except Exception as e:
-                    LOG.exception("[PROCESS-ALL] Exception raw_news_id=%s: %s", raw_id, e)
-                    errors.append(f"{raw_id}: {e}")
-        else:
-            # Production mode: enqueue to Celery
-            LOG.info("[PROCESS-ALL] Async mode: queueing %s items", len(pending_ids))
-            for raw_id in pending_ids:
-                try:
-                    LOG.info("[PROCESS-ALL] Queueing raw_news_id=%s", raw_id)
-                    process_raw_news.delay(raw_id)
-                    queued += 1
-                except Exception as e:
-                    LOG.exception("[PROCESS-ALL] Failed to queue raw_news_id=%s: %s", raw_id, e)
-                    errors.append(f"{raw_id}: {e}")
-        
-        LOG.info("[PROCESS-ALL] Finished: queued=%s, total=%s, errors=%s", queued, len(pending_ids), len(errors))
+        # TEMP DEBUG MODE: bypass Celery and execute synchronously to isolate broker/worker issues
+        LOG.info("[DEBUG] process_all_task started")
+        LOG.info("[PROCESS_ALL] Direct mode: processing %s items", len(pending_ids))
+        for raw_id in pending_ids:
+            try:
+                print(f"[DEBUG] processing raw_news_id={raw_id}")
+                LOG.info("[DEBUG] processing raw_news_id=%s", raw_id)
+                result = await _process_raw_news_async(raw_id, attempt=1)
+                LOG.info("[PROCESS_ALL] Success raw_news_id=%s result=%s", raw_id, result)
+                queued += 1
+            except Exception as e:
+                LOG.exception("[PROCESS_ALL] Exception raw_news_id=%s: %s", raw_id, e)
+                errors.append(f"{raw_id}: {e}")
+
+        LOG.info("[PROCESS_ALL] Finished: queued=%s, total=%s, errors=%s", queued, len(pending_ids), len(errors))
         
         return {
-            "status": "completed" if celery_app.conf.task_always_eager else "queued",
+            "status": "completed",
             "queued": queued,
             "total_pending": len(pending_ids),
             "errors": errors if errors else None
         }
     except Exception as e:
-        LOG.exception("[PROCESS-ALL] Fatal error: %s", e)
+        LOG.exception("[PROCESS_ALL] Fatal error: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
