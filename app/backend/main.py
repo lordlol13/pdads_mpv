@@ -1,5 +1,3 @@
-# Гарантируем регистрацию задач Celery
-from app.backend.core.celery_app import celery_app
 """
 FastAPI application entry point with middleware, error handlers, and routing.
 
