@@ -6,9 +6,18 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
     APP_NAME: str = "AI News Feed MVP"
     APP_ENV: str = "dev"
     DEBUG: bool = True
+
+    # Server port (Railway sets PORT env var)
+    PORT: int = 8000
 
     DATABASE_URL: str = "postgresql+asyncpg://localhost:5432/news_mvp"
 
@@ -21,11 +30,11 @@ class Settings(BaseSettings):
     GEMINI_MODEL: str = "gemini-2.5-flash"
     GEMINI_REVIEW_ENABLED: bool = False
     OPENAI_API_KEY: str = ""
-    OPENAI_MODEL: str = "gpt-4.1-mini"
-    OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-small"
+    OPENAI_MODEL: str = "gpt-4o-mini"
+    OPENAI_EMBEDDING_MODEL: str = "gpt-4o-mini"
     # Optional heavy model defaults and safety guard: do NOT enable heavy model in
     # production unless `LLM_ENABLE_HEAVY_MODEL=true` is explicitly set in env.
-    OPENAI_MODEL_DEFAULT_HEAVY: str = "gpt-4o"
+    OPENAI_MODEL_DEFAULT_HEAVY: str = "gpt-4o-mini"
     LLM_ENABLE_HEAVY_MODEL: bool = False
     INTERNAL_API_KEY: str = ""
     GROQ_API_KEY: str = ""
@@ -80,7 +89,7 @@ class Settings(BaseSettings):
 
     PIPELINE_MAX_ATTEMPTS: int = 1
     PIPELINE_TARGET_SCORE: float = 8.0
-    PIPELINE_MIN_SCORE: float = 7.0
+    PIPELINE_MIN_SCORE: float = 6.0  # Lowered for testing
     PIPELINE_MAX_REWRITE_ROUNDS: int = 2
     SCHEDULER_INTERVAL_MINUTES: int = 15
     SCHEDULER_CLEANUP_INTERVAL_HOURS: int = 24

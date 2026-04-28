@@ -1128,6 +1128,7 @@ async def get_user_feed(session: AsyncSession, user_id: int, limit: int = 50) ->
     # CRITICAL FALLBACK: if feed is empty or too small, append recent raw_news
     try:
         if not deduped_rows or len(deduped_rows) < 10:
+            logger.info("[FEED FALLBACK] AI feed has %s items, fetching from raw_news", len(deduped_rows) if deduped_rows else 0)
             q = """
             SELECT id, title, raw_text, image_url, source_url, category, region, created_at
             FROM raw_news
@@ -1136,6 +1137,7 @@ async def get_user_feed(session: AsyncSession, user_id: int, limit: int = 50) ->
             """
             res = await session.execute(text(q), {"limit": int(limit or 50)})
             raw_rows = [dict(r) for r in res.mappings().all()]
+            logger.info("[FEED FALLBACK] Found %s items in raw_news", len(raw_rows))
             mapped = []
             for raw in raw_rows:
                 m = normalize_raw_news(raw)

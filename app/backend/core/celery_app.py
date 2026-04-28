@@ -1,14 +1,21 @@
 from celery import Celery
 import os
+import logging
 from app.backend.core.config import settings
 
+logger = logging.getLogger(__name__)
 
 celery_app = Celery(
     "news_brain",
     broker=settings.CELERY_BROKER_URL,
     backend=settings.CELERY_RESULT_BACKEND,
-    include=["brain.tasks.pipeline_tasks"],
+    include=["brain.tasks.pipeline_tasks", "app.backend.tasks.parser_task"],
 )
+
+# Log configuration
+is_eager = (os.getenv("CELERY_TASK_ALWAYS_EAGER", "").lower() == "true") or (str(settings.APP_ENV).lower() == "dev")
+logger.info("[CELERY] Starting with APP_ENV=%s, task_always_eager=%s, broker=%s", 
+            settings.APP_ENV, is_eager, settings.CELERY_BROKER_URL)
 
 # Basic runtime tuning for workers (can be overridden via env vars)
 celery_app.conf.update(
