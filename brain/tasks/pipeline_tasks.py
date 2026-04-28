@@ -523,22 +523,19 @@ async def _generate_with_quality_loop(
         if combined_score >= settings.PIPELINE_TARGET_SCORE:
             return generated
 
-    # If we did not get any successful generation, fallback to raw if configured
+    # If we did not get any successful generation, always fallback to raw.
+    # This keeps the pipeline progressing even under LLM rate-limits/outages.
     if best_result is None:
-        if settings.LLM_FALLBACK_ENABLED:
-            LOG.warning(f"LLM generation failed, falling back to raw for raw_news_id={raw_row.get('id')}")
-            return _fallback_generated()
-        raise ValueError("generation_failed")
+        LOG.warning(f"LLM generation failed, falling back to raw for raw_news_id={raw_row.get('id')}")
+        return _fallback_generated()
 
-    # If generated but score is too low, allow fallback when enabled
+    # If generated but score is too low, fallback to raw.
     if float(best_result.get("combined_score", 0.0)) < settings.PIPELINE_MIN_SCORE:
-        if settings.LLM_FALLBACK_ENABLED:
-            LOG.warning(
-                f"LLM generation score too low ({float(best_result.get('combined_score', 0.0)):.2f}), "
-                f"falling back to raw for raw_news_id={raw_row.get('id')}"
-            )
-            return _fallback_generated()
-        raise ValueError(f"low_generation_score:{best_result.get('combined_score')}")
+        LOG.warning(
+            f"LLM generation score too low ({float(best_result.get('combined_score', 0.0)):.2f}), "
+            f"falling back to raw for raw_news_id={raw_row.get('id')}"
+        )
+        return _fallback_generated()
 
     try:
         best_result.setdefault("is_ai", True)
@@ -1103,66 +1100,86 @@ async def _process_raw_news_async(
                 await session.commit()
                 return {"status": "failed", "reason": "raw_news_not_found", "raw_news_id": raw_news_id}
 
+            # FIX START: Remove duplicates and limit personas to prevent rate limiting
             cohort_personas = personas or await _load_cohort_personas(session)
-
-            # Pre-generate content for all personas concurrently to parallelize LLM calls.
-            gen_tasks: list[asyncio.Task] = []
+            
+            # MANDATORY FIX 1: Remove duplicate personas
+            cohort_personas = list(dict.fromkeys(tuple(sorted(p.items())) for p in cohort_personas))
+            cohort_personas = [dict(t) for t in cohort_personas]
+            
+            # MANDATORY FIX 2: Limit personas (temporary safety)
+            cohort_personas = cohort_personas[:1]
+            
+            print("[PIPELINE] personas:", cohort_personas)
+            
+            # MANDATORY FIX 3: Replace parallel execution with sequential loop
+            ai_news_ids: list[int] = []
+            saved_count = 0
+            
             for persona_context in cohort_personas:
                 topic = str(persona_context.get("topic") or "general").strip().lower()
                 profession = str(persona_context.get("profession") or "").strip().lower() or None
                 geo = str(persona_context.get("geo") or "").strip().lower() or None
-                gen_tasks.append(asyncio.create_task(_generate_with_quality_loop(raw_row, topic, profession, geo)))
-
-            generated_results: list[dict[str, Any]] = []
-            if gen_tasks:
-                generated_results = await asyncio.gather(*gen_tasks, return_exceptions=True)
-
-            # DEBUG: Log generation results
-            for i, result in enumerate(generated_results):
-                if isinstance(result, Exception):
-                    print(f"[DEBUG] persona {i} generation EXCEPTION: {result}")
-                    logger.error(f"[PROCESS] persona {i} generation failed: {result}")
-                elif result is None:
-                    print(f"[DEBUG] persona {i} generation returned None")
-                    logger.warning(f"[PROCESS] persona {i} generation returned None")
-                else:
-                    print(f"[DEBUG] persona {i} generated: title={str(result.get('final_title', ''))[:60]}")
-                    logger.info(f"[PROCESS] persona {i} generated: title={str(result.get('final_title', ''))[:60]}")
-
-            ai_news_ids: list[int] = []
-            for persona_context, generated in zip(cohort_personas, generated_results):
-                if generated is None or isinstance(generated, Exception):
-                    # Fallback to raw text if generation fails or returns None
-                    # This ensures SOMETHING gets saved to ai_news
-                    fallback_title = str(raw_row.get("title") or "Yangilik")
-                    fallback_text = str(raw_row.get("raw_text") or "")[:1000] or "Ma'lumot yo'q"
-                    generated = {
-                        "final_title": fallback_title,
-                        "final_text": fallback_text,
-                        "category": str(raw_row.get("category") or "general"),
-                        "combined_score": 0.0,
-                        "ai_score": 0.0,
-                        "is_ai": False,
-                    }
-                    print(f"[DEBUG] Using FALLBACK for persona {persona_context.get('label') or 'general'}: title={fallback_title[:50]}")
-                    logger.warning(f"[PROCESS] persona {persona_context.get('label') or persona_context.get('topic') or 'general'} using fallback raw text")
-
-                ai_news_id = await _upsert_ai_news_for_persona(session, raw_row, persona_context, generated=generated)
-                ai_news_ids.append(ai_news_id)
-                score_result = await session.execute(
-                    text("SELECT ai_score FROM ai_news WHERE id = :id"),
-                    {"id": ai_news_id},
-                )
-                ai_score = float(score_result.scalar_one_or_none() or 0.0)
-                await _populate_user_feed_for_ai_news(
-                    session,
-                    ai_news_id=ai_news_id,
-                    ai_score=ai_score,
-                    target_topic=str(persona_context.get("topic") or "general"),
-                    target_profession=str(persona_context.get("profession") or "").strip().lower() or None,
-                    target_geo=str(persona_context.get("geo") or "").strip().lower() or None,
-                    target_country_code=str(persona_context.get("country_code") or "").strip().upper() or None,
-                )
+                
+                print(f"[PIPELINE] generating for: {persona_context}")
+                
+                # MANDATORY FIX 4: Add delay between LLM calls
+                if saved_count > 0:
+                    await asyncio.sleep(0.5)
+                
+                try:
+                    # Sequential generation instead of parallel
+                    generated = await _generate_with_quality_loop(raw_row, topic, profession, geo)
+                    
+                    # MANDATORY FIX 6: Check generation result
+                    if not generated:
+                        print(f"[PIPELINE] generation failed for {topic}, using fallback")
+                        # MANDATORY FIX 8: Force DB save with fallback values
+                        fallback_title = str(raw_row.get("title") or "test")
+                        fallback_text = str(raw_row.get("raw_text") or "test")[:1000]
+                        generated = {
+                            "final_title": fallback_title,
+                            "final_text": fallback_text,
+                            "category": str(raw_row.get("category") or "general"),
+                            "combined_score": 0.0,
+                            "ai_score": 0.0,
+                            "is_ai": False,
+                        }
+                    
+                    # MANDATORY FIX 8: Ensure DB save happens
+                    ai_news_id = await _upsert_ai_news_for_persona(session, raw_row, persona_context, generated=generated)
+                    ai_news_ids.append(ai_news_id)
+                    saved_count += 1
+                    
+                    score_result = await session.execute(
+                        text("SELECT ai_score FROM ai_news WHERE id = :id"),
+                        {"id": ai_news_id},
+                    )
+                    ai_score = float(score_result.scalar_one_or_none() or 0.0)
+                    await _populate_user_feed_for_ai_news(
+                        session,
+                        ai_news_id=ai_news_id,
+                        ai_score=ai_score,
+                        target_topic=topic,
+                        target_profession=profession,
+                        target_geo=geo,
+                        target_country_code=str(persona_context.get("country_code") or "").strip().upper() or None,
+                    )
+                    
+                    print(f"[PIPELINE] saved ai_news_id={ai_news_id} for {topic}")
+                    
+                    # MANDATORY FIX 9: Stop after first success
+                    break
+                    
+                except Exception as e:
+                    print(f"[PIPELINE] ERROR generating for {topic}: {e}")
+                    logger.error(f"[PROCESS] persona {topic} generation error: {e}")
+                    continue
+            
+            # MANDATORY FIX 10: Fail-fast if nothing saved
+            if saved_count == 0:
+                raise RuntimeError(f"Failed to save any ai_news for raw_news_id={raw_news_id}")
+            # FIX END
 
             await _set_status(
                 session=session,
