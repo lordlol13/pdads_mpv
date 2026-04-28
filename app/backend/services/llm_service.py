@@ -102,6 +102,77 @@ def _word_count(text: str) -> int:
     return len([w for w in text.split() if w.strip()])
 
 
+def is_valid_news(text: str) -> bool:
+    """Validate that generated news text is valid and not garbage.
+
+    Returns True if text is valid, False otherwise.
+    """
+    if not text or not isinstance(text, str):
+        return False
+
+    # Check for broken encoding (Mojibake)
+    if "Ð" in text or "â" in text or "Ã" in text or "Â" in text:
+        return False
+
+    # Check for HTML tags
+    if "<" in text and ">" in text:
+        return False
+
+    # Check for forbidden phrases
+    forbidden_phrases = [
+        "Additional emphasis",
+        "In Tashkent",
+        "For a general profile",
+        "Siz uchun ahamiyati",
+        "Asosiy fakt va raqamlar",
+        "Key facts",
+        "Why this matters",
+        "What to watch next",
+        "emotional signal",
+        "Bu juda muhim",
+        "Zamonaviy dunyoda",
+        "Foydalanuvchilar uchun",
+    ]
+    for phrase in forbidden_phrases:
+        if phrase.lower() in text.lower():
+            return False
+
+    # Check minimum word count
+    words = text.split()
+    if len(words) < 120:
+        return False
+
+    # Check for excessive English (should be mostly Uzbek)
+    english_words = len([w for w in words if re.match(r'^[a-zA-Z]+$', w)])
+    if english_words > len(words) * 0.3:  # More than 30% English
+        return False
+
+    return True
+
+
+def validate_ai_response(data: dict) -> tuple[bool, str]:
+    """Validate AI response data.
+
+    Returns (is_valid, error_message)
+    """
+    if not isinstance(data, dict):
+        return False, "Invalid response format"
+
+    title = data.get("final_title", "")
+    text = data.get("final_text", "")
+
+    if not title or not text:
+        return False, "Missing title or text"
+
+    if not is_valid_news(title):
+        return False, f"Invalid title: {title[:50]}..."
+
+    if not is_valid_news(text):
+        return False, f"Invalid text: {text[:100]}..."
+
+    return True, ""
+
+
 def _apply_char_limit(text: str) -> str:
     max_chars = int(settings.PIPELINE_TEXT_MAX_CHARS or 0)
     if max_chars > 0:
@@ -561,95 +632,21 @@ def _enforce_editorial_structure(
     profession: str | None,
     geo: str | None,
 ) -> str:
-    paragraphs = _split_into_paragraphs(text)
-    facts = _extract_fact_sentences(raw_text, max_items=3)
-    interest = _detect_primary_interest(title, raw_text, target_persona)
-    sentiment = _detect_news_sentiment(f"{title} {raw_text}")
-    language_hint = _detect_language_hint(text, raw_text, title, geo, target_persona)
-
-    min_words = int(settings.PIPELINE_TEXT_MIN_WORDS or 170)
-    cleaned_existing = "\n\n".join(paragraphs).strip()
-    if len(paragraphs) >= 3 and _word_count(cleaned_existing) >= int(min_words * 0.75):
-        persona_tokens = [t for t in re.split(r"[^\w]+", str(target_persona or "").lower()) if len(t) >= 3]
-        lowered_existing = cleaned_existing.lower()
-        if persona_tokens and not any(token in lowered_existing for token in persona_tokens[:3]):
-            if language_hint == "ru":
-                persona_line = (
-                    f"For your profile ({str(target_persona or 'general').replace('|', ', ')}), "
-                    "this update matters because it directly affects short-term expectations."
-                )
-            elif language_hint == "uz":
-                persona_line = (
-                    f"Sizning profilingiz ({str(target_persona or 'general').replace('|', ', ')}) uchun bu voqea "
-                    "yaqin qarorlar va kutilmalarga bevosita ta'sir qiladi."
-                )
-            else:
-                persona_line = (
-                    f"For your profile ({str(target_persona or 'general').replace('|', ', ')}), "
-                    "this update matters because it directly affects short-term expectations."
-                )
-            cleaned_existing = f"{cleaned_existing}\n\n{_clean_text_artifacts(persona_line)}".strip()
-        return cleaned_existing
-
-    lead_source = paragraphs[0] if paragraphs else f"{title}."
-    lead = _clean_text_artifacts(lead_source)
-    if not lead:
-        lead = f"{title}."
-    emotional_intro = _build_emotional_intro(interest, sentiment, title, language_hint)
-
-    facts_line = " ".join(facts[:2]).strip()
-    if not facts_line:
-        details_block = " ".join(paragraphs[1:3]).strip() if len(paragraphs) > 1 else ""
-        facts_line = details_block or _clean_text_artifacts(raw_text)[:320]
-
-    if language_hint == "ru":
-        facts_paragraph = f"Key facts and figures: {facts_line}".strip()
-    elif language_hint == "uz":
-        facts_paragraph = f"Asosiy fakt va raqamlar: {facts_line}".strip()
-    else:
-        facts_paragraph = f"Key facts and figures: {facts_line}".strip()
-
-    persona_name = (target_persona or "general").strip().replace("|", ", ")
-    interest_label = interest or persona_name
-    if language_hint == "ru":
-        persona_paragraph = (
-            f"Why this matters to you: this development is directly tied to your interest in {interest_label}. "
-            f"In {geo or 'your context'}, someone with a {profession or 'general'} profile should focus on "
-            "verified facts, team form, and near-term scheduling."
-        )
-        action_paragraph = (
-            "What to watch next: verified updates, lineup/injury changes, and the next fixtures or milestone events."
-        )
-    elif language_hint == "uz":
-        persona_paragraph = (
-            f'Siz uchun ahamiyati: voqea "{interest_label}" qiziqishi bilan bevosita bog\'liq. '
-            f"{geo or 'hududiy kontekst'}da {profession or 'foydalanuvchi'} uchun hozir asosiy fokus "
-            "risklar, jamoa formasi va yaqin taqvimni xolis baholashdir."
-        )
-        action_paragraph = (
-            "Keyingi qadam: tasdiqlangan manbalarni, tarkib/jarohatlarni va keyingi o'yinlar yoki "
-            "turnir bosqichlarini kuzatib boring."
-        )
-    else:
-        persona_paragraph = (
-            f"Why this matters to you: this development is directly tied to your interest in {interest_label}. "
-            f"In {geo or 'your context'}, someone with a {profession or 'general'} profile should focus on "
-            "verified facts, team form, and near-term scheduling."
-        )
-        action_paragraph = (
-            "What to watch next: verified updates, lineup/injury changes, and the next fixtures or milestone events."
-        )
-
-    user_fact = _extract_user_related_fact(raw_text, interest, language_hint)
-
-    composed = [
-        _clean_text_artifacts(f"{emotional_intro} {lead}"),
-        _clean_text_artifacts(facts_paragraph),
-        _clean_text_artifacts(persona_paragraph),
-        _clean_text_artifacts(f"{action_paragraph} {user_fact}"),
-    ]
-
-    return "\n\n".join(part for part in composed if part).strip()
+    """Return text as-is without adding extra editorial sections.
+    
+    The LLM prompt now handles all formatting requirements.
+    We just clean up artifacts and return the text unchanged.
+    """
+    # Clean up the text but don't add any extra sections
+    cleaned = _clean_text_artifacts(text)
+    
+    # Ensure we have at least 1 paragraph
+    paragraphs = _split_into_paragraphs(cleaned)
+    if not paragraphs:
+        return cleaned or title
+    
+    # Return exactly what the LLM generated (1-2 paragraphs max)
+    return "\n\n".join(paragraphs[:2]).strip()
 
 
 def _evaluate_text_quality(
@@ -827,6 +824,7 @@ def _compose_generated_news(
 
 
 def _fit_word_bounds_with_paragraphs(text: str, min_words: int, max_words: int) -> str:
+    """Return text without adding filler paragraphs."""
     paragraphs = _split_into_paragraphs(text)
     if not paragraphs:
         return ""
@@ -853,30 +851,8 @@ def _fit_word_bounds_with_paragraphs(text: str, min_words: int, max_words: int) 
         used += len(take)
 
     combined = "\n\n".join(kept).strip()
-    if _word_count(combined) >= min_words:
-        return combined
-
-    language_hint = _detect_language_hint(text)
-    if language_hint == "ru":
-        filler_paragraphs = [
-            "Practical focus: separate confirmed facts from noise and estimate the impact on the next fixture cycle.",
-            "Working takeaway: cross-check key numbers across sources and update expectations for the next 24-48 hours.",
-        ]
-    elif language_hint == "uz":
-        filler_paragraphs = [
-            "Amaliy fokus: tasdiqlangan faktlarni shovqindan ajrating va yaqin taqvimga ta'sirini baholang.",
-            "Ishchi xulosa: raqamlarni bir nechta manba bilan tekshirib, 24-48 soatlik rejani yangilang.",
-        ]
-    else:
-        filler_paragraphs = [
-            "Practical focus: separate confirmed facts from noise and estimate the impact on the next fixture cycle.",
-            "Working takeaway: cross-check key numbers across sources and update expectations for the next 24-48 hours.",
-        ]
-    for filler in filler_paragraphs:
-        if _word_count(combined) >= min_words:
-            break
-        combined = (combined + " " + filler).strip() if combined else filler
-
+    
+    # Truncate if exceeds max_words, but don't add filler
     if not unlimited_words and _word_count(combined) > max_words:
         words = [w for w in combined.split() if w.strip()][:max_words]
         combined = " ".join(words)
@@ -893,85 +869,20 @@ def _ensure_structured_personal_text(
     geo: str | None,
     raw_text: str,
 ) -> str:
+    """Return clean text without adding extra sections.
+    
+    The LLM prompt now handles all formatting. We just clean and limit the text.
+    """
     clean_text = _clean_text_artifacts(text)
-    clean_raw_text = _clean_text_artifacts(raw_text)
-    min_words = int(settings.PIPELINE_TEXT_MIN_WORDS or 170)
-    max_words = int(settings.PIPELINE_TEXT_MAX_WORDS or 0)
-
-    if _word_count(clean_text) >= int(min_words * 0.7):
-        paragraphs = _split_into_paragraphs(clean_text)
-        if len(paragraphs) < 3:
-            paragraphs = _sentences_to_paragraphs(" ".join(paragraphs), target_paragraphs=3)
-        fitted = _fit_word_bounds_with_paragraphs("\n\n".join(paragraphs), min_words, max_words)
-        return _apply_char_limit(fitted)
-
-    language_hint = _detect_language_hint(clean_text, clean_raw_text, title, target_persona, geo)
-    persona_label = str(target_persona or "general").replace("|", ", ")
-    source_summary = clean_text or clean_raw_text or title
-
-    if language_hint == "ru":
-        sections = [
-            f"{title}. This update is directly relevant to your interest profile: {persona_label}.",
-            f"Core summary: {source_summary}",
-            (
-                f"In {geo or 'the current context'}, it is important to evaluate not only the result but also the drivers: "
-                "tempo, lineup decisions, hard stats, and the near-term schedule."
-            ),
-            (
-                f"For a {profession or 'general'} profile, the practical move is simple: "
-                "prioritize confirmed sources and refresh expectations as new facts arrive."
-            ),
-        ]
-    elif language_hint == "uz":
-        sections = [
-            f"{title}. Bu xabar sizning qiziqish profilingiz ({persona_label}) bilan bevosita bog'liq.",
-            f"Qisqa mazmun: {source_summary}",
-            (
-                f"{geo or 'joriy kun tartibi'} kontekstida natijadan tashqari sabablarni ham baholash zarur: "
-                "o'yin tempi, tarkib qarorlari, statistika va yaqin taqvim."
-            ),
-            (
-                f"{profession or 'foydalanuvchi'} profili uchun amaliy qadam: "
-                "tasdiqlangan manbalarga tayangan holda prognozni yangi faktlar bilan yangilab borish."
-            ),
-        ]
-    else:
-        sections = [
-            f"{title}. This update is directly relevant to your interest profile: {persona_label}.",
-            f"Core summary: {source_summary}",
-            (
-                f"In {geo or 'the current context'}, it is important to evaluate not only the result but also the drivers: "
-                "tempo, lineup decisions, hard stats, and the near-term schedule."
-            ),
-            (
-                f"For a {profession or 'general'} profile, the practical move is simple: "
-                "prioritize confirmed sources and refresh expectations as new facts arrive."
-            ),
-        ]
-
-    expanded = "\n\n".join(_clean_text_artifacts(section) for section in sections if section)
-
-    for _ in range(4):
-        if _word_count(expanded) >= min_words:
-            break
-        if language_hint == "ru":
-            expanded += (
-                "\n\nAdditional emphasis: decisions on this topic should follow source validation, "
-                "cross-checking key metrics, and tracking immediate news triggers."
-            )
-        elif language_hint == "uz":
-            expanded += (
-                "\n\nQo'shimcha urg'u: mavzu bo'yicha qarorlar bir nechta manbani solishtirish, "
-                "asosiy ko'rsatkichlarni tekshirish va yaqin yangilik triggerlarini inobatga olish bilan qabul qilinadi."
-            )
-        else:
-            expanded += (
-                "\n\nAdditional emphasis: decisions on this topic should follow source validation, "
-                "cross-checking key metrics, and tracking immediate news triggers."
-            )
-
-    fitted = _fit_word_bounds_with_paragraphs(expanded, min_words, max_words)
-    return _apply_char_limit(fitted)
+    
+    # Return up to 3 paragraphs, cleaned
+    paragraphs = _split_into_paragraphs(clean_text)
+    if not paragraphs:
+        return clean_text or title
+    
+    # Limit to 3 paragraphs max and apply char limit
+    limited = "\n\n".join(paragraphs[:3])
+    return _apply_char_limit(limited)
 
 
 def _normalize_score(raw_score: float, fallback_score: float) -> float:
@@ -995,14 +906,19 @@ def _build_deepseek_client() -> tuple[AsyncOpenAI | None, str | None]:
 def _normalize_openai_model_name(model_name: str | None) -> str:
     raw = str(model_name or "").strip()
     if not raw:
-        return "gpt-4.1-mini"
+        return "gpt-4o-mini"
 
     normalized = raw.lower().replace("_", "-")
     aliases = {
         "gpt4-mini": "gpt-4o-mini",
         "gpt-4-mini": "gpt-4o-mini",
         "gpt4o-mini": "gpt-4o-mini",
-        "gpt4.1-mini": "gpt-4.1-mini",
+        "gpt4.1-mini": "gpt-4o-mini",
+        "gpt-4.1-mini": "gpt-4o-mini",
+        "gpt-3.5-turbo": "gpt-4o-mini",
+        "gpt-4": "gpt-4o-mini",
+        "gpt-4o": "gpt-4o-mini",
+        "text-embedding-3-small": "gpt-4o-mini",
     }
     return aliases.get(normalized, raw)
 
@@ -1050,44 +966,54 @@ def _persona_profile_for_prompt(
 
 
 def _build_editorial_system_prompt(*, language_hint: str, min_words: int, max_words: int) -> str:
-    if language_hint == "ru":
-        language_rule = "Write in natural Russian (Cyrillic)."
-    elif language_hint == "uz":
-        language_rule = "Matnni tabiiy o'zbek tilida, lotin yozuvida yozing."
-    else:
-        language_rule = "Write in the natural language of the source text."
-
-    # Prefer richer article length by default: 250-500 words.
-    effective_min = max(int(min_words or 0), 250)
-    if max_words > 0:
-        effective_max = max(int(max_words or 0), effective_min)
-    else:
-        effective_max = 500
-    length_rule = f"Length: {effective_min}-{effective_max} words."
-
-    # New, stricter journalist prompt: produce publication-quality article body while
-    # returning ONLY a single JSON object. The `final_text` should be a natural
-    # multi-paragraph article following the exact editorial structure below.
+    """
+    STRICT Uzbek tech news editor prompt.
+    Output ONLY Uzbek (Latin). ZERO English/Russian.
+    Focus ONLY on AI and technology. DELETE everything else.
+    """
     return (
-        "You are a professional journalist and analytical news writer. "
-        "Return ONLY a single JSON object (no extra text) with keys: final_title, final_text, ai_score, category, target_persona. "
-        f"{length_rule} "
-        f"{language_rule} "
-        "STYLE: Write in an engaging, professional journalistic style — informative, slightly emotional but objective. "
-        "Use storytelling elements and smooth transitions. Avoid bullet lists, numbered sections, markdown, or template labels. "
-        "STRUCTURE (the `final_text` field must follow these natural paragraphs in order): "
-        "Intro: a 2–3 sentence hook that summarizes the news and emotional/contextual angle; "
-        "Main story: detailed explanation of what happened and why, with clear chronology and causes; "
-        "Key figures & stats: a paragraph with 2–4 concrete numbers or stats integrated into prose; "
-        "Comparison: one paragraph comparing relevant actors/teams/alternatives; "
-        "Extra insights: one paragraph with context, trends, or historical perspective; "
-        "Impact on the reader's interest: one paragraph explaining what this means specifically for the target persona; "
-        "Conclusion: one short forward-looking sentence about what may happen next. "
-        "PERSONALIZATION: adapt the narrative to the `target_persona` provided; mention user-relevant impacts naturally in the text. "
-        "FACTS: do not invent facts. If a detail is unconfirmed, explicitly say it is unconfirmed. "
-        "OUTPUT RULES: `final_title` — a concise, punchy headline (do not repeat the headline verbatim as the first line of `final_text`); "
-        "`final_text` — the article body following the STRUCTURE above and the length constraints; "
-        "`ai_score` — numeric estimate 0..10 of quality/confidence; `category` and `target_persona` — strings."
+        "Siz professional texnologiya yangiliklari muxbiri va qat'iy tahrirchisisiz. "
+        "Vazifangiz: yangiliklarni FAQAT sun'iy intellekt va texnologiya jihatidan qayta yozing. "
+        "Agar yangilikda AI/texnologiya elementi bo'lmasa, UNDA HAM umumiy texnologik kontekstda yoritib bering. "
+        "\n\n"
+        "QATTIY QOIDALAR (buzmang!):\n"
+        "1. TIL: Faqat O'ZBEK tili (LOTIN alifbosi). INGLIZ yoki RUS tilida bir so'z ham bo'lmasin!\n"
+        "2. FOKUS: FAQAT AI/texnologiya qismlari. Boshqalarini O'CHIRING!\n"
+        "3. UZUNLIK: 2-3 paragraf, JAMI 200-250 so'z\n"
+        "4. USLUB: Professional yangiliklar uslubi. Aniq, keskin, faktga asoslangan. "
+        "   - Hech qanday fikr, tahlil yoki maslahat yo'q!\n"
+        "   - Har bir jumlma YANGI ma'lumot qo'shishi kerak\n"
+        "   - Takrorlar taqiqlanadi\n"
+        "5. TA'QIQ LANGAN (ishlatmang!):\n"
+        "   - 'Bu juda muhim'\n"
+        "   - 'Zamonaviy dunyoda'\n"
+        "   - 'Foydalanuvchilar uchun'\n"
+        "   - 'Siz uchun ahamiyati'\n"
+        "   - 'Asosiy fakt va raqamlar'\n"
+        "   - Bosh sarlavhalar va umumiy iboralar\n"
+        "6. Agar input sifati past bo'lsa: FAQAT faktik kontekst asosida kengaytiring. "
+        "   Uydumagan ma'lumot qo'shmang!\n"
+        "\n"
+        "NAMUNA (yaxshi):\n"
+        "Input: Meta plans to use employee activity data to improve AI models.\n"
+        "Sarlavha: Meta sun'iy intellektni yaxshilash uchun xodimlar ma'lumotidan foydalanadi\n"
+        "Matn: Meta kompaniyasi sun'iy intellekt modellarini rivojlantirish maqsadida xodimlarning ish faoliyatiga oid ma'lumotlarni tahlil qilishni rejalashtirmoqda. "
+        "Ushbu jarayonda tizim ichidagi harakatlar, bosilgan tugmalar va ish jarayonidagi boshqa raqamli izlar o'rganiladi. "
+        "\n"
+        "Kompaniya bu ma'lumotlar yordamida modellar aniqligini oshirish va foydalanuvchi tajribasini yaxshilashni ko'zlamoqda. "
+        "Shu bilan birga, bunday yondashuv maxfiylik va ma'lumotlarni himoya qilish bilan bog'liq savollarni ham keltirib chiqarmoqda.\n"
+        "\n"
+        "OUTPUT (JSON format, qo'shimcha matn yo'q):\n"
+        "final_title: qisqa, aniq sarlavha (10-15 so'z)\n"
+        "final_text: 2-3 paragraf, 200-250 so'z, faqat faktlar\n"
+        "ai_score: 0-10 baho (sifat bahosi)\n"
+        "category: 'technology'\n"
+        "target_persona: ai|tashkent|uz\n"
+        "\n"
+        "ESLATMA: Agar yangilik to'liq AI/texnologiya mavzusida bo'lmasa, undagi "
+        "avtomatlashtirish, raqamli texnologiyalar, zamonaviy uskunalar kabi jihatlarni ajratib oling. "
+        "Masalan, avtomobil ishlab chiqarish -> zamonaviy robotlashtirilgan ishlab chiqarish texnologiyalari.\n"
+        "FAQAT JSON qaytaring!"
     )
 
 
@@ -1121,13 +1047,29 @@ def _build_editorial_user_payload(
             "region": region,
         },
         "user_profile": persona,
-        "quality_goals": {
-            "tone": "human_journalistic",
-            "must_include": [
-                "empathetic personalization when appropriate",
-                "team/topic-specific impact",
-                "2-4 concrete user-relevant facts",
-                "what to watch next",
+        "requirements": {
+            "language": "uzbek_latin_only",
+            "length": "200-250_words",
+            "paragraphs": "2-3_paragraphs",
+            "style": "professional_news",
+            "focus": "AI_technology_interest",
+            "forbidden_phrases": [
+                "Additional emphasis",
+                "In Tashkent",
+                "For a general profile",
+                "Siz uchun ahamiyati",
+                "Asosiy fakt va raqamlar",
+                "Key facts",
+                "Why this matters",
+                "What to watch next",
+                "emotional signal"
+            ],
+            "content_rules": [
+                "only_concrete_facts_from_source",
+                "no_generic_analysis",
+                "no_filler_text",
+                "no_repetition",
+                "adapt_to_AI_tech_interest",
             ],
         },
     }
@@ -1140,17 +1082,14 @@ def _build_openai_client() -> tuple[AsyncOpenAI | None, str | None]:
     # Determine requested model. If an explicit `OPENAI_MODEL` is provided via
     # env, use it. If none is set, allow switching to a heavier default only
     # when `LLM_ENABLE_HEAVY_MODEL` is true (guard against accidental heavy
-    # model usage in production). Default safe model is gpt-4.1-mini.
+    # model usage in production). Default safe model is gpt-4o-mini.
     requested_model = (settings.OPENAI_MODEL or "").strip()
     if not requested_model:
-        if getattr(settings, "LLM_ENABLE_HEAVY_MODEL", False):
-            requested_model = getattr(settings, "OPENAI_MODEL_DEFAULT_HEAVY", "gpt-4o-mini")
-        else:
-            requested_model = "gpt-4.1-mini"
+        requested_model = getattr(settings, "OPENAI_MODEL_DEFAULT_HEAVY", "gpt-4o-mini")
 
     model_name = _normalize_openai_model_name(requested_model)
     if model_name != requested_model:
-        logger.info("Normalized OPENAI_MODEL from '%s' to '%s'", requested_model, model_name)
+        logger.info(f"Normalized OPENAI_MODEL from '{requested_model}' to '{model_name}'")
 
     return AsyncOpenAI(api_key=settings.OPENAI_API_KEY), model_name
 
@@ -1168,32 +1107,45 @@ async def _openai_call_core(
     rewrite_round: int,
 ) -> dict[str, str | float] | None:
     """Core OpenAI call extracted to module-level to avoid fragile closures."""
-    forced_lang = (getattr(settings, "EDITORIAL_FORCE_LANGUAGE", "") or "").strip().lower()
-    if forced_lang:
-        language_hint = forced_lang
-    else:
-        language_hint = _detect_language_hint(title, raw_text, target_persona, user_geo, region)
+    try:
+        forced_lang = (getattr(settings, "EDITORIAL_FORCE_LANGUAGE", "") or "").strip().lower()
+        if forced_lang:
+            language_hint = forced_lang
+        else:
+            language_hint = _detect_language_hint(title, raw_text, target_persona, user_geo, region)
 
-    system_prompt = _build_editorial_system_prompt(
-        language_hint=language_hint,
-        min_words=int(settings.PIPELINE_TEXT_MIN_WORDS or 170),
-        max_words=int(settings.PIPELINE_TEXT_MAX_WORDS or 0),
-    )
+        system_prompt = _build_editorial_system_prompt(
+            language_hint=language_hint,
+            min_words=int(settings.PIPELINE_TEXT_MIN_WORDS or 170),
+            max_words=int(settings.PIPELINE_TEXT_MAX_WORDS or 0),
+        )
 
-    payload = _build_editorial_user_payload(
-        title=title,
-        raw_text=raw_text,
-        category=category,
-        target_persona=target_persona,
-        region=region,
-        profession=profession,
-        user_geo=user_geo,
-        rewrite_round=rewrite_round,
-    )
+        payload = _build_editorial_user_payload(
+            title=title,
+            raw_text=raw_text,
+            category=category,
+            target_persona=target_persona,
+            region=region,
+            profession=profession,
+            user_geo=user_geo,
+            rewrite_round=rewrite_round,
+        )
 
-    sem = _get_llm_semaphore()
-    if sem is not None:
-        async with sem:
+        logger.info(f"[OPENAI-CALL] model={model_name} title={title[:50]}...")
+
+        sem = _get_llm_semaphore()
+        if sem is not None:
+            async with sem:
+                response = await client.chat.completions.create(
+                    model=model_name,
+                    temperature=0.45,
+                    response_format={"type": "json_object"},
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+                    ],
+                )
+        else:
             response = await client.chat.completions.create(
                 model=model_name,
                 temperature=0.45,
@@ -1203,20 +1155,14 @@ async def _openai_call_core(
                     {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
                 ],
             )
-    else:
-        response = await client.chat.completions.create(
-            model=model_name,
-            temperature=0.45,
-            response_format={"type": "json_object"},
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
-            ],
-        )
 
-    content = response.choices[0].message.content or "{}"
-    data = json.loads(content)
-    return data if isinstance(data, dict) else None
+        content = response.choices[0].message.content or "{}"
+        data = json.loads(content)
+        logger.info(f"[OPENAI-CALL] Success: response_keys={list(data.keys()) if isinstance(data, dict) else None}")
+        return data if isinstance(data, dict) else None
+    except Exception as e:
+        logger.exception(f"[OPENAI-CALL] Error: {e}")
+        raise
 
 
 def _gemini_generation_available() -> bool:
@@ -1412,77 +1358,61 @@ async def generate_news(
     profession: str | None = None,
     user_geo: str | None = None,
     rewrite_round: int = 1,
-) -> GeneratedNews:
+) -> GeneratedNews | None:
     """
     Generate personalized news with retry, fallback, and caching.
-    
+    Validates output to ensure no garbage is returned.
+
     Flow:
-    1. Try OpenAI ChatGPT (with retry & cache)
-    2. Try Gemini (with retry & cache)
-    3. If fails and fallback enabled, try DeepSeek (with retry & cache)
-    4. If all fail, check cache for stale result
-    4. Fall back to mock generation
+    1. Try OpenAI ChatGPT (with retry & cache & validation)
+    2. Retry up to 2 times if result is invalid
+    3. Return None if all attempts fail (caller should handle)
     """
-    
-    fallback = _compose_generated_news(
-        final_title_raw=title,
-        final_text_raw=(raw_text or "")[:1400],
-        model_score_raw=7.2,
-        category_raw=category or "general",
-        target_persona_raw=target_persona or "general",
-        title=title,
-        raw_text=raw_text,
-        target_persona=target_persona,
-        profession=profession,
-        geo=user_geo or region,
-    )
 
-    # Try OpenAI first
-    openai_payload = await _generate_with_openai(
-        title=title,
-        raw_text=raw_text,
-        category=category,
-        target_persona=target_persona,
-        region=region,
-        profession=profession,
-        user_geo=user_geo,
-        rewrite_round=rewrite_round,
-    )
-    if openai_payload is not None:
-        model_score = float(openai_payload.get("ai_score") or fallback["ai_score"])
-        return _compose_generated_news(
-            final_title_raw=str(openai_payload.get("final_title") or fallback["final_title"]),
-            final_text_raw=str(openai_payload.get("final_text") or fallback["final_text"]),
-            model_score_raw=model_score,
-            category_raw=str(openai_payload.get("category") or fallback["category"]),
-            target_persona_raw=str(openai_payload.get("target_persona") or fallback["target_persona"]),
+    logger.info(f"[GENERATE] Starting generation: title={title[:50] if title else ''}..., persona={target_persona}")
+
+    # Try OpenAI with validation and retry
+    max_retries = 2
+    for attempt in range(1, max_retries + 1):
+        openai_payload = await _generate_with_openai(
             title=title,
             raw_text=raw_text,
+            category=category,
             target_persona=target_persona,
+            region=region,
             profession=profession,
-            geo=user_geo or region,
+            user_geo=user_geo,
+            rewrite_round=rewrite_round + attempt - 1,  # Increment round for diversity
         )
 
-    # OpenAI-only mode: if OpenAI is unavailable, try cached OpenAI; otherwise return mock.
-    cache_key = (title, target_persona, profession, user_geo)
-    cached_openai = await cache_get("llm:openai", *cache_key)
-    if cached_openai:
-        logger.info("OpenAI unavailable, using cached OpenAI result")
-        return _compose_generated_news(
-            final_title_raw=str(cached_openai.get("final_title") or fallback["final_title"]),
-            final_text_raw=str(cached_openai.get("final_text") or fallback["final_text"]),
-            model_score_raw=float(cached_openai.get("ai_score") or fallback["ai_score"]),
-            category_raw=str(cached_openai.get("category") or fallback["category"]),
-            target_persona_raw=str(cached_openai.get("target_persona") or fallback["target_persona"]),
-            title=title,
-            raw_text=raw_text,
-            target_persona=target_persona,
-            profession=profession,
-            geo=user_geo or region,
-        )
+        if openai_payload is None:
+            logger.warning(f"[GENERATE] Attempt {attempt}: OpenAI returned None")
+            continue
 
-    logger.warning("OpenAI unavailable, returning mock generation")
-    return fallback
+        # Validate the result
+        is_valid, error_msg = validate_ai_response(openai_payload)
+        if is_valid:
+            logger.info(f"[GENERATE] Attempt {attempt}: Valid result, ai_score={openai_payload.get('ai_score')}")
+            model_score = float(openai_payload.get("ai_score") or 7.0)
+            return _compose_generated_news(
+                final_title_raw=str(openai_payload.get("final_title")),
+                final_text_raw=str(openai_payload.get("final_text")),
+                model_score_raw=model_score,
+                category_raw=str(openai_payload.get("category") or category or "general"),
+                target_persona_raw=str(openai_payload.get("target_persona") or target_persona or "general"),
+                title=title,
+                raw_text=raw_text,
+                target_persona=target_persona,
+                profession=profession,
+                geo=user_geo or region,
+            )
+        else:
+            logger.warning(f"[GENERATE] Attempt {attempt}: Invalid result - {error_msg}")
+            # Continue to next retry
+
+    # All retries failed
+    logger.error(f"[GENERATE] All {max_retries} attempts failed, returning None")
+    return None
 
 
 async def _generate_with_openai(
@@ -1500,8 +1430,10 @@ async def _generate_with_openai(
 
     client, model_name = _build_openai_client()
     if client is None or model_name is None:
-        logger.debug("OpenAI not configured")
+        logger.warning(f"[LLM] OPENAI_API_KEY not configured - OpenAI generation disabled")
         return None
+    
+    logger.info(f"[LLM] OpenAI generation started: model={model_name}, persona={target_persona}")
 
     allowed = await check_rate_limit(
         f"llm:openai:{target_persona}",
@@ -1548,9 +1480,10 @@ async def _generate_with_openai(
             data,
             *cache_key,
         )
+        logger.info(f"[LLM] OpenAI generation successful: title={str(data.get('final_title', ''))[:50]}...")
         return data
     except Exception as e:
-        logger.exception(f"OpenAI generation failed: {e}")
+        logger.exception(f"[LLM] OpenAI generation failed: {e}")
         return None
 
 

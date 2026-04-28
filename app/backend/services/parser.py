@@ -1,10 +1,42 @@
 from __future__ import annotations
 from typing import Optional
 import asyncio
+import re
 
 from app.backend.db.session import SessionLocal
 from app.backend.services.ingestion_service import create_raw_news
 from app.backend.services.system_service import update_last_parsed_at
+
+
+def clean_text(text: str) -> str:
+    """Clean text from HTML tags and normalize whitespace.
+
+    Args:
+        text: Raw text that may contain HTML
+
+    Returns:
+        Clean text without HTML tags, with normalized whitespace
+    """
+    if not text:
+        return ""
+
+    from bs4 import BeautifulSoup
+
+    # Remove HTML tags using BeautifulSoup
+    soup = BeautifulSoup(text, "html.parser")
+    text = soup.get_text(separator=" ", strip=True)
+
+    # Normalize whitespace (multiple spaces/newlines -> single space)
+    text = re.sub(r'\s+', ' ', text)
+
+    # Remove any remaining HTML entities or broken characters
+    text = text.replace('&nbsp;', ' ')
+    text = text.replace('&quot;', '"')
+    text = text.replace('&amp;', '&')
+    text = text.replace('&lt;', '<')
+    text = text.replace('&gt;', '>')
+
+    return text.strip()
 
 
 async def run_parser_async(
@@ -45,10 +77,12 @@ async def run_parser_async(
         try:
             resp = await client.get(base)
             resp.raise_for_status()
-            html = resp.text
+            # Force UTF-8 encoding to handle Cyrillic correctly
+            html = resp.content.decode("utf-8", errors="ignore")
         except Exception:
             return []
-        soup = BeautifulSoup(html, "html.parser")
+        # Parse with explicit UTF-8 encoding
+        soup = BeautifulSoup(html, "html.parser", from_encoding="utf-8")
         anchors = soup.find_all("a", href=True)
         seen = set()
         links: list[str] = []
@@ -84,7 +118,8 @@ async def run_parser_async(
         try:
             resp = await client.get(url)
             resp.raise_for_status()
-            return resp.text
+            # Force UTF-8 encoding to handle Cyrillic correctly
+            return resp.content.decode("utf-8", errors="ignore")
         except Exception:
             return None
 
@@ -114,10 +149,14 @@ async def run_parser_async(
             return {"status": "error", "error": str(e)}
 
     # non-dry-run: SIMPLE ingestion — collect links, process each article and save
+    import logging
+    logger = logging.getLogger(__name__)
+    
     async with SessionLocal() as session:
         try:
             from app.backend.services.article_processor import process_article
             from app.backend.services.http_client import get_async_client
+            from app.backend.services.feed_fetcher import ingest_rss_feed
 
             client = await get_async_client()
 
@@ -125,22 +164,46 @@ async def run_parser_async(
                 try:
                     resp = await client.get(url)
                     resp.raise_for_status()
-                    return resp.text
-                except Exception:
+                    # Force UTF-8 encoding to handle Cyrillic correctly
+                    return resp.content.decode("utf-8", errors="ignore")
+                except Exception as exc:
+                    logger.warning("[PARSER] Failed to fetch %s: %s", url, exc)
                     return None
 
             total_saved = 0
+            errors = []
+
+            # Process RSS feeds first (if any)
+            for rss_url in rss_sources:
+                try:
+                    logger.info("[PARSER] Processing RSS: %s", rss_url)
+                    count = await ingest_rss_feed(session, rss_url, limit=per_rss_limit)
+                    total_saved += count
+                    logger.info("[PARSER] RSS %s saved: %s articles", rss_url, count)
+                except Exception as e:
+                    logger.exception("[PARSER] RSS failed %s: %s", rss_url, e)
+                    errors.append(f"rss:{rss_url}:{e}")
+
+            # Process site sources
             for s in site_sources:
+                logger.info("[PARSER] Processing site: %s", s)
                 links = await _collect_site_links(s, per_site_limit)
+                logger.info("[PARSER] Site %s found %s links", s, len(links))
+                
                 for url in links[:per_site_limit]:
                     try:
                         item, reason = await process_article(session, url, _fetch)
                         if not item:
+                            logger.debug("[PARSER] Skipped %s: %s", url, reason)
                             continue
 
+                        # Clean text before saving
+                        title = clean_text(item.get("title") or "")
+                        raw_text = clean_text(item.get("content") or "")
+
                         payload = {
-                            "title": item.get("title") or "",
-                            "raw_text": item.get("content"),
+                            "title": title,
+                            "raw_text": raw_text,
                             "source_url": item.get("source_url") or item.get("url"),
                             "image_url": item.get("image_url"),
                             "category": None,
@@ -148,20 +211,27 @@ async def run_parser_async(
                             "is_urgent": False,
                         }
 
-                        await create_raw_news(session, payload)
-                        total_saved += 1
+                        result = await create_raw_news(session, payload)
+                        if result and result.get("id"):
+                            total_saved += 1
+                            logger.info("[PARSER] Saved raw_news id=%s: %s", result["id"], url)
+                        else:
+                            logger.warning("[PARSER] Duplicate or failed: %s", url)
                     except Exception as e:
-                        print(f"[ERROR] {url} -> {e}")
+                        logger.exception("[PARSER] Error processing %s: %s", url, e)
+                        errors.append(f"{url}:{e}")
 
             # record parser heartbeat
             try:
                 await update_last_parsed_at(session)
+                logger.info("[PARSER] Heartbeat updated")
             except Exception:
-                # Don't fail the whole run if heartbeat update fails; log to stdout for visibility
-                print("[WARN] failed to update last_parsed_at")
+                logger.warning("[PARSER] Failed to update last_parsed_at")
 
-            return {"status": "ok", "saved": total_saved}
+            logger.info("[PARSER] Total saved: %s, errors: %s", total_saved, len(errors))
+            return {"status": "ok", "saved": total_saved, "errors": errors[:10]}
         except Exception as e:
+            logger.exception("[PARSER] Fatal error: %s", e)
             return {"status": "error", "error": str(e)}
 
 

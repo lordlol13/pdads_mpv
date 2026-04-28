@@ -14,6 +14,7 @@ from app.backend.core.celery_app import celery_app
 from app.backend.core.config import settings
 from app.backend.services.ingestion_service import create_raw_news
 from app.backend.services.llm_service import generate_news
+from app.backend.services.parser import clean_text
 from app.backend.services.media_service import (
     fetch_media_urls,
     canonical_image_key,
@@ -482,14 +483,18 @@ async def _generate_with_quality_loop(
     # If there is no AI key configured, return fallback immediately (AI is optional)
     ai_present = bool((settings.OPENAI_API_KEY or "").strip() or (settings.GEMINI_API_KEY or "").strip())
     if not ai_present:
-        LOG.info("LLM keys not found, using raw fallback for raw_news_id=%s", raw_row.get("id"))
+        LOG.info(f"LLM keys not found, using raw fallback for raw_news_id={raw_row.get('id')}")
         return _fallback_generated()
 
     for rewrite_round in range(1, settings.PIPELINE_MAX_REWRITE_ROUNDS + 1):
         try:
+            # Clean text before sending to AI
+            clean_raw_text = clean_text(raw_row.get("raw_text") or "")
+            clean_title = clean_text(raw_row.get("title") or "")
+
             generated = await generate_news(
-                raw_text=raw_row.get("raw_text") or "",
-                title=raw_row.get("title") or "",
+                raw_text=clean_raw_text,
+                title=clean_title,
                 category=raw_row.get("category"),
                 target_persona=topic,
                 region=raw_row.get("region"),
@@ -498,7 +503,7 @@ async def _generate_with_quality_loop(
                 rewrite_round=rewrite_round,
             )
         except Exception as e:
-            LOG.exception("generate_news failed for raw_news_id=%s round=%s: %s", raw_row.get("id"), rewrite_round, e)
+            LOG.exception(f"generate_news failed for raw_news_id={raw_row.get('id')} round={rewrite_round}: {e}")
             # try next round; if all rounds fail we'll fallback below
             generated = None
 
@@ -521,7 +526,7 @@ async def _generate_with_quality_loop(
     # If we did not get any successful generation, fallback to raw if configured
     if best_result is None:
         if settings.LLM_FALLBACK_ENABLED:
-            LOG.warning("LLM generation failed, falling back to raw for raw_news_id=%s", raw_row.get("id"))
+            LOG.warning(f"LLM generation failed, falling back to raw for raw_news_id={raw_row.get('id')}")
             return _fallback_generated()
         raise ValueError("generation_failed")
 
@@ -529,9 +534,8 @@ async def _generate_with_quality_loop(
     if float(best_result.get("combined_score", 0.0)) < settings.PIPELINE_MIN_SCORE:
         if settings.LLM_FALLBACK_ENABLED:
             LOG.warning(
-                "LLM generation score too low (%.2f), falling back to raw for raw_news_id=%s",
-                float(best_result.get("combined_score", 0.0)),
-                raw_row.get("id"),
+                f"LLM generation score too low ({float(best_result.get('combined_score', 0.0)):.2f}), "
+                f"falling back to raw for raw_news_id={raw_row.get('id')}"
             )
             return _fallback_generated()
         raise ValueError(f"low_generation_score:{best_result.get('combined_score')}")
@@ -561,6 +565,11 @@ async def _upsert_ai_news_for_persona(
     # Allow caller to provide a pre-generated payload (to enable concurrent LLM calls).
     if generated is None:
         generated = await _generate_with_quality_loop(raw_row, topic, profession, geo)
+
+    # If generation failed, don't save garbage
+    if generated is None:
+        LOG.error(f"[UPSERT] Generation failed for raw_news_id={raw_row.get('id')}, skipping save")
+        raise ValueError("generation_failed")
 
     params = {
         "raw_news_id": raw_row["id"],

@@ -46,7 +46,8 @@ async def process_article(session, url: str, fetch: Callable[[Optional[object], 
         return None, "detector_error"
 
     # parse and extract site-specific content and title
-    soup = BeautifulSoup(html, "lxml")
+    # Force UTF-8 encoding for Cyrillic support
+    soup = BeautifulSoup(html, "lxml", from_encoding="utf-8")
     title = ""
     try:
         parsed = parse_article_by_domain(html, url)

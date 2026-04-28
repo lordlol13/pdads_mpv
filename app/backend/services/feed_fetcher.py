@@ -127,7 +127,8 @@ async def _fetch_text(url: str) -> str | None:
         resp.raise_for_status()
         content_type = str(resp.headers.get("content-type") or "").lower()
         if "html" in content_type or "xml" in content_type or True:
-            return resp.text
+            # Force UTF-8 encoding for Cyrillic support
+            return resp.content.decode("utf-8", errors="ignore")
         return None
     except Exception as exc:  # pragma: no cover - network issues
         logger.warning("Failed to fetch url", url=url, error=str(exc))
@@ -138,7 +139,8 @@ async def _process_article(session, article_url: str, html: str | None) -> dict 
     if not article_url or not html:
         return None
 
-    soup = BeautifulSoup(html or "", "html.parser")
+    # Parse with explicit UTF-8 encoding for Cyrillic support
+    soup = BeautifulSoup(html or "", "html.parser", from_encoding="utf-8")
 
     # Use site-specific parsing when available to extract title/body reliably
     parsed = parse_article_by_domain(html, article_url)
