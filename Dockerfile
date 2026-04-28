@@ -33,5 +33,7 @@ COPY . .
 
 EXPOSE 8000
 
-# Railway assigns runtime port via $PORT. Use shell form to expand env var.
-CMD ["sh", "-c", "uvicorn app.backend.main:app --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers --forwarded-allow-ips='*'"]
+# ENTRYPOINT uses sh -c so Railway's startCommand (CMD override) can expand env vars.
+# Default CMD runs FastAPI; Railway overrides CMD for worker/beat services via startCommand.
+ENTRYPOINT ["sh", "-c"]
+CMD ["uvicorn app.backend.main:app --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers --forwarded-allow-ips='*'"]
