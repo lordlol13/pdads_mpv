@@ -35,11 +35,11 @@ fi
 case "${SERVICE_TYPE_VALUE}" in
   worker)
     echo "[INFO] starting Celery worker"
-    exec celery -A app.backend.core.celery_app:celery_app worker --loglevel=info --concurrency=2 --pool=solo
+    exec python -m celery -A news_brain worker --loglevel=info --concurrency=2 --pool=solo
     ;;
   beat)
     echo "[INFO] starting Celery beat"
-    exec celery -A app.backend.core.celery_app:celery_app beat --loglevel=info
+    exec python -m celery -A news_brain beat --loglevel=info
     ;;
   web|"")
     if [ -z "${SERVICE_TYPE_VALUE}" ]; then

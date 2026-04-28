@@ -13,10 +13,21 @@ celery_app = Celery(
 )
 
 # Корректная регистрация задач
-celery_app.autodiscover_tasks([
-    "brain.tasks",
-    "app.backend.tasks",
-])
+celery_app.autodiscover_tasks(
+    [
+        "app.backend.tasks",
+        "brain.tasks",
+        "recommender",
+    ],
+    force=True,
+)
+
+try:
+    import app.backend.tasks.parser_task  # noqa: F401
+    import brain.tasks.pipeline_tasks  # noqa: F401
+    import recommender.tasks  # noqa: F401
+except Exception as import_exc:
+    logger.exception("[CELERY] explicit task import failed: %s", import_exc)
 
 
 # Log configuration
@@ -54,3 +65,8 @@ celery_app.conf.beat_schedule = {
         "schedule": 600.0,
     },
 }
+
+try:
+    print("[CELERY] registered tasks:", sorted(celery_app.tasks.keys()))
+except Exception as tasks_exc:
+    logger.exception("[CELERY] failed to print registered tasks: %s", tasks_exc)
