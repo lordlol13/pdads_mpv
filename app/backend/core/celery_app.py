@@ -62,7 +62,6 @@ print(f"[WORKER] Celery starting")
 print(f"[WORKER] Broker: {settings.CELERY_BROKER_URL[:40]}..." if settings.CELERY_BROKER_URL else "[WORKER] Broker: NOT SET")
 print(f"[WORKER] Backend: {settings.CELERY_RESULT_BACKEND[:40]}..." if settings.CELERY_RESULT_BACKEND else "[WORKER] Backend: NOT SET")
 print(f"[WORKER] Eager mode: {is_eager}")
-print(f"[WORKER] Redis available: {is_redis_available()}")
 
 celery_app.conf.beat_schedule = {
     "parse-news": {
