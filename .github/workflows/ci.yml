@@ -47,6 +47,11 @@ jobs:
       - name: Run tests
         env:
           PYTHONPATH: .
+          # FIX START - Test environment variables
+          DATABASE_URL: "sqlite+aiosqlite:///./test.db"
+          REDIS_URL: "redis://localhost:6379/0"
+          JWT_SECRET_KEY: "test-secret-key-123456789012345678901234"
+          # FIX END
         run: |
           pytest -q
 
