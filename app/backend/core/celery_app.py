@@ -3,6 +3,8 @@ import os
 import logging
 from typing import Any
 
+import redis as redis_lib
+
 from app.backend.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -109,11 +111,42 @@ def is_redis_available() -> bool:
     return True
 
 
+# FIX START - Redis client for rate limiting
+_redis_client = None
+
+def _get_redis_client():
+    global _redis_client
+    if _redis_client is None and is_redis_available():
+        try:
+            _redis_client = redis_lib.from_url(settings.REDIS_URL, decode_responses=True)
+        except Exception as e:
+            logger.warning("[CELERY] Failed to connect to Redis for rate limiting: %s", e)
+    return _redis_client
+
+
 def send_task_safe(name: str, args: tuple | None = None, kwargs: dict | None = None, **options) -> Any:
-    """Send a Celery task only if Redis is available, otherwise log and skip."""
+    """Send a Celery task only if Redis is available, otherwise log and skip.
+    
+    Rate limiting: Max 1 task per user per 60 seconds for recommender.refresh_user_embedding.
+    """
     if not is_redis_available():
         logger.debug("[CELERY] Skipping task %s (Redis not available)", name)
         return None
+    
+    # FIX START - Rate limiting for recommender task
+    if name == "recommender.refresh_user_embedding" and args:
+        user_id = args[0] if args and len(args) > 0 else None
+        if user_id:
+            redis_client = _get_redis_client()
+            if redis_client:
+                key = f"rate_limit:embedding:{user_id}"
+                # SET key with 60s expiry (NX = only if not exists)
+                # Returns True if key was set, False if already exists
+                if not redis_client.set(key, "1", ex=60, nx=True):
+                    logger.debug("[CELERY] Rate limited task %s for user_id=%s", name, user_id)
+                    return None
+    # FIX END
+    
     try:
         return celery_app.send_task(name, args=args, kwargs=kwargs, **options)
     except Exception as e:
