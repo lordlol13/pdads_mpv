@@ -545,24 +545,19 @@ export function BackendFeedPost({
           </button>
           <span className="text-[10px] sm:text-xs font-bold text-[var(--popover-foreground)] dark:text-white drop-shadow-md">{t.share}</span>
         </div>
+        {/* FIX START - Open internal modal instead of external redirect */}
         <div className="flex flex-col items-center gap-1">
           <button
             onClick={(event) => {
               event.stopPropagation();
-              try {
-                const url = item.source_url;
-                if (typeof window !== 'undefined' && url && String(url).startsWith('http')) {
-                  window.open(String(url), '_blank', 'noopener');
-                }
-              } catch (e) {
-                // noop
-              }
+              setShowDescription(true);
             }}
             className="p-2.5 sm:p-3 bg-white/10 dark:bg-black/40 backdrop-blur-xl rounded-full border border-border dark:border-white/5 hover:scale-110 active:scale-95 transition-all"
           >
             <ExternalLink className="w-6 h-6 sm:w-7 sm:h-7 text-[var(--popover-foreground)] dark:text-white" />
           </button>
         </div>
+        {/* FIX END */}
       </div>
 
       <div className="absolute bottom-0 left-0 w-full p-4 md:p-6 bg-gradient-to-t from-white/80 via-white/40 to-transparent dark:bg-gradient-to-t dark:from-black/80 dark:via-black/40 dark:to-transparent z-30">
