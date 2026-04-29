@@ -261,25 +261,18 @@ def run_parser(
 ) -> dict:
     """Synchronous wrapper for running the async parser from sync contexts.
 
-    Typical usage from Celery tasks: create a new event loop and call this
-    wrapper so DB async engine/session are used inside the task.
+    Typical usage from Celery tasks: uses asyncio.run() for proper async handling.
     """
-    loop = asyncio.new_event_loop()
-    try:
-        return loop.run_until_complete(
-            run_parser_async(
-                rss_sources=rss_sources,
-                site_sources=site_sources,
-                per_rss_limit=per_rss_limit,
-                per_site_limit=per_site_limit,
-                dry_run=dry_run,
-            )
+    # FIX: Use asyncio.run() instead of manual loop management (production-safe)
+    return asyncio.run(
+        run_parser_async(
+            rss_sources=rss_sources,
+            site_sources=site_sources,
+            per_rss_limit=per_rss_limit,
+            per_site_limit=per_site_limit,
+            dry_run=dry_run,
         )
-    finally:
-        try:
-            loop.close()
-        except Exception:
-            pass
+    )
 
 
 __all__ = ["run_parser", "run_parser_async"]

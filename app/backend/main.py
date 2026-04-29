@@ -266,10 +266,17 @@ async def general_exception_handler(request: Request, exc: Exception):
 @app.middleware("http")
 async def track_metrics(request: Request, call_next):
     """Track request metrics for monitoring."""
+    path = request.url.path
+    method = request.method
     response = await call_next(request)
     
     is_error = response.status_code >= 400
     metrics.record_request(is_error=is_error)
+    
+    # Log API requests (production-safe, no sensitive data)
+    if path.startswith("/api/") or path in ["/health", "/ready"]:
+        status = "OK" if not is_error else f"ERR:{response.status_code}"
+        print(f"[API] {method} {path} -> {status}")
     
     return response
 
@@ -322,6 +329,9 @@ else:
 @app.on_event("startup")
 async def startup():
     """Application startup hook."""
+    print(f"[API] Starting {settings.APP_NAME}")
+    print(f"[API] Environment: {settings.APP_ENV}")
+    print(f"[API] Debug mode: {settings.DEBUG}")
     logger.info(
         "Starting app",
         app_name=settings.APP_NAME,

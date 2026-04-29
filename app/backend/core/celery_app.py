@@ -57,6 +57,13 @@ celery_app.conf.update(
     broker_transport_options={"visibility_timeout": int(os.getenv("CELERY_BROKER_VISIBILITY_TIMEOUT", "3600"))},
 )
 
+# Worker startup logging
+print(f"[WORKER] Celery starting")
+print(f"[WORKER] Broker: {settings.CELERY_BROKER_URL[:40]}..." if settings.CELERY_BROKER_URL else "[WORKER] Broker: NOT SET")
+print(f"[WORKER] Backend: {settings.CELERY_RESULT_BACKEND[:40]}..." if settings.CELERY_RESULT_BACKEND else "[WORKER] Backend: NOT SET")
+print(f"[WORKER] Eager mode: {is_eager}")
+print(f"[WORKER] Redis available: {is_redis_available()}")
+
 celery_app.conf.beat_schedule = {
     "parse-news": {
         "task": "app.backend.tasks.parser_task.parse_news_task",
@@ -82,8 +89,11 @@ def is_redis_available() -> bool:
         return False
     # Check if broker is configured
     broker = (settings.CELERY_BROKER_URL or "").strip()
-    if not broker or broker.startswith("redis://localhost"):
-        # Local Redis may not be running
+    if not broker:
+        return False
+    # Production Redis should not be localhost
+    if broker.startswith("redis://localhost") or broker.startswith("redis://127.0.0.1"):
+        # Local Redis - skip in production
         return False
     return True
 

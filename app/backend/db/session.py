@@ -10,7 +10,12 @@ from app.backend.core.config import settings
 # Configure pooling: avoid NullPool (no pooling) for Postgres/production.
 # Use NullPool for SQLite or explicit test environments where pooling may cause
 # issues (in-memory DBs, short-lived processes).
-pool_kwargs: dict = {"echo": False, "pool_pre_ping": True, "future": True}
+pool_kwargs: dict = {
+    "echo": False,
+    "pool_pre_ping": True,  # Verify connections before use
+    "pool_recycle": 300,    # Recycle connections after 5 minutes (Railway-safe)
+    "future": True
+}
 db_url = (settings.DATABASE_URL or "").lower()
 if "sqlite" in db_url or (settings.APP_ENV or "").lower() == "test":
     pool_kwargs["poolclass"] = NullPool
@@ -32,6 +37,11 @@ except Exception:
 if "postgres" in db_url:
     pool_kwargs["connect_args"] = {"server_settings": {"client_encoding": "utf8"}}
 
+# Validate DATABASE_URL is set
+if not settings.DATABASE_URL:
+    raise ValueError("DATABASE_URL must be set in environment")
+
+print(f"[STARTUP] Creating DB engine with pool_recycle=300s")
 engine = create_async_engine(settings.DATABASE_URL, **pool_kwargs)
 SessionLocal = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
 

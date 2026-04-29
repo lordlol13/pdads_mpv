@@ -13,17 +13,17 @@ class Settings(BaseSettings):
     )
 
     APP_NAME: str = "AI News Feed MVP"
-    APP_ENV: str = "dev"
-    DEBUG: bool = True
+    APP_ENV: str = "production"
+    DEBUG: bool = False
 
     # Server port (Railway sets PORT env var)
     PORT: int = 8000
 
-    # Railway provides DATABASE_URL - use it directly
-    DATABASE_URL: str = "postgresql+asyncpg://localhost:5432/news_mvp"
+    # Railway provides DATABASE_URL - must be set in environment
+    DATABASE_URL: str = ""
 
-    # Railway provides REDIS_URL - fallback to localhost for local dev
-    REDIS_URL: str = "redis://localhost:6379/0"
+    # Railway provides REDIS_URL - must be set in environment
+    REDIS_URL: str = ""
     # Celery uses same Redis as configured by Railway
     CELERY_BROKER_URL: str = ""
     CELERY_RESULT_BACKEND: str = ""
@@ -52,8 +52,9 @@ class Settings(BaseSettings):
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
     SESSION_SECRET_KEY: str = ""
 
-    OAUTH_FRONTEND_SUCCESS_URL: str = "http://localhost:5173"
-    OAUTH_FRONTEND_ERROR_URL: str = "http://localhost:5173"
+    # Frontend OAuth redirect URLs - Railway production defaults
+    OAUTH_FRONTEND_SUCCESS_URL: str = "https://pdads-mpv.vercel.app"
+    OAUTH_FRONTEND_ERROR_URL: str = "https://pdads-mpv.vercel.app"
 
     GOOGLE_OAUTH_CLIENT_ID: str = ""
     GOOGLE_OAUTH_CLIENT_SECRET: str = ""
@@ -79,13 +80,10 @@ class Settings(BaseSettings):
     PASSWORD_RESET_CODE_TTL_MINUTES: int = 15
     PASSWORD_RESET_MAX_ATTEMPTS: int = 5
 
+    # Production CORS - Railway/Vercel origins
     CORS_ALLOW_ORIGINS: str = (
-        "http://127.0.0.1:3000,http://localhost:3000,"
-        "http://127.0.0.1:3001,http://localhost:3001,"
-        "http://127.0.0.1:3002,http://localhost:3002,"
-        "http://127.0.0.1:5173,http://localhost:5173,"
-        "http://127.0.0.1:8000,http://localhost:8000,"
-        "https://pdads-mpv.vercel.app,https://pdadsmpv-production.up.railway.app"
+        "https://pdads-mpv.vercel.app,"
+        "https://pdadsmpv-production.up.railway.app"
     )
     CORS_ALLOW_ORIGIN_REGEX: str = ""
     TRUSTED_HOSTS: str = "*"
@@ -184,7 +182,8 @@ class Settings(BaseSettings):
             # Normalize common dashboard inputs: remove trailing slashes.
             item = item.rstrip("/")
             values.append(item)
-        return values or ["http://127.0.0.1:8000"]
+        # Production fallback - don't use localhost
+        return values or ["https://pdadsmpv-production.up.railway.app"]
 
     @property
     def trusted_hosts(self) -> list[str]:
@@ -241,6 +240,22 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def _validate_required_env(self) -> "Settings":
+        """Validate critical environment variables are set."""
+        env = (self.APP_ENV or "dev").strip().lower()
+        is_production = env in {"prod", "production", "stage", "staging"}
+
+        # DATABASE_URL is always required
+        if not (self.DATABASE_URL or "").strip():
+            raise RuntimeError("DATABASE_URL is required - set it in Railway environment variables")
+
+        # REDIS_URL is required for production (Celery/tasks)
+        if is_production and not (self.REDIS_URL or "").strip():
+            raise RuntimeError("REDIS_URL is required in production - set it in Railway environment variables")
+
+        return self
+
+    @model_validator(mode="after")
     def _validate_security(self) -> "Settings":
         env = (self.APP_ENV or "dev").strip().lower()
         weak_values = {"", "change_me_super_secret", "changeme", "secret"}
@@ -261,3 +276,10 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+# Production startup logging
+print(f"[STARTUP] APP_ENV: {settings.APP_ENV}")
+print(f"[STARTUP] DEBUG: {settings.DEBUG}")
+print(f"[STARTUP] DATABASE_URL: {settings.DATABASE_URL[:50]}..." if settings.DATABASE_URL else "[STARTUP] DATABASE_URL: NOT SET!")
+print(f"[STARTUP] REDIS_URL: {settings.REDIS_URL[:30]}..." if settings.REDIS_URL else "[STARTUP] REDIS_URL: NOT SET!")
+print(f"[STARTUP] CELERY_BROKER_URL: {settings.CELERY_BROKER_URL[:30]}..." if settings.CELERY_BROKER_URL else "[STARTUP] CELERY_BROKER_URL: NOT SET!")
