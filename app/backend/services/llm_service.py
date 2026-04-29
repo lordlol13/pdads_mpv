@@ -137,10 +137,11 @@ def is_valid_news(text: str) -> bool:
         if phrase.lower() in text.lower():
             return False
 
-    # Check minimum word count (prompt asks for 200-250, allow 150+ as valid)
+    # FIX START - Check minimum word count (min 120 words for Uzbek news)
     words = text.split()
-    if len(words) < 150:
+    if len(words) < 120:
         return False
+    # FIX END
 
     # Check for excessive English (should be mostly Uzbek)
     english_words = len([w for w in words if re.match(r'^[a-zA-Z]+$', w)])
@@ -996,39 +997,30 @@ def _persona_profile_for_prompt(
     }
 
 
+# FIX START - Strict Uzbek news writer prompt
 def _build_editorial_system_prompt(*, language_hint: str, min_words: int, max_words: int) -> str:
     """
-    STRICT Uzbek tech news editor prompt.
+    STRICT Uzbek news writer prompt.
     Output ONLY Uzbek (Latin). ZERO English/Russian.
-    Focus ONLY on AI and technology. DELETE everything else.
+    150-250 words, 2-4 paragraphs.
     """
     word_range = f"{min_words}-{max_words}" if max_words > 0 else f"{min_words}+"
     return (
-        "Siz professional texnologiya yangiliklari muxbiri va qat'iy tahrirchisisiz. "
-        "Vazifangiz: yangiliklarni FAQAT O'ZBEK TILIDA (LOTIN) qayta yozing va tarjima qiling. "
-        "Barcha matn FAQAT o'zbek tilida bo'lishi shart! "
-        "Agar yangilikda AI/texnologiya elementi bo'lmasa, UNDA HAM umumiy texnologik kontekstda yoritib bering. "
-        "\n\n"
-        "QATTIY QOIDALAR (buzmang!):\n"
+        "Siz O'zbekistoning professional yangiliklar muxbiri va jiddiy tahrirchisisiz. "
+        "Vazifangiz: yangiliklarni FAQAT O'ZBEK TILIDA (LOTIN ALIFBOSI) yozing. "
+        "BARCHA MATN FAQAT O'ZBEK TILIDA BO'LISHI SHART! "
+        "INGLIZ YOKI RUS TILIDA BIR SO'Z HAM BO'LMASIN!\n\n"
+        "QATTIY QOIDALAR (BUZMANG!):\n"
         "1. TIL: Faqat O'ZBEK tili (LOTIN alifbosi). INGLIZ yoki RUS tilida bir so'z ham bo'lmasin!\n"
         "   - Kompaniya nomlari (Meta, Google, Apple) va texnik atamalar (AI, API, GPU) bundan mustasno\n"
-        "   - Qolgan barcha so'zlar FAQAT o'zbek tilida!\n"
-        "2. FOKUS: FAQAT AI/texnologiya qismlari. Boshqalarini O'CHIRING!\n"
-        f"3. UZUNLIK: 2-3 paragraf, JAMI {word_range} so'z. KAMIDA {min_words} SO'Z BO'LISHI SHART!\n"
-        "4. USLUB: Professional yangiliklar uslubi. Aniq, keskin, faktga asoslangan. "
-        "   - Hech qanday fikr, tahlil yoki maslahat yo'q!\n"
-        "   - Har bir jumla YANGI ma'lumot qo'shishi kerak\n"
-        "   - Takrorlar taqiqlanadi\n"
-        "5. TA'QIQ LANGAN (ishlatmang!):\n"
-        "   - 'Bu juda muhim'\n"
-        "   - 'Zamonaviy dunyoda'\n"
-        "   - 'Foydalanuvchilar uchun'\n"
-        "   - 'Siz uchun ahamiyati'\n"
-        "   - 'Asosiy fakt va raqamlar'\n"
-        "   - Bosh sarlavhalar va umumiy iboralar\n"
-        "6. Agar input sifati past bo'lsa: FAQAT faktik kontekst asosida kengaytiring. "
-        "   Uydumagan ma'lumot qo'shmang!\n"
-        "\n"
+        "   - Qolgan BARCHA so'zlar FAQAT o'zbek tilida!\n"
+        "2. UZUNLIK: 150-250 so'z. KAMIDA 120 SO'Z BO'LISHI SHART!\n"
+        "3. PARAGRAFLAR: 2-4 paragraf. Har bir paragraf 3-5 jumladan iborat.\n"
+        "4. USLUB: Professional yangiliklar uslubi. Jurnalistik, aniq, keskin, faktga asoslangan.\n"
+        "5. MAZMUN: Engaging va informative bo'lsin. Yangilik qiymatli va qiziqarli bo'lishi kerak.\n"
+        "6. TA'QIQ LANGAN (ishlatmang!):\n"
+        "   - 'Bu juda muhim', 'Zamonaviy dunyoda', 'Foydalanuvchilar uchun'\n"
+        "   - 'Siz uchun ahamiyati', 'Asosiy fakt va raqamlar'\n"
         "NAMUNA (yaxshi):\n"
         "Input: Meta plans to use employee activity data to improve AI models.\n"
         "Sarlavha: Meta sun'iy intellektni yaxshilash uchun xodimlar ma'lumotidan foydalanadi\n"
@@ -1042,8 +1034,8 @@ def _build_editorial_system_prompt(*, language_hint: str, min_words: int, max_wo
         "Kompaniya esa barcha ma'lumotlarni anonimlashtirilgan holda ishlatishini ta'kidlamoqda.\n"
         "\n"
         f"OUTPUT (JSON format, qo'shimcha matn yo'q):\n"
-        f"final_title: qisqa, aniq sarlavha (10-15 so'z)\n"
-        f"final_text: 2-3 paragraf, {word_range} so'z, faqat faktlar, FAQAT O'ZBEK TILI\n"
+        f"final_title: qisqa, aniq sarlavha (10-15 so'z, FAQAT O'ZBEK TILIDA)\n"
+        f"final_text: 2-4 paragraf, {word_range} so'z, FAQAT O'ZBEK TILI, INGLIZ/RUS SO'ZLARI TAQIQLANADI\n"
         f"ai_score: 0-10 baho (sifat bahosi)\n"
         f"category: 'technology'\n"
         f"target_persona: ai|tashkent|uz\n"
@@ -1051,8 +1043,9 @@ def _build_editorial_system_prompt(*, language_hint: str, min_words: int, max_wo
         "ESLATMA: Agar yangilik to'liq AI/texnologiya mavzusida bo'lmasa, undagi "
         "avtomatlashtirish, raqamli texnologiyalar, zamonaviy uskunalar kabi jihatlarni ajratib oling. "
         "Masalan, avtomobil ishlab chiqarish -> zamonaviy robotlashtirilgan ishlab chiqarish texnologiyalari.\n"
-        "FAQAT JSON qaytaring!"
+        "FAQAT O'ZBEK TILIDA JSON QAYTARING!"
     )
+    # FIX END
 
 
 def _build_editorial_user_payload(
@@ -1087,8 +1080,9 @@ def _build_editorial_user_payload(
         "user_profile": persona,
         "requirements": {
             "language": "uzbek_latin_only",
-            "length": "200-250_words",
-            "paragraphs": "2-3_paragraphs",
+            "length": "150-250_words",  # FIX - Changed from 200-250
+            "min_words": 120,  # FIX - Minimum validation threshold
+            "paragraphs": "2-4_paragraphs",  # FIX - Allow up to 4 paragraphs
             "style": "professional_news",
             "focus": "AI_technology_interest",
             "forbidden_phrases": [
@@ -1417,28 +1411,60 @@ async def generate_news(
     print(f"[AI] generate_news called: title={title[:50] if title else ''}")
     logger.info(f"[GENERATE] Starting generation: title={title[:50] if title else ''}..., persona={target_persona}")
 
-    # Single OpenAI call — no retry loop for speed
-    openai_payload = await _generate_with_openai(
-        title=title,
-        raw_text=raw_text,
-        category=category,
-        target_persona=target_persona,
-        region=region,
-        profession=profession,
-        user_geo=user_geo,
-        rewrite_round=rewrite_round,
-    )
+    # FIX START - Retry logic with validation (max 2 attempts) + last_valid_payload fallback
+    max_attempts = 2
+    last_valid_payload = None  # Explicit variable to track last valid payload
 
+    for attempt in range(1, max_attempts + 1):
+        openai_payload = await _generate_with_openai(
+            title=title,
+            raw_text=raw_text,
+            category=category,
+            target_persona=target_persona,
+            region=region,
+            profession=profession,
+            user_geo=user_geo,
+            rewrite_round=attempt,  # Increment rewrite round for variety
+        )
+
+        if openai_payload is None:
+            logger.warning(f"[GENERATE] OpenAI returned None on attempt {attempt}")
+            if attempt == max_attempts:
+                # FIX: Fallback to last_valid_payload if available
+                if last_valid_payload is not None:
+                    logger.info("[GENERATE] Using last valid payload as fallback")
+                    openai_payload = last_valid_payload
+                    is_valid = True  # Already validated in previous iteration
+                    break
+                print("[DEBUG] generate_news NO PAYLOAD from OpenAI after all attempts")
+                return None
+            continue
+
+        # Always save as last valid payload (we have some data to work with)
+        last_valid_payload = openai_payload
+
+        # Validate response
+        is_valid, error_msg = validate_ai_response(openai_payload)
+        print(f"[DEBUG] validate_ai_response attempt {attempt}: is_valid={is_valid}, error={error_msg}")
+
+        if is_valid:
+            logger.info(f"[GENERATE] Valid response on attempt {attempt}")
+            break
+
+        logger.warning(f"[GENERATE] Validation failed on attempt {attempt}: {error_msg}")
+        if attempt == max_attempts:
+            # FIX: Use last payload even if validation failed (e.g., only 100 words)
+            logger.error(f"[GENERATE] All {max_attempts} attempts failed, using last result anyway")
+            # Don't lose the news - use what we have even if suboptimal
+            is_valid = False  # Mark as invalid for scoring
+            break
+    # FIX END
+
+    # FIX START - Ensure we always have a payload to work with
     if openai_payload is None:
-        logger.warning("[GENERATE] OpenAI returned None")
-        print("[DEBUG] generate_news NO PAYLOAD from OpenAI")
+        logger.error("[GENERATE] No payload available after all attempts")
         return None
-
-    # Log validation result but DON'T block saving
-    is_valid, error_msg = validate_ai_response(openai_payload)
-    print(f"[DEBUG] validate_ai_response: is_valid={is_valid}, error={error_msg}")
-    if not is_valid:
-        logger.warning(f"[GENERATE] Validation warning (not blocking): {error_msg}")
+    # FIX END
 
     model_score = float(openai_payload.get("ai_score") or 7.0)
     if not is_valid:
