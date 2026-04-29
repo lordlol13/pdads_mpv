@@ -14,6 +14,23 @@ celery_app = Celery(
     backend=settings.CELERY_RESULT_BACKEND,
 )
 
+# FIX START - Set beat_schedule immediately after app creation (before autodiscover)
+celery_app.conf.update(
+    beat_schedule={
+        "parse-news": {
+            "task": "app.backend.tasks.parser_task.parse_news_task",
+            "schedule": 300.0,
+        },
+        "process-news": {
+            "task": "brain.tasks.pipeline_tasks.process_all_task",
+            "schedule": 600.0,
+        },
+    },
+    timezone="UTC",
+)
+print("[BEAT DEBUG] schedule keys:", list(celery_app.conf.beat_schedule.keys()))
+# FIX END
+
 # Корректная регистрация задач
 celery_app.autodiscover_tasks(
     [
@@ -68,17 +85,6 @@ celery_app.conf.beat_scheduler = "celery.beat:PersistentScheduler"
 celery_app.conf.beat_schedule_filename = "/tmp/celerybeat-schedule"
 print("[BEAT] schedule file set to /tmp/celerybeat-schedule")
 # FIX END
-
-celery_app.conf.beat_schedule = {
-    "parse-news": {
-        "task": "app.backend.tasks.parser_task.parse_news_task",
-        "schedule": 300.0,
-    },
-    "process-news": {
-        "task": "brain.tasks.pipeline_tasks.process_all_task",
-        "schedule": 600.0,
-    },
-}
 
 try:
     print("[CELERY] registered tasks:", sorted(celery_app.tasks.keys()))
