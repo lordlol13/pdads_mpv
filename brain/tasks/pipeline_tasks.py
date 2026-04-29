@@ -1245,16 +1245,9 @@ def process_raw_news(self, raw_news_id: int, personas: list[dict[str, str | None
     logger.info("process_raw_news started raw_news_id=%s attempt=%s", raw_news_id, attempt)
 
     try:
-        # Run async coroutine in a fresh event loop to avoid coroutine warnings
-        loop = asyncio.new_event_loop()
-        try:
-            result = loop.run_until_complete(_process_raw_news_async(raw_news_id, attempt, personas))
-        finally:
-            try:
-                loop.close()
-            except Exception:
-                pass
-        logger.info("process_raw_news finished raw_news_id=%s result=%s", raw_news_id, result)
+        # FIX: Use asyncio.run() instead of manual loop management
+        result = asyncio.run(_process_raw_news_async(raw_news_id, attempt, personas))
+        logger.info("[WORKER] process_raw_news finished raw_news_id=%s result=%s", raw_news_id, result)
         return result
     except SQLAlchemyError as e:
         logger.exception("db error raw_news_id=%s attempt=%s error=%s", raw_news_id, attempt, e)
@@ -1275,15 +1268,9 @@ def process_raw_news(self, raw_news_id: int, personas: list[dict[str, str | None
 def scheduled_ingestion() -> dict:
     logger.info("scheduled_ingestion tick started")
     try:
-        loop = asyncio.new_event_loop()
-        try:
-            result = loop.run_until_complete(_schedule_ingestion_batch_async())
-        finally:
-            try:
-                loop.close()
-            except Exception:
-                pass
-        logger.info("scheduled_ingestion tick finished result=%s", result)
+        # FIX: Use asyncio.run() instead of manual loop management
+        result = asyncio.run(_schedule_ingestion_batch_async())
+        logger.info("[WORKER] scheduled_ingestion finished result=%s", result)
         return result
     except Exception as e:
         logger.error("scheduled_ingestion failed: %s", e)
@@ -1325,15 +1312,9 @@ async def _schedule_feed_ingestion_async() -> dict[str, Any]:
 def scheduled_feed_ingestion() -> dict:
     logger.info("scheduled_feed_ingestion tick started")
     try:
-        loop = asyncio.new_event_loop()
-        try:
-            result = loop.run_until_complete(_schedule_feed_ingestion_async())
-        finally:
-            try:
-                loop.close()
-            except Exception:
-                pass
-        logger.info("scheduled_feed_ingestion tick finished result=%s", result)
+        # FIX: Use asyncio.run() instead of manual loop management
+        result = asyncio.run(_schedule_feed_ingestion_async())
+        logger.info("[WORKER] scheduled_feed_ingestion finished result=%s", result)
         return result
     except Exception as e:
         logger.error("scheduled_feed_ingestion failed: %s", e)
@@ -1351,15 +1332,9 @@ def scheduled_feed_ingestion() -> dict:
 def scheduled_cleanup_ai_products() -> dict:
     logger.info("scheduled_cleanup_ai_products tick started")
     try:
-        loop = asyncio.new_event_loop()
-        try:
-            result = loop.run_until_complete(_cleanup_ai_products_async())
-        finally:
-            try:
-                loop.close()
-            except Exception:
-                pass
-        logger.info("scheduled_cleanup_ai_products tick finished result=%s", result)
+        # FIX: Use asyncio.run() instead of manual loop management
+        result = asyncio.run(_cleanup_ai_products_async())
+        logger.info("[WORKER] scheduled_cleanup_ai_products finished result=%s", result)
         return result
     except Exception as e:
         logger.error("scheduled_cleanup_ai_products failed: %s", e)
@@ -1376,22 +1351,15 @@ def scheduled_cleanup_ai_products() -> dict:
 def refresh_user_embedding_task(user_id: int, history_limit: int | None = None) -> dict:
     logger.info("recommender.refresh_user_embedding task started user_id=%s", user_id)
     try:
-        loop = asyncio.new_event_loop()
-        try:
-            async def _run():
-                async with SessionLocal() as session:
-                    # Import at runtime to reduce import-time coupling
-                    from app.backend.services.recommender_service import refresh_user_embedding
+        # FIX: Use asyncio.run() instead of manual loop management
+        async def _run():
+            async with SessionLocal() as session:
+                # Import at runtime to reduce import-time coupling
+                from app.backend.services.recommender_service import refresh_user_embedding
+                await refresh_user_embedding(session, int(user_id), history_limit=history_limit)
 
-                    await refresh_user_embedding(session, int(user_id), history_limit=history_limit)
-
-            result = loop.run_until_complete(_run())
-        finally:
-            try:
-                loop.close()
-            except Exception:
-                pass
-        logger.info("recommender.refresh_user_embedding finished user_id=%s", user_id)
+        asyncio.run(_run())
+        logger.info("[WORKER] recommender.refresh_user_embedding finished user_id=%s", user_id)
         return {"status": "ok", "user_id": user_id}
     except Exception as e:
         logger.exception("recommender.refresh_user_embedding failed user_id=%s: %s", user_id, e)
@@ -1419,175 +1387,142 @@ def process_all_task() -> dict:
     - On success mark raw_news.process_status='processed'
     - On failure mark raw_news.process_status='failed' and record `error_message`
 
-    Uses its own event loop (no asyncio.run) to run async DB operations in the worker.
+    Uses asyncio.run() to run async DB operations in the worker.
     """
-    print("[DEBUG] process_all_task started")
-    logger.info("[DEBUG] process_all_task started")
+    logger.info("[PIPELINE] process_all_task started")
 
-    # Create a new event loop via the event loop policy to avoid interfering
-    # with any existing global loop. We'll ensure the loop is closed safely.
-    loop = asyncio.get_event_loop_policy().new_event_loop()
-    try:
-        asyncio.set_event_loop(loop)
+    # FIX: Use asyncio.run() instead of manual loop management
+    async def _run_all() -> dict:
+        processed = 0
+        failed = 0
+        skipped = 0
 
-        async def _run_all() -> dict:
-            processed = 0
-            failed = 0
-            skipped = 0
+        async with SessionLocal() as session:
+            # Load pending raw_news ids
+            status_debug = await session.execute(
+                text("SELECT process_status, COUNT(*) FROM raw_news GROUP BY process_status")
+            )
+            logger.info("[PIPELINE] status_counts %s", status_debug.mappings().all())
 
-            async with SessionLocal() as session:
-                # Load pending raw_news ids
-                status_debug = await session.execute(
-                    text("SELECT process_status, COUNT(*) FROM raw_news GROUP BY process_status")
+            res = await session.execute(
+                text(
+                    """
+                    SELECT *
+                    FROM raw_news
+                    WHERE process_status = 'pending'
+                    ORDER BY id ASC
+                    """
                 )
-                print(f"[PROCESS_ALL] status_counts {status_debug.mappings().all()}")
+            )
+            rows = res.mappings().all()
 
-                sample_debug = await session.execute(
-                    text("SELECT id, process_status, title FROM raw_news ORDER BY id DESC LIMIT 10")
-                )
-                print(f"[PROCESS_ALL] sample_rows {sample_debug.mappings().all()}")
-
+            if not rows:
                 res = await session.execute(
                     text(
                         """
                         SELECT *
                         FROM raw_news
-                        WHERE process_status = 'pending'
+                        WHERE process_status IS NULL OR process_status IN ('pending', 'new', 'parsed')
                         ORDER BY id ASC
                         """
                     )
                 )
                 rows = res.mappings().all()
 
-                if not rows:
-                    res = await session.execute(
-                        text(
-                            """
-                            SELECT *
-                            FROM raw_news
-                            WHERE process_status IS NULL OR process_status IN ('pending', 'new', 'parsed')
-                            ORDER BY id ASC
-                            """
-                        )
+            logger.info("[PIPELINE] found %s raw_news rows", len(rows))
+            pending_ids = [int(r["id"]) for r in rows]
+
+            if not pending_ids:
+                return {"status": "completed", "processed": 0, "failed": 0, "skipped": 0, "total": 0}
+
+            # Batch processing: limit work per run to avoid long-running tasks
+            batch_size = int(os.getenv("PIPELINE_BATCH_SIZE", "100"))
+            total_pending = len(pending_ids)
+            if batch_size and total_pending > batch_size:
+                pending_ids = pending_ids[:batch_size]
+
+            logger.info("[PIPELINE] Processing batch total=%s total_pending=%s", len(pending_ids), total_pending)
+
+            for raw_id in pending_ids:
+                try:
+                    logger.info("[PIPELINE] processing raw_news_id=%s", raw_id)
+                    # Prevent duplicates: skip if ai_news already exists for raw_news
+                    dup = await session.execute(
+                        text("SELECT 1 FROM ai_news WHERE raw_news_id = :id LIMIT 1"),
+                        {"id": raw_id},
                     )
-                    rows = res.mappings().all()
-
-                print(f"[DEBUG] found {len(rows)} raw_news")
-                print(f"[PROCESS_ALL] found {len(rows)} rows")
-                pending_ids = [int(r["id"]) for r in rows]
-
-                if not pending_ids:
-                    return {"status": "completed", "processed": 0, "failed": 0, "skipped": 0, "total": 0}
-
-                # Batch processing: limit work per run to avoid long-running tasks
-                batch_size = int(os.getenv("PIPELINE_BATCH_SIZE", "100"))
-                total_pending = len(pending_ids)
-                if batch_size and total_pending > batch_size:
-                    pending_ids = pending_ids[:batch_size]
-
-                logger.info("Processing batch total=%s total_pending=%s", len(pending_ids), total_pending)
-
-                for raw_id in pending_ids:
-                    try:
-                        print(f"[DEBUG] processing raw_news_id={raw_id}")
-                        logger.info("[DEBUG] processing raw_news_id=%s", raw_id)
-                        # Prevent duplicates: skip if ai_news already exists for raw_news
-                        dup = await session.execute(
-                            text("SELECT 1 FROM ai_news WHERE raw_news_id = :id LIMIT 1"),
-                            {"id": raw_id},
-                        )
-                        if dup.scalar_one_or_none() is not None:
-                            await session.execute(
-                                text("UPDATE raw_news SET process_status = :st WHERE id = :id"),
-                                {"st": "processed", "id": raw_id},
-                            )
-                            await session.commit()
-                            skipped += 1
-                            continue
-
-                        # Call main async processor (handles generation, upsert, feed population)
-                        # Add a per-item timeout to avoid stuck processing
-                        timeout_seconds = int(os.getenv("PIPELINE_PROCESS_TIMEOUT", str(settings.CELERY_TASK_TIME_LIMIT)))
-                        try:
-                            result = await asyncio.wait_for(
-                                _process_raw_news_async(raw_id, attempt=1),
-                                timeout=timeout_seconds,
-                            )
-                        except asyncio.TimeoutError as e:
-                            await session.execute(
-                                text("UPDATE raw_news SET process_status = :st, error_message = :err WHERE id = :id"),
-                                {"st": "failed", "err": f"timeout after {timeout_seconds}s", "id": raw_id},
-                            )
-                            await session.commit()
-                            logger.error("Processing timed out raw_news_id=%s timeout=%s", raw_id, timeout_seconds)
-                            failed += 1
-                            continue
-                        except Exception as e:
-                            # Mark failed and continue
-                            await session.execute(
-                                text("UPDATE raw_news SET process_status = :st, error_message = :err WHERE id = :id"),
-                                {"st": "failed", "err": str(e)[:2000], "id": raw_id},
-                            )
-                            await session.commit()
-                            logger.exception("Processing failed raw_news_id=%s error=%s", raw_id, e)
-                            failed += 1
-                            continue
-
-                        # If processor returned falsy or non-generated status -> fail
-                        if not result or result.get("status") != "generated":
-                            await session.execute(
-                                text("UPDATE raw_news SET process_status = :st, error_message = :err WHERE id = :id"),
-                                {"st": "failed", "err": "generation_failed", "id": raw_id},
-                            )
-                            await session.commit()
-                            failed += 1
-                            continue
-                        print(f"[DEBUG] generate_news result={str(result)[:300]}")
-
-                        # Success — mark processed
+                    if dup.scalar_one_or_none() is not None:
                         await session.execute(
-                            text("UPDATE raw_news SET process_status = :st, error_message = NULL WHERE id = :id"),
+                            text("UPDATE raw_news SET process_status = :st WHERE id = :id"),
                             {"st": "processed", "id": raw_id},
                         )
                         await session.commit()
-                        print("[DEBUG] commit done")
-                        processed += 1
+                        skipped += 1
+                        continue
 
-                    except Exception as e:
-                        # Catch-all safety: ensure item does not remain pending
-                        try:
-                            await session.execute(
-                                text("UPDATE raw_news SET process_status = :st, error_message = :err WHERE id = :id"),
-                                {"st": "failed", "err": str(e)[:2000], "id": raw_id},
-                            )
-                            await session.commit()
-                        except Exception:
-                            # suppress commit errors here — log and continue
-                            logger.exception("Failed to persist failure status raw_news_id=%s error=%s", raw_id, e)
-                        logger.exception("Processing failed raw_news_id=%s error=%s", raw_id, e)
+                    # Call main async processor (handles generation, upsert, feed population)
+                    timeout_seconds = int(os.getenv("PIPELINE_PROCESS_TIMEOUT", str(settings.CELERY_TASK_TIME_LIMIT)))
+                    try:
+                        result = await asyncio.wait_for(
+                            _process_raw_news_async(raw_id, attempt=1),
+                            timeout=timeout_seconds,
+                        )
+                    except asyncio.TimeoutError as e:
+                        await session.execute(
+                            text("UPDATE raw_news SET process_status = :st, error_message = :err WHERE id = :id"),
+                            {"st": "failed", "err": f"timeout after {timeout_seconds}s", "id": raw_id},
+                        )
+                        await session.commit()
+                        logger.error("[PIPELINE] Processing timed out raw_news_id=%s timeout=%s", raw_id, timeout_seconds)
                         failed += 1
+                        continue
+                    except Exception as e:
+                        await session.execute(
+                            text("UPDATE raw_news SET process_status = :st, error_message = :err WHERE id = :id"),
+                            {"st": "failed", "err": str(e)[:2000], "id": raw_id},
+                        )
+                        await session.commit()
+                        logger.exception("[PIPELINE] Processing failed raw_news_id=%s", raw_id)
+                        failed += 1
+                        continue
 
-                return {"status": "completed", "processed": processed, "failed": failed, "skipped": skipped, "total": len(pending_ids)}
+                    if not result or result.get("status") != "generated":
+                        await session.execute(
+                            text("UPDATE raw_news SET process_status = :st, error_message = :err WHERE id = :id"),
+                            {"st": "failed", "err": "generation_failed", "id": raw_id},
+                        )
+                        await session.commit()
+                        failed += 1
+                        continue
 
-        # Run the batch and ensure the loop is closed safely
-        try:
-            result = loop.run_until_complete(_run_all())
-        finally:
-            try:
-                loop.close()
-            except Exception:
-                pass
+                    # Success — mark processed
+                    await session.execute(
+                        text("UPDATE raw_news SET process_status = :st, error_message = NULL WHERE id = :id"),
+                        {"st": "processed", "id": raw_id},
+                    )
+                    await session.commit()
+                    processed += 1
 
-        logger.info(
-            "process_all_task finished processed=%s failed=%s skipped=%s total=%s",
-            result.get("processed"),
-            result.get("failed"),
-            result.get("skipped"),
-            result.get("total"),
-        )
-        return result
-    finally:
-        try:
-            asyncio.set_event_loop(None)
-        except Exception:
-            pass
+                except Exception as e:
+                    try:
+                        await session.execute(
+                            text("UPDATE raw_news SET process_status = :st, error_message = :err WHERE id = :id"),
+                            {"st": "failed", "err": str(e)[:2000], "id": raw_id},
+                        )
+                        await session.commit()
+                    except Exception:
+                        logger.exception("[PIPELINE] Failed to persist failure status raw_news_id=%s", raw_id)
+                    logger.exception("[PIPELINE] Processing failed raw_news_id=%s", raw_id)
+                    failed += 1
+
+            return {"status": "completed", "processed": processed, "failed": failed, "skipped": skipped, "total": len(pending_ids)}
+
+    result = asyncio.run(_run_all())
+    logger.info(
+        "[PIPELINE] process_all_task finished processed=%s failed=%s skipped=%s total=%s",
+        result.get("processed"),
+        result.get("failed"),
+        result.get("skipped"),
+        result.get("total"),
+    )
+    return result

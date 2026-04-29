@@ -1,6 +1,8 @@
 from celery import Celery
 import os
 import logging
+from typing import Any
+
 from app.backend.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -31,9 +33,9 @@ except Exception as import_exc:
 
 
 # Log configuration
-is_eager = False  # Принудительно отключаем eager-режим для production
-if (os.getenv("CELERY_TASK_ALWAYS_EAGER", "").lower() == "true") or (str(settings.APP_ENV).lower() == "dev"):
-    is_eager = True
+# FIX: Only enable eager mode when explicitly requested (not by default in dev)
+# Eager mode causes event loop conflicts with asyncio.run()
+is_eager = os.getenv("CELERY_TASK_ALWAYS_EAGER", "").lower() == "true"
 logger.info("[CELERY] Starting with APP_ENV=%s, task_always_eager=%s, broker=%s", 
             settings.APP_ENV, is_eager, settings.CELERY_BROKER_URL)
 
@@ -47,9 +49,9 @@ celery_app.conf.update(
     task_serializer="json",
     result_serializer="json",
     accept_content=["json"],
-        # For local development allow running tasks eagerly when Redis is not available.
-        # Enable with CELERY_TASK_ALWAYS_EAGER=true or when APP_ENV=dev.
-        task_always_eager=is_eager,
+    # FIX: Disabled eager mode by default to avoid event loop conflicts
+    # Only enable with CELERY_TASK_ALWAYS_EAGER=true
+    task_always_eager=is_eager,
     task_time_limit=int(os.getenv("CELERY_TASK_TIME_LIMIT", str(settings.CELERY_TASK_TIME_LIMIT))),
     worker_concurrency=int(os.getenv("CELERY_WORKER_CONCURRENCY", str(settings.CELERY_WORKER_CONCURRENCY))),
     broker_transport_options={"visibility_timeout": int(os.getenv("CELERY_BROKER_VISIBILITY_TIMEOUT", "3600"))},
@@ -70,3 +72,29 @@ try:
     print("[CELERY] registered tasks:", sorted(celery_app.tasks.keys()))
 except Exception as tasks_exc:
     logger.exception("[CELERY] failed to print registered tasks: %s", tasks_exc)
+
+
+def is_redis_available() -> bool:
+    """Check if Redis broker is available for task queuing."""
+    import os
+    # Skip if explicitly disabled
+    if os.getenv("SKIP_CELERY_TASKS", "").lower() == "true":
+        return False
+    # Check if broker is configured
+    broker = (settings.CELERY_BROKER_URL or "").strip()
+    if not broker or broker.startswith("redis://localhost"):
+        # Local Redis may not be running
+        return False
+    return True
+
+
+def send_task_safe(name: str, args: tuple | None = None, kwargs: dict | None = None, **options) -> Any:
+    """Send a Celery task only if Redis is available, otherwise log and skip."""
+    if not is_redis_available():
+        logger.debug("[CELERY] Skipping task %s (Redis not available)", name)
+        return None
+    try:
+        return celery_app.send_task(name, args=args, kwargs=kwargs, **options)
+    except Exception as e:
+        logger.warning("[CELERY] Failed to send task %s: %s", name, e)
+        return None

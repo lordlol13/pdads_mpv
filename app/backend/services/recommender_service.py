@@ -560,13 +560,9 @@ async def ensure_user_embedding(session: AsyncSession, user_id: int) -> list[flo
     # Local deterministic embedding as fast fallback
     fallback_vector = text_to_embedding(profile_text)
 
-    # NOTE: Celery send_task temporarily disabled to prevent Redis connection hangs
-    # TODO: Re-enable when Redis is available
-    # try:
-    #     from app.backend.core.celery_app import celery_app
-    #     celery_app.send_task("recommender.refresh_user_embedding", args=[user_id])
-    # except Exception:
-    #     pass
+    # RESTORED: Celery task for production (with safe wrapper)
+    from app.backend.core.celery_app import send_task_safe
+    send_task_safe("recommender.refresh_user_embedding", args=[user_id])
 
     return _normalize_vector(fallback_vector)
 

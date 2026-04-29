@@ -19,11 +19,14 @@ class Settings(BaseSettings):
     # Server port (Railway sets PORT env var)
     PORT: int = 8000
 
+    # Railway provides DATABASE_URL - use it directly
     DATABASE_URL: str = "postgresql+asyncpg://localhost:5432/news_mvp"
 
+    # Railway provides REDIS_URL - fallback to localhost for local dev
     REDIS_URL: str = "redis://localhost:6379/0"
-    CELERY_BROKER_URL: str = "redis://localhost:6379/0"
-    CELERY_RESULT_BACKEND: str = "redis://localhost:6379/1"
+    # Celery uses same Redis as configured by Railway
+    CELERY_BROKER_URL: str = ""
+    CELERY_RESULT_BACKEND: str = ""
 
     # AI / external APIs
     GEMINI_API_KEY: str = ""
@@ -193,6 +196,21 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def _normalize_runtime_urls(self) -> "Settings":
         self.DATABASE_URL = self._normalize_database_url(self.DATABASE_URL)
+        return self
+
+    @model_validator(mode="after")
+    def _set_celery_urls(self) -> "Settings":
+        # If Celery URLs not set, use REDIS_URL (Railway provides this)
+        redis_url = (self.REDIS_URL or "").strip()
+        if redis_url:
+            if not (self.CELERY_BROKER_URL or "").strip():
+                self.CELERY_BROKER_URL = redis_url
+            if not (self.CELERY_RESULT_BACKEND or "").strip():
+                # Use database 1 for result backend (separate from broker)
+                if redis_url.endswith("/0"):
+                    self.CELERY_RESULT_BACKEND = redis_url[:-2] + "/1"
+                else:
+                    self.CELERY_RESULT_BACKEND = redis_url
         return self
 
     @model_validator(mode="after")
