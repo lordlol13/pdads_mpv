@@ -63,6 +63,12 @@ print(f"[WORKER] Broker: {settings.CELERY_BROKER_URL[:40]}..." if settings.CELER
 print(f"[WORKER] Backend: {settings.CELERY_RESULT_BACKEND[:40]}..." if settings.CELERY_RESULT_BACKEND else "[WORKER] Backend: NOT SET")
 print(f"[WORKER] Eager mode: {is_eager}")
 
+# FIX START - Configure beat scheduler to use /tmp for Railway (avoid cached schedule issues)
+celery_app.conf.beat_scheduler = "celery.beat:PersistentScheduler"
+celery_app.conf.beat_schedule_filename = "/tmp/celerybeat-schedule"
+print("[BEAT] schedule file set to /tmp/celerybeat-schedule")
+# FIX END
+
 celery_app.conf.beat_schedule = {
     "parse-news": {
         "task": "app.backend.tasks.parser_task.parse_news_task",
