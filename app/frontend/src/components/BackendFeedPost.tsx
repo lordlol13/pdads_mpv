@@ -15,6 +15,8 @@ interface BackendFeedPostProps {
   onToggleSaved: (aiNewsId: number) => Promise<boolean>;
   onReactToNews: (aiNewsId: number, liked: boolean) => Promise<void>;
   onViewed: (aiNewsId: number) => Promise<void>;
+  onTagClick?: (tag: string) => void;  // FIX - Clickable tags for smart feed filtering
+  activeTag?: string | null;  // FIX - Highlight active tag for AI personalization feel
 }
 
 function mediaUrls(item: FeedItem): string[] {
@@ -169,6 +171,8 @@ export function BackendFeedPost({
   onToggleSaved,
   onReactToNews,
   onViewed,
+  onTagClick,  // FIX - Clickable tags for smart feed filtering
+  activeTag,   // FIX - Highlight active tag for AI personalization feel
 }: BackendFeedPostProps) {
   const { t } = useLanguage();
   const [isLiked, setIsLiked] = useState(Boolean(item.liked));
@@ -563,16 +567,31 @@ export function BackendFeedPost({
       <div className="absolute bottom-0 left-0 w-full p-4 md:p-6 bg-gradient-to-t from-white/80 via-white/40 to-transparent dark:bg-gradient-to-t dark:from-black/80 dark:via-black/40 dark:to-transparent z-30">
         <div className="max-w-[80%] space-y-3">
           <div className="bg-white/80 dark:bg-black/70 backdrop-blur-sm rounded-2xl p-3 md:p-4">
-            <h3 className="font-bold text-lg text-[var(--popover-foreground)] dark:text-white">{author}</h3>
+            {/* FIX START - Improved title styling */}
+            <h2 className="text-xl font-bold leading-snug text-[var(--popover-foreground)] dark:text-white">{author}</h2>
+            {/* FIX END */}
+            {/* FIX - Clickable tags for smart feed filtering */}
             {personaMeta.toc.length > 0 ? (
               <div className="flex flex-wrap gap-2">
                 {((showAllTags ? personaMeta.toc : personaMeta.toc.slice(0, isWide ? 3 : 2))).map((topic) => (
-                  <span
+                  <button
                     key={topic}
-                    className="rounded-full border border-border dark:border-white/25 bg-[rgba(255,255,255,0.12)] dark:bg-zinc-900/60 px-2.5 py-1 text-[10px] sm:text-[10px] font-semibold uppercase tracking-wide text-[var(--popover-foreground)] dark:text-zinc-200"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      // FIX START - Log user action for analytics
+                      console.log('[USER] clicked tag:', topic, '| post:', item.ai_news_id);
+                      // FIX END
+                      onTagClick?.(topic);
+                    }}
+                    /* FIX - Highlight active tag: blue when active, default when not */
+                    className={`rounded-full border px-2.5 py-1 text-[10px] sm:text-[10px] font-semibold uppercase tracking-wide transition-all cursor-pointer ${
+                      topic === activeTag
+                        ? 'bg-blue-500 text-white border-blue-500 shadow-md shadow-blue-500/25'
+                        : 'border-border dark:border-white/25 bg-[rgba(255,255,255,0.12)] dark:bg-zinc-900/60 text-[var(--popover-foreground)] dark:text-zinc-200 hover:bg-white/20 dark:hover:bg-zinc-800'
+                    }`}
                   >
                     {topic}
-                  </span>
+                  </button>
                 ))}
                 {!showAllTags && personaMeta.toc.length > (isWide ? 3 : 2) ? (
                   <button
@@ -587,8 +606,9 @@ export function BackendFeedPost({
                 ) : null}
               </div>
             ) : null}
+            {/* FIX - line-clamp-3 for better content preview */}
             <p
-              className={`text-[var(--popover-foreground)] dark:text-white/90 ${isWide ? 'text-sm' : 'text-xs'} ${isWide ? 'line-clamp-2' : 'line-clamp-1'} cursor-pointer hover:text-white transition-colors mt-2`}
+              className={`text-[var(--popover-foreground)] dark:text-white/90 ${isWide ? 'text-sm' : 'text-xs'} line-clamp-3 cursor-pointer hover:text-white transition-colors mt-2`}
               onClick={(event) => {
                 event.stopPropagation();
                 setShowDescription(true);
@@ -610,6 +630,7 @@ export function BackendFeedPost({
               onClick={() => setShowDescription(false)}
               className="absolute inset-0 bg-white/30 dark:bg-black/60 backdrop-blur-sm z-[60]"
             />
+            {/* FIX START - Improved modal readability with clean background */}
             <motion.div
               initial={isWide ? { x: '100%' } : { y: '100%' }}
               animate={isWide ? { x: 0 } : { y: 0 }}
@@ -617,12 +638,13 @@ export function BackendFeedPost({
               transition={{ type: 'spring', damping: 25, stiffness: 200 }}
               style={isWide ? undefined : { height: `${descHeight}vh` }}
               className={
-                `absolute z-[70] flex flex-col border-t border-border dark:border-white/5 p-4 md:p-8 ` +
+                `absolute z-[70] flex flex-col border-t border-border dark:border-white/10 shadow-2xl p-4 md:p-8 ` +
                 (isWide
-                  ? 'top-0 right-0 h-full w-full md:w-1/3 bg-[var(--popover)]'
-                  : 'bottom-0 left-0 w-full bg-[var(--popover)] rounded-t-[24px] md:rounded-t-[32px]')
+                  ? 'top-0 right-0 h-full w-full md:w-1/3 bg-white dark:bg-zinc-900'
+                  : 'bottom-0 left-0 w-full bg-white dark:bg-zinc-900 rounded-t-[24px] md:rounded-t-[32px]')
               }
             >
+            {/* FIX END */}
               <div className="flex items-center justify-center gap-2 mb-4">
                 <div
                   className="w-12 h-1.5 bg-[var(--muted)] dark:bg-zinc-700 rounded-full"
@@ -640,29 +662,74 @@ export function BackendFeedPost({
                     <p className="text-xs text-[var(--muted-foreground)]">{t.posted} {relativeLabel(item.created_at, t.now)}</p>
                   </div>
                 </div>
+                {/* FIX - Clickable tags in modal */}
                 {personaMeta.toc.length > 0 ? (
                   <div className="flex flex-wrap gap-2">
                     {personaMeta.toc.map((topic) => (
-                      <span
+                      <button
                         key={`modal-${topic}`}
-                        className="rounded-full border border-border dark:border-white/15 bg-[var(--card)] dark:bg-zinc-900 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-[var(--popover-foreground)] dark:text-zinc-200"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          // FIX START - Log user action for analytics
+                          console.log('[USER] clicked tag:', topic, '| post:', item.ai_news_id);
+                          // FIX END
+                          onTagClick?.(topic);
+                        }}
+                        /* FIX - Highlight active tag in modal */
+                        className={`rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-wide transition-all cursor-pointer ${
+                          topic === activeTag
+                            ? 'bg-blue-500 text-white border-blue-500 shadow-md shadow-blue-500/25'
+                            : 'border-border dark:border-white/15 bg-[var(--card)] dark:bg-zinc-900 text-[var(--popover-foreground)] dark:text-zinc-200 hover:bg-white/10 dark:hover:bg-zinc-800'
+                        }`}
                       >
                         {topic}
-                      </span>
+                      </button>
                     ))}
                   </div>
                 ) : null}
+                {/* FIX START - Add clickable item.topics tags */}
+                {item.topics && item.topics.length > 0 && (
+                  <div className="flex flex-wrap gap-2 mt-3">
+                    {item.topics.map((tag, i) => (
+                      <button
+                        key={i}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          // FIX START - Log user action for analytics
+                          console.log('[USER] clicked tag:', tag, '| post:', item.ai_news_id);
+                          // FIX END
+                          onTagClick?.(tag);
+                        }}
+                        /* FIX - Highlight active item.topics tag */
+                        className={`px-2 py-1 text-xs rounded transition-all cursor-pointer ${
+                          tag === activeTag
+                            ? 'bg-blue-500 text-white shadow-md shadow-blue-500/25'
+                            : 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300 hover:bg-blue-200 dark:hover:bg-blue-800'
+                        }`}
+                      >
+                        #{tag}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {/* FIX END */}
                 <div className="prose prose-invert max-w-none">
-                  <p className="text-[var(--muted-foreground)] dark:text-zinc-200 leading-relaxed text-base md:text-lg whitespace-pre-wrap bg-white/90 dark:bg-black/70 p-4 rounded-lg">
-                    {previewText || t.noComments}
-                  </p>
+                  {/* FIX START - Improved readability */}
+                  <div className="bg-white dark:bg-zinc-900 p-6 rounded-2xl max-w-2xl mx-auto">
+                    <p className="text-[var(--muted-foreground)] dark:text-zinc-200 leading-relaxed text-base md:text-lg whitespace-pre-wrap">
+                      {previewText || t.noComments}
+                    </p>
+                  </div>
+                  {/* FIX END */}
                 </div>
+                {/* FIX START - Improved Yopish button visibility */}
                 <button
                   onClick={() => setShowDescription(false)}
-                  className="w-full py-4 bg-white text-black dark:bg-zinc-800 dark:text-white font-bold rounded-2xl hover:bg-zinc-200 dark:hover:bg-zinc-700 transition-colors"
+                  className="px-4 py-2 rounded-lg bg-black text-white dark:bg-white dark:text-black border shadow-md hover:opacity-90 font-bold mx-auto w-full max-w-xs"
                 >
                   {t.close}
                 </button>
+                {/* FIX END */}
               </div>
             </motion.div>
           </>

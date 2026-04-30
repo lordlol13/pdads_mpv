@@ -80,6 +80,7 @@ export interface FeedItem {
   image_urls?: string[] | null;
   video_urls?: string[] | null;
   category?: string | null;
+  topics?: string[] | null;  // FIX - Added topics field for tags
   ai_score?: number | null;
   vector_status?: string | null;
   liked?: boolean | null;

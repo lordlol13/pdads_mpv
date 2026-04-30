@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     GEMINI_REVIEW_ENABLED: bool = False
     OPENAI_API_KEY: str = ""
     OPENAI_MODEL: str = "gpt-4o-mini"
-    OPENAI_EMBEDDING_MODEL: str = "gpt-4o-mini"
+    OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-small"  # FIX - Use proper embedding model, not chat model
     # Optional heavy model defaults and safety guard: do NOT enable heavy model in
     # production unless `LLM_ENABLE_HEAVY_MODEL=true` is explicitly set in env.
     OPENAI_MODEL_DEFAULT_HEAVY: str = "gpt-4o-mini"

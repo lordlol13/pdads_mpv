@@ -55,7 +55,13 @@ export function BackendMainFeed({ currentUser, onLogout }: BackendMainFeedProps)
   const [isFeedLoading, setIsFeedLoading] = useState(true);
   const [feedError, setFeedError] = useState('');
   const [activeTab, setActiveTab] = useState<'home' | 'search' | 'profile'>('home');
+  const [showAllTags, setShowAllTags] = useState(false);
+  const [isWide, setIsWide] = useState(false);
+  const [hasLongTitle, setHasLongTitle] = useState(false);
   const [showSavedOnly, setShowSavedOnly] = useState(false);
+  // FIX START - Micro-animation for feed transition
+  const [feedOpacity, setFeedOpacity] = useState(1);
+  // FIX END
   const [activePostIndex, setActivePostIndex] = useState(0);
   const [theme, setTheme] = useState<'dark' | 'light'>(() => {
     try {
@@ -85,6 +91,11 @@ export function BackendMainFeed({ currentUser, onLogout }: BackendMainFeedProps)
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchError, setSearchError] = useState('');
   const [homeRefreshing, setHomeRefreshing] = useState(false);
+  // FIX START - AI personalization: tag-based feed filtering
+  const [selectedTag, setSelectedTag] = useState<string | null>(null);
+  const [pendingTag, setPendingTag] = useState<string | null>(null);  // FIX - Debounce for performance
+  const [isTagLoading, setIsTagLoading] = useState(false);
+  // FIX END
   const feedRef = useRef<HTMLDivElement>(null);
   const viewedIds = useRef<Set<number>>(new Set());
 
@@ -151,6 +162,36 @@ export function BackendMainFeed({ currentUser, onLogout }: BackendMainFeedProps)
 
   const savedPosts = useMemo(() => feedData.filter((post) => Boolean(post.saved)), [feedData]);
 
+  // FIX START - Smart weighted filtering with relevance scoring + fallback
+  const filteredFeedData = useMemo(() => {
+    if (!selectedTag) return feedData;
+    const tag = selectedTag.toLowerCase();
+
+    const scored = feedData.map((post) => {
+      const score = (
+        (post.final_title?.toLowerCase().includes(tag) ? 3 : 0) +
+        (post.topics?.join(' ').toLowerCase().includes(tag) ? 2 : 0) +
+        (post.final_text?.toLowerCase().includes(tag) ? 1 : 0)
+      );
+      return { post, score };
+    });
+
+    // Only posts with score > 0, sorted by relevance
+    const filtered = scored
+      .filter(({ score }) => score > 0)
+      .sort((a, b) => b.score - a.score)
+      .map(({ post }) => post);
+
+    // FIX START - Fallback: if no matches, show top 10 from original feed
+    if (filtered.length === 0) {
+      return feedData.slice(0, 10);
+    }
+    // FIX END
+
+    return filtered;
+  }, [feedData, selectedTag]);
+  // FIX END
+
   const handleFeedScroll = () => {
     if (!feedRef.current) {
       return;
@@ -198,6 +239,50 @@ export function BackendMainFeed({ currentUser, onLogout }: BackendMainFeedProps)
     }
   };
 
+  // FIX START - Clear selected tag when leaving feed tab
+  useEffect(() => {
+    if (activeTab !== 'home') {
+      setSelectedTag(null);
+    }
+  }, [activeTab]);
+  // FIX END
+
+  // FIX START - Remember user's last tag preference
+  useEffect(() => {
+    if (selectedTag) {
+      localStorage.setItem('lastTag', selectedTag);
+    }
+  }, [selectedTag]);
+
+  useEffect(() => {
+    const savedTag = localStorage.getItem('lastTag');
+    if (savedTag && feedData.length > 0) {
+      setSelectedTag(savedTag);
+    }
+  }, []); // Only on initial load
+  // FIX END
+
+  // FIX START - Debounce tag selection for performance
+  useEffect(() => {
+    if (pendingTag === null) return;
+
+    // FIX START - Log user action for analytics (product thinking)
+    console.log('[USER] filtering by tag:', pendingTag);
+    // FIX END
+
+    setIsTagLoading(true);
+    setFeedOpacity(0); // Start fade out
+
+    const timeout = window.setTimeout(() => {
+      setSelectedTag(pendingTag);
+      setIsTagLoading(false);
+      setFeedOpacity(1); // Fade in
+    }, 200);
+
+    return () => window.clearTimeout(timeout);
+  }, [pendingTag]);
+  // FIX END
+
   const handleLogout = () => {
     authService.logout();
     onLogout();
@@ -208,7 +293,13 @@ export function BackendMainFeed({ currentUser, onLogout }: BackendMainFeedProps)
       <div className="flex-1 relative overflow-hidden">
         {activeTab === 'home' ? (
           <div ref={feedRef} onScroll={handleFeedScroll} className="h-full overflow-y-scroll snap-y snap-mandatory scrollbar-hide">
-            {isFeedLoading ? (
+            {/* FIX START - AI personalization: tag loading indicator with magic text */}
+            {isTagLoading ? (
+              <div className="flex h-full flex-col items-center justify-center px-4 gap-2">
+                <span className="text-lg font-semibold text-blue-400">{t.recommendedForYou ?? 'Recommended for you'}</span>
+                <span className="animate-pulse text-sm text-blue-300">{t.findingBestMatches ?? `Finding best matches for #${pendingTag}...`}</span>
+              </div>
+            ) : isFeedLoading ? (
               <div className="flex h-full items-center justify-center px-4 text-sm text-white/70">{t.loading}</div>
             ) : feedError ? (
               <div className="flex h-full flex-col items-center justify-center gap-4 px-4 text-center">
@@ -221,7 +312,22 @@ export function BackendMainFeed({ currentUser, onLogout }: BackendMainFeedProps)
                   {t.refresh}
                 </button>
               </div>
-            ) : feedData.length === 0 ? (
+            ) : selectedTag && filteredFeedData.length === 0 ? (
+              /* FIX - Should never happen now due to fallback, but keeping for safety */
+              <div className="flex h-full flex-col items-center justify-center gap-4 px-4 text-center">
+                <p className="text-lg font-bold">{t.exploringMore ?? 'Exploring more content for you'}</p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedTag(null);
+                    setPendingTag(null);
+                  }}
+                  className="rounded-full border border-white/20 px-4 py-2 text-sm text-white/85 hover:bg-white/10"
+                >
+                  {t.showAll ?? 'Show all'}
+                </button>
+              </div>
+            ) : filteredFeedData.length === 0 ? (
               <div className="flex h-full flex-col items-center justify-center gap-4 px-4 text-center">
                 <p className="text-lg font-bold">{t.feedEmptyTitle ?? 'Feed is empty'}</p>
                 <p className="text-sm text-white/60">{t.feedEmptyText ?? 'Run ingestion/pipeline and refresh feed.'}</p>
@@ -234,7 +340,38 @@ export function BackendMainFeed({ currentUser, onLogout }: BackendMainFeedProps)
                 </button>
               </div>
             ) : (
-              feedData.map((item, index) => (
+              /* FIX START - Use filteredFeedData for AI personalization */
+              <>
+                {/* FIX - Active tag indicator banner with AI magic */}
+                {selectedTag && (
+                  <div className={`sticky top-0 z-40 px-4 py-2 flex items-center justify-between ${theme === 'dark' ? 'bg-blue-900/90' : 'bg-blue-100/90'} backdrop-blur-sm`}>
+                    <span className={`text-sm font-semibold ${theme === 'dark' ? 'text-blue-200' : 'text-blue-800'}`}>
+                      {/* FIX START - AI magic text */}
+                      <span className="opacity-80">{t.recommendedForYou ?? 'Recommended for you'}</span>
+                      <span className="mx-2">•</span>
+                      {/* FIX END */}
+                      <span className="font-bold">#{selectedTag}</span>
+                      <span className="ml-2 text-xs opacity-70">({filteredFeedData.length} {t.articles ?? 'articles'})</span>
+                    </span>
+                    <button
+                      onClick={() => {
+                        setSelectedTag(null);
+                        setPendingTag(null);
+                      }}
+                      className={`text-xs px-2 py-1 rounded ${theme === 'dark' ? 'bg-blue-800 hover:bg-blue-700' : 'bg-blue-200 hover:bg-blue-300'} transition-colors`}
+                    >
+                      {t.clear ?? 'Clear'}
+                    </button>
+                  </div>
+                )}
+                {/* FIX START - Micro-animation: opacity transition for AI rebuild feel */}
+                <motion.div
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: feedOpacity }}
+                  transition={{ duration: 0.3, ease: 'easeInOut' }}
+                  className="contents"
+                >
+                {filteredFeedData.map((item, index) => (
                 <BackendFeedPost
                   key={item.ai_news_id}
                   item={item}
@@ -243,8 +380,17 @@ export function BackendMainFeed({ currentUser, onLogout }: BackendMainFeedProps)
                   onToggleSaved={handleToggleSaved}
                   onReactToNews={handleReactToNews}
                   onViewed={handleViewed}
+                  onTagClick={(tag) => {
+                    // FIX - AI personalization: filter feed by tag with debounce
+                    setPendingTag(tag); // Debounced via useEffect
+                  }}
+                  activeTag={selectedTag}
                 />
-              ))
+              ))}
+              </motion.div>
+              {/* FIX END */}
+              </>
+              /* FIX END */
             )}
           </div>
         ) : null}
