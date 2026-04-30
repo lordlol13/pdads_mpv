@@ -8,7 +8,7 @@ from typing import Optional, Any
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import SQLAlchemyError, IntegrityError
 
 from app.backend.core.celery_app import celery_app
 from app.backend.core.config import settings
@@ -572,6 +572,17 @@ async def _upsert_ai_news_for_persona(
         persona_context.get("label") or _build_target_persona_label(topic, profession, geo, country_code)
     ).strip().lower()
 
+    # FIX START - Prevent duplicates: check if ai_news already exists for this raw_news + persona
+    dup_check = await session.execute(
+        text("SELECT id FROM ai_news WHERE raw_news_id = :raw_id AND target_persona = :persona LIMIT 1"),
+        {"raw_id": raw_row["id"], "persona": target_persona},
+    )
+    existing_id = dup_check.scalar_one_or_none()
+    if existing_id:
+        logger.info(f"[UPSERT] Duplicate prevented: ai_news id={existing_id} exists for raw_news_id={raw_row['id']}, persona={target_persona}")
+        return int(existing_id)
+    # FIX END
+
     # Allow caller to provide a pre-generated payload (to enable concurrent LLM calls).
     if generated is None:
         generated = await _generate_with_quality_loop(raw_row, topic, profession, geo)
@@ -781,13 +792,29 @@ async def _upsert_ai_news_for_persona(
     )
     RETURNING id
     """
-    insert_result = await session.execute(text(insert_query), params)
-    ai_news_id = insert_result.scalar_one()
-    print("[DEBUG] saving to ai_news")
-    await session.commit()
-    print("[DEBUG] commit done")
-    print("[AI] saved to ai_news")
-    LOG.info("[AI] saved to ai_news id=%s raw_news_id=%s", ai_news_id, raw_row.get("id"))
+
+    # FIX START - Handle unique constraint violation (concurrent insert protection)
+    try:
+        insert_result = await session.execute(text(insert_query), params)
+        ai_news_id = insert_result.scalar_one()
+        print("[DEBUG] saving to ai_news")
+        await session.commit()
+        print("[DEBUG] commit done")
+        print("[AI] saved to ai_news")
+        LOG.info("[AI] saved to ai_news id=%s raw_news_id=%s", ai_news_id, raw_row.get("id"))
+    except IntegrityError:
+        # FIX: Another process inserted the same record concurrently
+        await session.rollback()
+        logger.warning(f"[UPSERT] IntegrityError: duplicate ai_news for raw_news_id={raw_row['id']}, persona={target_persona}")
+        # Fetch the existing record
+        existing_result = await session.execute(
+            text("SELECT id FROM ai_news WHERE raw_news_id = :raw_id AND target_persona = :persona"),
+            {"raw_id": raw_row["id"], "persona": target_persona},
+        )
+        ai_news_id = existing_result.scalar_one()
+        logger.info(f"[UPSERT] Using existing ai_news id={ai_news_id}")
+        # FIX END
+    # FIX END
     await refresh_ai_news_embedding(
         session,
         ai_news_id,
@@ -1404,32 +1431,27 @@ def process_all_task() -> dict:
             )
             logger.info("[PIPELINE] status_counts %s", status_debug.mappings().all())
 
+            # FIX START - Query to fetch unprocessed raw_news, limit 20 per run
+            # EXCLUDES 'parsed', 'classified', 'completed' to prevent duplicate processing
+            # INCLUDES 'generated' to allow reprocessing if outer task failed
             res = await session.execute(
                 text(
                     """
                     SELECT *
                     FROM raw_news
-                    WHERE process_status = 'pending'
-                    ORDER BY id ASC
+                    WHERE process_status IS NULL
+                       OR process_status IN ('pending', 'new', 'failed', 'generated')
+                    ORDER BY created_at DESC
+                    LIMIT 20
                     """
                 )
             )
             rows = res.mappings().all()
 
-            if not rows:
-                res = await session.execute(
-                    text(
-                        """
-                        SELECT *
-                        FROM raw_news
-                        WHERE process_status IS NULL OR process_status IN ('pending', 'new', 'parsed')
-                        ORDER BY id ASC
-                        """
-                    )
-                )
-                rows = res.mappings().all()
-
+            # FIX START - Debug log
+            print(f"[PIPELINE] raw_news fetched: {len(rows)} rows")
             logger.info("[PIPELINE] found %s raw_news rows", len(rows))
+            # FIX END
             pending_ids = [int(r["id"]) for r in rows]
 
             if not pending_ids:
@@ -1446,19 +1468,8 @@ def process_all_task() -> dict:
             for raw_id in pending_ids:
                 try:
                     logger.info("[PIPELINE] processing raw_news_id=%s", raw_id)
-                    # Prevent duplicates: skip if ai_news already exists for raw_news
-                    dup = await session.execute(
-                        text("SELECT 1 FROM ai_news WHERE raw_news_id = :id LIMIT 1"),
-                        {"id": raw_id},
-                    )
-                    if dup.scalar_one_or_none() is not None:
-                        await session.execute(
-                            text("UPDATE raw_news SET process_status = :st WHERE id = :id"),
-                            {"st": "processed", "id": raw_id},
-                        )
-                        await session.commit()
-                        skipped += 1
-                        continue
+                    # FIX: Duplicate check removed - now handled in _upsert_ai_news_for_persona
+                    # (checks raw_news_id + target_persona combination)
 
                     # Call main async processor (handles generation, upsert, feed population)
                     timeout_seconds = int(os.getenv("PIPELINE_PROCESS_TIMEOUT", str(settings.CELERY_TASK_TIME_LIMIT)))
@@ -1495,11 +1506,12 @@ def process_all_task() -> dict:
                         failed += 1
                         continue
 
-                    # Success — mark processed
+                    # FIX START - Success: mark as 'completed' to prevent reprocessing
                     await session.execute(
                         text("UPDATE raw_news SET process_status = :st, error_message = NULL WHERE id = :id"),
-                        {"st": "processed", "id": raw_id},
+                        {"st": "completed", "id": raw_id},
                     )
+                    # FIX END
                     await session.commit()
                     processed += 1
 

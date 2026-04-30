@@ -1440,8 +1440,9 @@ async def generate_news(
                 return None
             continue
 
-        # Always save as last valid payload (we have some data to work with)
-        last_valid_payload = openai_payload
+        # FIX: Only save valid (truthy) payload - protect against empty/corrupt responses
+        if openai_payload:
+            last_valid_payload = openai_payload
 
         # Validate response
         is_valid, error_msg = validate_ai_response(openai_payload)

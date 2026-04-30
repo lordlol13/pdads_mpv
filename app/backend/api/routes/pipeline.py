@@ -59,36 +59,27 @@ async def process_all_pending():
             sample_rows = sample_debug.mappings().all()
             LOG.info("[PROCESS_ALL] sample_rows=%s", sample_rows)
 
-            # DEBUG: process only 1 raw_news at a time for speed
+            # FIX START - Query to fetch unprocessed raw_news
+            # EXCLUDES 'parsed', 'classified', 'completed' to prevent duplicate processing
+            # INCLUDES 'generated' to allow reprocessing if outer task failed
             rows_result = await session.execute(
                 text(
                     """
                     SELECT id
                     FROM raw_news
-                    WHERE process_status = 'pending'
-                    ORDER BY id DESC
-                    LIMIT 1
+                    WHERE process_status IS NULL
+                       OR process_status IN ('pending', 'new', 'failed', 'generated')
+                    ORDER BY created_at DESC
+                    LIMIT 20
                     """
                 )
             )
             rows = rows_result.mappings().all()
 
-            if not rows:
-                rows_result = await session.execute(
-                    text(
-                        """
-                        SELECT id
-                        FROM raw_news
-                        WHERE process_status IS NULL OR process_status IN ('pending', 'new', 'parsed')
-                        ORDER BY id DESC
-                        LIMIT 1
-                        """
-                    )
-                )
-                rows = rows_result.mappings().all()
-
-            print(f"[PROCESS_ALL] found {len(rows)} rows")
-            LOG.info("[PROCESS_ALL] found %s rows", len(rows))
+            # FIX START - Debug log
+            print(f"[PIPELINE] raw_news fetched: {len(rows)} rows")
+            LOG.info("[PIPELINE] found %s raw_news rows to process", len(rows))
+            # FIX END
             pending_ids = [int(row["id"]) for row in rows]
 
         if not pending_ids:
