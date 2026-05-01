@@ -2050,6 +2050,45 @@ async def get_user_feed(session: AsyncSession, user_id: int, limit: int = 50) ->
 
 
 
+    # FIX START - Bypass all filters if ai_news < 10: return ALL ai_news
+    ai_news_total_result = await session.execute(text("SELECT COUNT(*) FROM ai_news"))
+    ai_news_total = ai_news_total_result.scalar_one() or 0
+
+    if ai_news_total < 10:
+        logger.warning("[FEED] ai_news count low (%s < 10), bypassing filters", ai_news_total)
+        bypass_result = await session.execute(
+            text("""
+                SELECT
+                    an.id AS ai_news_id,
+                    an.raw_news_id,
+                    an.target_persona,
+                    an.final_title,
+                    an.final_text,
+                    an.image_urls,
+                    an.video_urls,
+                    an.category,
+                    an.ai_score,
+                    an.created_at,
+                    FALSE AS saved,
+                    0 AS comment_count,
+                    0 AS like_count,
+                    NULL AS liked,
+                    FALSE AS viewed,
+                    an.embedding_vector
+                FROM ai_news an
+                ORDER BY an.created_at DESC
+                LIMIT :limit
+            """),
+            {"limit": limit},
+        )
+        bypass_rows = [dict(row) for row in bypass_result.mappings().all()]
+        if bypass_rows:
+            logger.info("[FEED] bypass returned %s rows", len(bypass_rows))
+            return bypass_rows[:limit]
+    # FIX END
+
+
+
     user_embedding = await ensure_user_embedding(session, user_id)
 
 

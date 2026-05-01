@@ -62,6 +62,7 @@ async def process_all_pending():
             # FIX START - Query to fetch unprocessed raw_news
             # EXCLUDES 'parsed', 'classified', 'completed' to prevent duplicate processing
             # INCLUDES 'generated' to allow reprocessing if outer task failed
+            # FIX - Increased limit 20 → 50
             rows_result = await session.execute(
                 text(
                     """
@@ -70,7 +71,7 @@ async def process_all_pending():
                     WHERE process_status IS NULL
                        OR process_status IN ('pending', 'new', 'failed', 'generated')
                     ORDER BY created_at DESC
-                    LIMIT 20
+                    LIMIT 50
                     """
                 )
             )
@@ -120,6 +121,28 @@ async def process_all_pending():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# FIX START - Force-run endpoint for quick testing
+@router.post("/force-run")
+async def force_run_pipeline():
+    """
+    Queue pipeline processing task immediately (non-blocking).
+    Returns task_id for status tracking.
+    """
+    try:
+        # FIX - Use async dispatch (non-blocking) instead of apply()
+        task = celery_app.send_task("brain.tasks.pipeline_tasks.process_all_task")
+
+        return {
+            "status": "queued",
+            "task_id": task.id,
+            "message": "Pipeline processing queued"
+        }
+    except Exception as e:
+        LOG.exception("[FORCE_RUN] Error: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+# FIX END
+
+
 @router.post("/process/{raw_news_id}", response_model=EnqueueResponse)
 def enqueue_process_raw_news(raw_news_id: int):
     if raw_news_id <= 0:
@@ -166,10 +189,94 @@ async def list_ai_news(limit: int = Query(default=50, ge=1, le=200)):
         return [AiNewsItem(**dict(row)) for row in result.mappings().all()]
 
 
+# FIX START - Observability endpoints
+@router.get("/health")
+async def pipeline_health():
+    """
+    Pipeline health check with alerting thresholds.
+    Returns: health status, failure rates, last activity time.
+    """
+    from app.backend.services.observability_service import health_monitor, get_system_metrics
+
+    health = await health_monitor.check_health()
+    metrics_data = await get_system_metrics()
+
+    return {
+        "status": health["status"],
+        "checks": health["checks"],
+        "metrics": metrics_data,
+        "timestamp": health["timestamp"],
+    }
+
+
+@router.get("/metrics")
+async def pipeline_metrics():
+    """
+    Get real-time pipeline metrics (counters, timers, gauges).
+    """
+    from app.backend.services.observability_service import metrics, get_system_metrics
+
+    return await get_system_metrics()
+
+
+@router.post("/metrics/reset")
+async def reset_metrics():
+    """
+    Reset all metrics counters (useful for testing).
+    """
+    from app.backend.services.observability_service import metrics
+
+    await metrics.reset()
+    return {"status": "reset", "message": "Metrics counters reset"}
+
+
+# FIX START - External observability for production tools
+@router.get("/metrics/prometheus")
+async def prometheus_metrics():
+    """
+    Prometheus metrics endpoint (/metrics/prometheus).
+    Returns metrics in Prometheus exposition format.
+    Used by: Prometheus, Grafana, DataDog, New Relic, etc.
+    """
+    from fastapi import Response
+    from app.backend.services.observability_service import get_prometheus_metrics
+
+    metrics_text = await get_prometheus_metrics()
+    return Response(content=metrics_text, media_type="text/plain")
+
+
+@router.get("/ready")
+async def readiness_probe():
+    """
+    Kubernetes readiness probe endpoint.
+    Returns 200 if ready to serve traffic, 503 if not.
+    """
+    from fastapi import Response
+    from starlette.status import HTTP_200_OK, HTTP_503_SERVICE_UNAVAILABLE
+    from app.backend.services.observability_service import get_simple_health
+
+    health = await get_simple_health()
+    code = HTTP_200_OK if health["code"] == 200 else HTTP_503_SERVICE_UNAVAILABLE
+    return Response(content=health["status"], status_code=code)
+
+
+@router.get("/live")
+async def liveness_probe():
+    """
+    Kubernetes liveness probe endpoint.
+    Simple check that process is alive.
+    """
+    from fastapi import Response
+    from starlette.status import HTTP_200_OK
+
+    return Response(content="alive", status_code=HTTP_200_OK)
+# FIX END
+
+
 @router.post("/admin/reset")
 async def admin_reset():
     """Admin endpoint to reset the pipeline state.
-    
+
     - Clears all ai_news records
     - Resets raw_news.process_status to 'pending'
     - Resets attempt_count to 0

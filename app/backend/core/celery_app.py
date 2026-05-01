@@ -17,15 +17,16 @@ celery_app = Celery(
 )
 
 # FIX START - Set beat_schedule immediately after app creation (before autodiscover)
+# FIX - Increased frequency for faster data flow: parse every 60s, process every 120s
 celery_app.conf.update(
     beat_schedule={
         "parse-news": {
             "task": "app.backend.tasks.parser_task.parse_news_task",
-            "schedule": 300.0,
+            "schedule": 60.0,  # FIX: 300s → 60s (parse more frequently)
         },
         "process-news": {
             "task": "brain.tasks.pipeline_tasks.process_all_task",
-            "schedule": 600.0,
+            "schedule": 120.0,  # FIX: 600s → 120s (process more frequently)
         },
     },
     timezone="UTC",

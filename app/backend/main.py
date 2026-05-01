@@ -344,6 +344,14 @@ async def startup():
         cors_allow_origin_regex=settings.CORS_ALLOW_ORIGIN_REGEX or None,
     )
 
+    # FIX START - Observability: log startup info
+    try:
+        from app.backend.services.observability_service import log_startup_info
+        await log_startup_info()
+    except Exception as e:
+        logger.warning(f"Startup observability logging failed: {e}")
+    # FIX END
+
 
 @app.on_event("shutdown")
 async def shutdown():
