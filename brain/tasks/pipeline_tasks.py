@@ -5,6 +5,8 @@ import logging
 import re
 import os
 import time  # FIX - For observability timing
+import random
+from datetime import datetime
 from typing import Optional, Any
 
 from sqlalchemy import text
@@ -40,6 +42,9 @@ logger = logging.getLogger(__name__)
 LOG = logger
 # FIX - Use structured logger
 obs_logger = get_logger("pipeline")
+
+# FIX - Global semaphore for LLM concurrency control (max 3 concurrent calls)
+_llm_semaphore = asyncio.Semaphore(3)
 
 
 BAD_PHRASES = [
@@ -382,6 +387,7 @@ async def _set_status(
     UPDATE raw_news
     SET process_status = :status,
         error_message = :error_message,
+        processing_started_at = CASE WHEN :status = 'processing' THEN COALESCE(processing_started_at, CURRENT_TIMESTAMP) ELSE processing_started_at END,
         attempt_count = COALESCE(:attempt_count, attempt_count)
     WHERE id = :raw_news_id
     """
@@ -394,6 +400,87 @@ async def _set_status(
             "raw_news_id": raw_news_id,
         },
     )
+
+
+async def _try_advisory_lock(session: AsyncSession, lock_key: int) -> bool:
+    if session.get_bind().dialect.name != "postgresql":
+        return True
+    result = await session.execute(
+        text("SELECT pg_try_advisory_lock(:lock_key)"),
+        {"lock_key": lock_key},
+    )
+    return bool(result.scalar_one())
+
+
+async def _release_advisory_lock(session: AsyncSession, lock_key: int) -> None:
+    if session.get_bind().dialect.name != "postgresql":
+        return
+    await session.execute(
+        text("SELECT pg_advisory_unlock(:lock_key)"),
+        {"lock_key": lock_key},
+    )
+
+
+async def _claim_raw_news_for_processing(
+    session: AsyncSession,
+    raw_news_id: int,
+) -> bool:
+    # Only allow claiming items that are not currently 'processing' and
+    # that have not exhausted retry attempts. This prevents re-claiming
+    # items that are actively being processed by another worker.
+    max_attempts = int(os.getenv("PIPELINE_MAX_ATTEMPTS", str(getattr(settings, 'PIPELINE_MAX_ATTEMPTS', 3))))
+    query = """
+    UPDATE raw_news
+    SET process_status = :status,
+        error_message = NULL,
+        processing_started_at = :now,
+        attempt_count = COALESCE(attempt_count, 0) + 1
+    WHERE id = :raw_news_id
+      AND (
+          process_status IS NULL
+          OR process_status IN ('pending', 'new', 'failed', 'generated', 'classified')
+      )
+      AND COALESCE(attempt_count, 0) < :max_attempts
+    """
+    now_iso = datetime.utcnow().isoformat()
+    result = await session.execute(
+        text(query),
+        {
+            "status": "processing",
+            "raw_news_id": raw_news_id,
+            "max_attempts": max_attempts,
+            "now": now_iso,
+        },
+    )
+    return bool(result.rowcount)
+
+
+async def _recover_stale_processing_rows(session: AsyncSession, ttl_minutes: int) -> int:
+    ttl_minutes = max(1, int(ttl_minutes))
+    dialect_name = session.get_bind().dialect.name
+    if dialect_name == "sqlite":
+        query = """
+        UPDATE raw_news
+        SET process_status = 'pending',
+            error_message = NULL,
+            processing_started_at = NULL
+        WHERE process_status = 'processing'
+          AND COALESCE(processing_started_at, created_at) < datetime('now', :ttl_expr)
+        """
+        params = {"ttl_expr": f"-{ttl_minutes} minutes"}
+    else:
+        query = """
+        UPDATE raw_news
+        SET process_status = 'pending',
+            error_message = NULL,
+            processing_started_at = NULL
+        WHERE process_status = 'processing'
+          AND COALESCE(processing_started_at, created_at) < NOW() - make_interval(mins => :ttl_minutes)
+        """
+        params = {"ttl_minutes": ttl_minutes}
+
+    result = await session.execute(text(query), params)
+    return int(result.rowcount or 0)
 
 
 async def _fetch_raw_news(session: AsyncSession, raw_news_id: int) -> Optional[dict[str, Any]]:
@@ -504,16 +591,18 @@ async def _generate_with_quality_loop(
             clean_raw_text = clean_text(raw_row.get("raw_text") or "")
             cleaned_title = clean_text(raw_row.get("title") or "")
 
-            generated = await generate_news(
-                raw_text=clean_raw_text,
-                title=cleaned_title,
-                category=raw_row.get("category"),
-                target_persona=topic,
-                region=raw_row.get("region"),
-                profession=profession,
-                user_geo=geo,
-                rewrite_round=rewrite_round,
-            )
+            # FIX: Limit LLM concurrency to max 3 concurrent calls
+            async with _llm_semaphore:
+                generated = await generate_news(
+                    raw_text=clean_raw_text,
+                    title=cleaned_title,
+                    category=raw_row.get("category"),
+                    target_persona=topic,
+                    region=raw_row.get("region"),
+                    profession=profession,
+                    user_geo=geo,
+                    rewrite_round=rewrite_round,
+                )
         except Exception as e:
             LOG.exception(f"generate_news failed for raw_news_id={raw_row.get('id')} round={rewrite_round}: {e}")
             # try next round; if all rounds fail we'll fallback below
@@ -835,7 +924,7 @@ async def _populate_user_feed_for_ai_news(
     is_sqlite = session.get_bind().dialect.name == "sqlite"
     if is_sqlite:
         query = """
-        INSERT INTO user_feed (user_id, ai_news_id, ai_score, created_at)
+        INSERT OR IGNORE INTO user_feed (user_id, ai_news_id, ai_score, created_at)
         SELECT
                 u.id,
                 :ai_news_id,
@@ -880,12 +969,6 @@ async def _populate_user_feed_for_ai_news(
                 :target_country_code = ''
                 OR UPPER(COALESCE(u.country_code, '')) = :target_country_code
             )
-            AND NOT EXISTS (
-                SELECT 1
-                FROM user_feed uf
-                WHERE uf.user_id = u.id
-                    AND uf.ai_news_id = :ai_news_id
-            )
         """
     else:
         query = """
@@ -913,12 +996,7 @@ async def _populate_user_feed_for_ai_news(
                 :target_country_code = ''
                 OR UPPER(COALESCE(u.country_code, '')) = :target_country_code
             )
-            AND NOT EXISTS (
-                SELECT 1
-                FROM user_feed uf
-                WHERE uf.user_id = u.id
-                    AND uf.ai_news_id = :ai_news_id
-            )
+        ON CONFLICT (user_id, ai_news_id) DO NOTHING
         """
     params = {
         "ai_news_id": ai_news_id,
@@ -963,9 +1041,7 @@ async def _populate_user_feed_for_ai_news(
                 :target_country_code = ''
                 OR UPPER(COALESCE(u.country_code, '')) = :target_country_code
             )
-            AND NOT EXISTS (
-                SELECT 1 FROM user_feed uf WHERE uf.user_id = u.id AND uf.ai_news_id = :ai_news_id
-            )
+        ON CONFLICT (user_id, ai_news_id) DO NOTHING
         """
         res2 = await session.execute(text(relaxed_query), params)
         inserted2 = int(res2.rowcount or 0)
@@ -975,7 +1051,7 @@ async def _populate_user_feed_for_ai_news(
     else:
         # SQLite relaxed topic check (fallback to text search of interests)
         relaxed_query_sqlite = """
-        INSERT INTO user_feed (user_id, ai_news_id, ai_score, created_at)
+        INSERT OR IGNORE INTO user_feed (user_id, ai_news_id, ai_score, created_at)
         SELECT u.id, :ai_news_id, :ai_score, CURRENT_TIMESTAMP
         FROM users u
         WHERE COALESCE(u.is_active, 1) = 1
@@ -995,9 +1071,6 @@ async def _populate_user_feed_for_ai_news(
                 :target_country_code = ''
                 OR UPPER(COALESCE(u.country_code, '')) = :target_country_code
             )
-            AND NOT EXISTS (
-                SELECT 1 FROM user_feed uf WHERE uf.user_id = u.id AND uf.ai_news_id = :ai_news_id
-            )
         """
         res2 = await session.execute(text(relaxed_query_sqlite), params)
         inserted2 = int(res2.rowcount or 0)
@@ -1016,15 +1089,13 @@ async def _populate_user_feed_for_ai_news(
                 OR (:target_geo != '' AND LOWER(COALESCE(u.location,'')) LIKE ('%' || :target_geo || '%'))
                 OR (:target_country_code != '' AND UPPER(COALESCE(u.country_code,'')) = :target_country_code)
             )
-            AND NOT EXISTS (
-                SELECT 1 FROM user_feed uf WHERE uf.user_id = u.id AND uf.ai_news_id = :ai_news_id
-            )
+        ON CONFLICT (user_id, ai_news_id) DO NOTHING
         """
         res3 = await session.execute(text(fallback_query), params)
         return int(res3.rowcount or 0)
     else:
         fallback_query_sqlite = """
-        INSERT INTO user_feed (user_id, ai_news_id, ai_score, created_at)
+        INSERT OR IGNORE INTO user_feed (user_id, ai_news_id, ai_score, created_at)
         SELECT u.id, :ai_news_id, :ai_score, CURRENT_TIMESTAMP
         FROM users u
         WHERE COALESCE(u.is_active, 1) = 1
@@ -1032,9 +1103,6 @@ async def _populate_user_feed_for_ai_news(
                 (:target_profession != '' AND LOWER(COALESCE(json_extract(COALESCE(u.interests, '{}'), '$.profession'), '')) = :target_profession)
                 OR (:target_geo != '' AND LOWER(COALESCE(u.location,'')) LIKE ('%' || :target_geo || '%'))
                 OR (:target_country_code != '' AND UPPER(COALESCE(u.country_code,'')) = :target_country_code)
-            )
-            AND NOT EXISTS (
-                SELECT 1 FROM user_feed uf WHERE uf.user_id = u.id AND uf.ai_news_id = :ai_news_id
             )
         """
         res3 = await session.execute(text(fallback_query_sqlite), params)
@@ -1112,14 +1180,36 @@ async def _process_raw_news_async(
     personas: list[dict[str, str | None]] | None = None,
 ) -> dict:
     async with SessionLocal() as session:
+        lock_acquired = False
         try:
-            await _set_status(
-                session=session,
-                raw_news_id=raw_news_id,
-                status="classified",
-                error_message=None,
-                attempt_count=attempt,
+            lock_acquired = await _try_advisory_lock(session, raw_news_id)
+            if not lock_acquired:
+                logger.info("[PIPELINE] raw_news_id=%s locked by another worker", raw_news_id)
+                return {"status": "skipped", "reason": "locked", "raw_news_id": raw_news_id}
+
+            status_result = await session.execute(
+                text("SELECT process_status FROM raw_news WHERE id = :raw_news_id"),
+                {"raw_news_id": raw_news_id},
             )
+            current_status = status_result.scalar_one_or_none()
+            if current_status is None:
+                return {"status": "failed", "reason": "raw_news_not_found", "raw_news_id": raw_news_id}
+
+            if current_status in {"generated", "completed"}:
+                existing_ai = await session.execute(
+                    text("SELECT 1 FROM ai_news WHERE raw_news_id = :raw_id LIMIT 1"),
+                    {"raw_id": raw_news_id},
+                )
+                if existing_ai.scalar_one_or_none() is not None:
+                    logger.info("[PIPELINE] raw_news_id=%s already generated, skipping", raw_news_id)
+                    return {"status": "skipped", "reason": "already_generated", "raw_news_id": raw_news_id}
+
+            claimed = await _claim_raw_news_for_processing(session, raw_news_id)
+            if not claimed:
+                await session.rollback()
+                logger.info("[PIPELINE] raw_news_id=%s already claimed or completed", raw_news_id)
+                return {"status": "skipped", "reason": "already_claimed", "raw_news_id": raw_news_id}
+
             await session.commit()
 
             raw_row = await _fetch_raw_news(session, raw_news_id)
@@ -1129,22 +1219,56 @@ async def _process_raw_news_async(
                     raw_news_id=raw_news_id,
                     status="failed",
                     error_message=f"raw_news id={raw_news_id} not found",
-                    attempt_count=attempt,
                 )
                 await session.commit()
                 return {"status": "failed", "reason": "raw_news_not_found", "raw_news_id": raw_news_id}
 
             # FIX START: Remove duplicates and limit personas to prevent rate limiting
             cohort_personas = personas or await _load_cohort_personas(session)
-            
-            # MANDATORY FIX 1: Safe persona deduplication using JSON serialization
-            cohort_personas = list({
-                json.dumps(p, sort_keys=True, default=str): p
-                for p in cohort_personas
-            }.values())
 
-            # Fallback if no personas found
+            # Safety: Handle None
+            cohort_personas = cohort_personas or []
+
+            def _normalize_persona(p):
+                if isinstance(p, dict):
+                    return {
+                        str(k): _normalize_persona(v)
+                        for k, v in sorted(p.items(), key=lambda x: str(x[0]))
+                    }
+                if isinstance(p, list):
+                    return [_normalize_persona(v) for v in p]
+                if isinstance(p, (str, int, float, bool)) or p is None:
+                    return p
+
+                logger.warning(
+                    "[PIPELINE] Unsupported persona type: %s -> converting to string",
+                    type(p),
+                )
+                return str(p)
+
+            original_count = len(cohort_personas)
+
+            # Dedup + stable order + single serialization (performance optimized)
+            persona_map = {}
+            for p in cohort_personas:
+                normalized = _normalize_persona(p)
+                key = json.dumps(normalized, sort_keys=True, ensure_ascii=False)
+                if key in persona_map:
+                    logger.warning("[PIPELINE] persona collision detected")
+                persona_map[key] = p  # last wins (safe for identical personas)
+
+            # Deterministic ordering to ensure stable persona selection across runs
+            cohort_personas = [persona_map[k] for k in sorted(persona_map.keys())]
+
+            logger.info(
+                "[PIPELINE] personas deduplicated: %s -> %s",
+                original_count,
+                len(cohort_personas),
+            )
+
+            # Fallback with warning log
             if not cohort_personas:
+                logger.warning("[PIPELINE] No personas found, using default")
                 cohort_personas = [{"type": "general"}]
 
             # PRODUCTION FIX: Adaptive persona selection based on system load
@@ -1162,6 +1286,7 @@ async def _process_raw_news_async(
             logger.info("[PIPELINE] personas_used=%s/%s", len(personas_to_use), len(cohort_personas))
 
             cohort_personas = personas_to_use
+            # FIX END
             
             # MANDATORY FIX 3: Replace parallel execution with sequential loop
             ai_news_ids: list[int] = []
@@ -1179,26 +1304,8 @@ async def _process_raw_news_async(
                     await asyncio.sleep(0.5)
                 
                 try:
-                    # Sequential generation instead of parallel
-                    generated = await _generate_with_quality_loop(raw_row, topic, profession, geo)
-                    
-                    # MANDATORY FIX 6: Check generation result
-                    if not generated:
-                        print(f"[PIPELINE] generation failed for {topic}, using fallback")
-                        # MANDATORY FIX 8: Force DB save with fallback values
-                        fallback_title = str(raw_row.get("title") or "test")
-                        fallback_text = str(raw_row.get("raw_text") or "test")[:1000]
-                        generated = {
-                            "final_title": fallback_title,
-                            "final_text": fallback_text,
-                            "category": str(raw_row.get("category") or "general"),
-                            "combined_score": 0.0,
-                            "ai_score": 0.0,
-                            "is_ai": False,
-                        }
-                    
-                    # MANDATORY FIX 8: Ensure DB save happens
-                    ai_news_id = await _upsert_ai_news_for_persona(session, raw_row, persona_context, generated=generated)
+                    # Idempotent upsert: if ai_news exists, this will reuse it without regenerating.
+                    ai_news_id = await _upsert_ai_news_for_persona(session, raw_row, persona_context, generated=None)
                     ai_news_ids.append(ai_news_id)
                     saved_count += 1
                     
@@ -1233,14 +1340,13 @@ async def _process_raw_news_async(
             await _set_status(
                 session=session,
                 raw_news_id=raw_news_id,
-                status="generated",
+                status="completed",
                 error_message=None,
-                attempt_count=attempt,
             )
             await session.commit()
 
             return {
-                "status": "generated",
+                "status": "completed",
                 "raw_news_id": raw_news_id,
                 "ai_news_ids": ai_news_ids,
                 "personas": [str(item.get("label") or item.get("topic") or "general") for item in cohort_personas],
@@ -1254,18 +1360,23 @@ async def _process_raw_news_async(
                     raw_news_id=raw_news_id,
                     status="failed",
                     error_message=str(e)[:2000],
-                    attempt_count=attempt,
                 )
                 await session.commit()
             except Exception:
                 logger.exception("failed to persist failed status raw_news_id=%s", raw_news_id)
             raise
+        finally:
+            if lock_acquired:
+                try:
+                    await _release_advisory_lock(session, raw_news_id)
+                except Exception:
+                    logger.exception("failed to release advisory lock raw_news_id=%s", raw_news_id)
 
 
 @celery_app.task(
     name="brain.process_raw_news",
     bind=True,
-    autoretry_for=(ConnectionError, TimeoutError, Exception),
+    autoretry_for=(ConnectionError, TimeoutError, SQLAlchemyError),
     retry_backoff=True,
     retry_backoff_max=settings.API_RETRY_MAX_DELAY_SECONDS,
     retry_backoff_base=2,
@@ -1433,6 +1544,14 @@ def process_all_task() -> dict:
         skipped = 0
 
         async with SessionLocal() as session:
+            recovered = await _recover_stale_processing_rows(
+                session,
+                int(os.getenv("PIPELINE_PROCESSING_TTL_MINUTES", "10")),
+            )
+            if recovered:
+                await session.commit()
+                logger.warning("[PIPELINE] recovered stale processing rows=%s", recovered)
+
             # Load pending raw_news ids
             status_debug = await session.execute(
                 text("SELECT process_status, COUNT(*) FROM raw_news GROUP BY process_status")
@@ -1451,6 +1570,8 @@ def process_all_task() -> dict:
                         """
                         SELECT *
                         FROM raw_news
+                                WHERE process_status IS NULL
+                                    OR process_status IN ('pending', 'new', 'failed', 'generated', 'classified')
                         ORDER BY created_at DESC
                         LIMIT 50
                         """
@@ -1465,9 +1586,9 @@ def process_all_task() -> dict:
                         """
                         SELECT *
                         FROM raw_news
-                        WHERE process_status IS NULL
-                           OR process_status IN ('pending', 'new', 'generated')
-                           OR (process_status = 'failed' AND COALESCE(retry_count, 0) < 3)
+                                WHERE process_status IS NULL
+                                    OR process_status IN ('pending', 'new', 'generated', 'classified')
+                                    OR (process_status = 'failed' AND COALESCE(attempt_count, 0) < 3)
                         ORDER BY created_at DESC
                         LIMIT 50
                         """
@@ -1495,87 +1616,57 @@ def process_all_task() -> dict:
 
             # FIX START - Process in parallel with asyncio.gather for speed
             async def process_single(raw_id: int) -> dict:
-                """Process a single raw_news item with retry logic."""
-                created_count = 0
+                """Process a single raw_news item with retry-safe logic."""
                 try:
                     logger.info("[PIPELINE] processing raw_news_id=%s", raw_id)
 
-                    # FIX - Increment retry count for failed items
-                    await session.execute(
-                        text("UPDATE raw_news SET retry_count = COALESCE(retry_count, 0) + 1 WHERE id = :id"),
-                        {"id": raw_id},
-                    )
-                    await session.commit()
-
-                    # Call main async processor
                     timeout_seconds = int(os.getenv("PIPELINE_PROCESS_TIMEOUT", str(settings.CELERY_TASK_TIME_LIMIT)))
+                    # Per-row exponential backoff + jitter to avoid thundering herd on retries
+                    try:
+                        async with SessionLocal() as backoff_session:
+                            ac_res = await backoff_session.execute(
+                                text("SELECT COALESCE(attempt_count, 0) FROM raw_news WHERE id = :id"),
+                                {"id": raw_id},
+                            )
+                            attempt_count = int(ac_res.scalar_one_or_none() or 0)
+                    except Exception:
+                        attempt_count = 0
+                    backoff_base = min(2 ** max(0, attempt_count), 30)
+                    delay_seconds = float(backoff_base) + random.uniform(0, 1)
+                    await asyncio.sleep(delay_seconds)
                     try:
                         result = await asyncio.wait_for(
                             _process_raw_news_async(raw_id, attempt=1),
                             timeout=timeout_seconds,
                         )
-                    except asyncio.TimeoutError as e:
-                        await session.execute(
-                            text("UPDATE raw_news SET process_status = :st, error_message = :err WHERE id = :id"),
-                            {"st": "failed", "err": f"timeout after {timeout_seconds}s", "id": raw_id},
-                        )
-                        await session.commit()
+                    except asyncio.TimeoutError:
                         logger.error("[PIPELINE] timeout raw_news_id=%s", raw_id)
-                        return {"status": "failed", "raw_id": raw_id, "created": 0}
-                    except Exception as e:
-                        await session.execute(
-                            text("UPDATE raw_news SET process_status = :st, error_message = :err WHERE id = :id"),
-                            {"st": "failed", "err": str(e)[:2000], "id": raw_id},
-                        )
-                        await session.commit()
-                        logger.exception("[PIPELINE] failed raw_news_id=%s", raw_id)
-                        return {"status": "failed", "raw_id": raw_id, "created": 0}
+                        return {"status": "failed", "raw_id": raw_id, "created": 0, "reason": "timeout"}
 
-                    if not result or result.get("status") != "generated":
-                        await session.execute(
-                            text("UPDATE raw_news SET process_status = :st, error_message = :err WHERE id = :id"),
-                            {"st": "failed", "err": "generation_failed", "id": raw_id},
-                        )
-                        await session.commit()
-                        return {"status": "failed", "raw_id": raw_id, "created": 0}
+                    if not result:
+                        return {"status": "failed", "raw_id": raw_id, "created": 0, "reason": "empty_result"}
 
-                    # FIX START - Count ai_news created for this raw_news
-                    ai_news_result = await session.execute(
-                        text("SELECT COUNT(*) FROM ai_news WHERE raw_news_id = :raw_id"),
-                        {"raw_id": raw_id},
-                    )
-                    created_count = ai_news_result.scalar_one() or 0
-                    logger.info(f"[PIPELINE] ai_news_count={created_count} for raw_news_id={raw_id}")
-                    # FIX END
+                    if result.get("status") == "skipped":
+                        return {"status": "skipped", "raw_id": raw_id, "created": 0}
 
-                    # CRITICAL FIX: Only mark as completed if ai_news was actually created
+                    if result.get("status") not in {"generated", "completed"}:
+                        return {"status": "failed", "raw_id": raw_id, "created": 0, "reason": "generation_failed"}
+
+                    created_count = len(result.get("ai_news_ids") or [])
                     if created_count == 0:
-                        logger.error(f"[PIPELINE] NO_AI_NEWS raw_news_id={raw_id} - marking as failed")
-                        await session.execute(
-                            text("UPDATE raw_news SET process_status = :st, error_message = :err WHERE id = :id"),
-                            {"st": "failed", "err": "ai_news creation failed - no records created", "id": raw_id},
-                        )
-                        await session.commit()
                         return {"status": "failed", "raw_id": raw_id, "created": 0, "reason": "no_ai_news_created"}
 
-                    # Success: mark as 'completed'
-                    await session.execute(
-                        text("UPDATE raw_news SET process_status = :st, error_message = NULL WHERE id = :id"),
-                        {"st": "completed", "id": raw_id},
-                    )
-                    await session.commit()
-                    logger.info(f"[PIPELINE] COMPLETED raw_news_id={raw_id} ai_news_count={created_count}")
+                    async with SessionLocal() as update_session:
+                        await update_session.execute(
+                            text("UPDATE raw_news SET process_status = :st, error_message = NULL WHERE id = :id"),
+                            {"st": "completed", "id": raw_id},
+                        )
+                        await update_session.commit()
+
+                    logger.info("[PIPELINE] COMPLETED raw_news_id=%s ai_news_count=%s", raw_id, created_count)
                     return {"status": "processed", "raw_id": raw_id, "created": created_count}
 
-                except Exception as e:
-                    try:
-                        await session.execute(
-                            text("UPDATE raw_news SET process_status = :st, error_message = :err WHERE id = :id"),
-                            {"st": "failed", "err": str(e)[:2000], "id": raw_id},
-                        )
-                        await session.commit()
-                    except Exception:
-                        logger.exception("[PIPELINE] Failed to persist failure status raw_news_id=%s", raw_id)
+                except Exception:
                     logger.exception("[PIPELINE] failed raw_news_id=%s", raw_id)
                     return {"status": "failed", "raw_id": raw_id, "created": 0}
 

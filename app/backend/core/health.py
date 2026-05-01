@@ -499,10 +499,10 @@ async def get_pipeline_metrics(timeframe_hours: int = 24) -> PipelineMetrics:
         completed_result = await session.execute(
             text(
                 """
-                SELECT COUNT(*)
-                FROM raw_news
-                WHERE created_at >= :cutoff
-                  AND process_status = 'generated'
+                                SELECT COUNT(*)
+                                FROM raw_news
+                                WHERE created_at >= :cutoff
+                                    AND process_status IN ('generated', 'completed')
                 """
             ),
             {"cutoff": cutoff},
@@ -525,10 +525,10 @@ async def get_pipeline_metrics(timeframe_hours: int = 24) -> PipelineMetrics:
         pending_result = await session.execute(
             text(
                 """
-                SELECT COUNT(*)
-                FROM raw_news
-                WHERE created_at >= :cutoff
-                  AND process_status IN ('pending', 'classified')
+                                SELECT COUNT(*)
+                                FROM raw_news
+                                WHERE created_at >= :cutoff
+                                    AND process_status IN ('pending', 'classified', 'processing')
                 """
             ),
             {"cutoff": cutoff},
@@ -553,13 +553,13 @@ async def get_pipeline_metrics(timeframe_hours: int = 24) -> PipelineMetrics:
         latency_rows_result = await session.execute(
             text(
                 """
-                SELECT rn.id,
-                       rn.created_at AS raw_created_at,
-                       MIN(an.created_at) AS first_ai_created_at
-                FROM raw_news rn
-                LEFT JOIN ai_news an ON an.raw_news_id = rn.id
-                WHERE rn.created_at >= :cutoff
-                  AND rn.process_status = 'generated'
+                  SELECT rn.id,
+                      rn.created_at AS raw_created_at,
+                      MIN(an.created_at) AS first_ai_created_at
+                  FROM raw_news rn
+                  LEFT JOIN ai_news an ON an.raw_news_id = rn.id
+                  WHERE rn.created_at >= :cutoff
+                    AND rn.process_status IN ('generated', 'completed')
                 GROUP BY rn.id, rn.created_at
                 """
             ),
