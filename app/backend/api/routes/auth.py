@@ -23,7 +23,7 @@ from app.backend.schemas.auth import (
     TokenResponse,
     UserPublic,
 )
-from app.backend.services.email_service import send_verification_code
+from app.backend.services.email_service import send_verification_code_async
 from app.backend.services.auth_service import (
     authenticate_user,
     check_email_exists,
@@ -76,7 +76,7 @@ async def register_start(
         password=payload.password,
     )
 
-    sent, provider_error = send_verification_code(payload.email, data["code"])
+    sent, provider_error = await send_verification_code_async(payload.email, data["code"])
     if not sent and not settings.AUTH_DEBUG_RETURN_CODE:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

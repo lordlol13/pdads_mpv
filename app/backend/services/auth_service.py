@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.backend.core.config import settings
 from app.backend.core.logging import ContextLogger
 from app.backend.core.security import create_access_token, hash_password, verify_password
-from app.backend.services.email_service import send_password_reset_code, send_verification_code
+from app.backend.services.email_service import send_password_reset_code_async, send_verification_code_async
 from app.backend.services.recommender_service import refresh_user_embedding
 
 
@@ -830,7 +830,7 @@ async def resend_registration_code(session: AsyncSession, verification_id: str) 
     await session.commit()
 
     email = str(row.get("email") or "").strip().lower()
-    sent, provider_error = send_verification_code(email, code)
+    sent, provider_error = await send_verification_code_async(email, code)
     provider_error_str = None
     if provider_error:
         provider_error_str = (
@@ -1138,7 +1138,7 @@ async def create_password_reset_request(session: AsyncSession, *, email: str) ->
     )
     await session.commit()
 
-    sent, provider_error = send_password_reset_code(email_clean, code)
+    sent, provider_error = await send_password_reset_code_async(email_clean, code)
     if not sent:
         logger.warning("Password reset email send failed for %s: %s", email_clean, provider_error)
     return True

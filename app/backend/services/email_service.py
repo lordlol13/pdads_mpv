@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import smtplib
 from email.message import EmailMessage
@@ -184,3 +185,11 @@ def send_password_reset_code(email: str, code: str) -> Tuple[bool, Optional[Dict
     except Exception as exc:
         logger.exception("Failed to send password reset email to %s", email)
         return False, {"provider": "smtp", "error": str(exc)}
+
+
+async def send_verification_code_async(email: str, code: str) -> Tuple[bool, Optional[Dict[str, Any]]]:
+    return await asyncio.to_thread(send_verification_code, email, code)
+
+
+async def send_password_reset_code_async(email: str, code: str) -> Tuple[bool, Optional[Dict[str, Any]]]:
+    return await asyncio.to_thread(send_password_reset_code, email, code)
