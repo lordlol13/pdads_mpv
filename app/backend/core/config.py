@@ -52,6 +52,11 @@ class Settings(BaseSettings):
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
     SESSION_SECRET_KEY: str = ""
 
+    # Observability & Monitoring
+    SENTRY_DSN: str = ""  # Sentry error tracking DSN
+    ALERT_WEBHOOK_URL: str = ""  # Slack/Discord webhook for critical alerts
+    ERROR_RATE_THRESHOLD: float = 0.3  # Error rate threshold for degraded mode
+
     # Frontend OAuth redirect URLs - Railway production defaults
     OAUTH_FRONTEND_SUCCESS_URL: str = "https://pdads-mpv.vercel.app"
     OAUTH_FRONTEND_ERROR_URL: str = "https://pdads-mpv.vercel.app"

@@ -443,35 +443,68 @@ def get_uptime_seconds() -> float:
 # Placeholder for metrics collection
 # In production, use Prometheus or similar
 class MetricsCollector:
-    """Simple metrics collector."""
-    
+    """Simple metrics collector with error rate tracking."""
+
     def __init__(self):
         self.total_requests = 0
         self.total_errors = 0
         self.cache_hits = 0
         self.cache_misses = 0
         self.rate_limit_hits = 0
-    
+        self._error_window: list[tuple[datetime, str]] = []  # (timestamp, error_type)
+        self._window_size = 100  # Keep last 100 errors
+
     def record_request(self, is_error: bool = False):
         self.total_requests += 1
         if is_error:
             self.total_errors += 1
-    
+
+    def record_error(self, error_type: str = "general"):
+        """Record error for error rate tracking."""
+        self.total_errors += 1
+        now = datetime.now(timezone.utc)
+        self._error_window.append((now, error_type))
+        # Keep only last N errors
+        if len(self._error_window) > self._window_size:
+            self._error_window = self._error_window[-self._window_size:]
+
+    def get_error_rate(self, window_seconds: int = 300) -> float:
+        """Calculate error rate over the specified window."""
+        if self.total_requests == 0:
+            return 0.0
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=window_seconds)
+        recent_errors = sum(1 for ts, _ in self._error_window if ts > cutoff)
+        # Approximate: use total requests as denominator
+        return min(recent_errors / max(self.total_requests, 1), 1.0)
+
+    def check_error_rate_threshold(self) -> bool:
+        """Check if error rate exceeds threshold for degraded mode."""
+        error_rate = self.get_error_rate()
+        if error_rate > settings.ERROR_RATE_THRESHOLD:
+            logger.error(
+                "[SYSTEM DEGRADED] Error rate %.2f%% exceeds threshold %.2f%%",
+                error_rate * 100,
+                settings.ERROR_RATE_THRESHOLD * 100
+            )
+            set_degraded_mode(f"High error rate: {error_rate:.1%}")
+            return True
+        return False
+
     def record_cache_hit(self):
         self.cache_hits += 1
-    
+
     def record_cache_miss(self):
         self.cache_misses += 1
-    
+
     def record_rate_limit(self):
         self.rate_limit_hits += 1
-    
+
     def get_metrics(self) -> MetricsData:
         total_cache = self.cache_hits + self.cache_misses
         cache_hit_rate = (
             self.cache_hits / total_cache if total_cache > 0 else 0.0
         )
-        
+
         return MetricsData(
             uptime_seconds=get_uptime_seconds(),
             total_requests=self.total_requests,

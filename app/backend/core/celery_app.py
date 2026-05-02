@@ -1,4 +1,5 @@
 from celery import Celery
+from celery.signals import task_failure, task_retry, task_success
 import os
 import logging
 from typing import Any
@@ -153,3 +154,64 @@ def send_task_safe(name: str, args: tuple | None = None, kwargs: dict | None = N
     except Exception as e:
         logger.warning("[CELERY] Failed to send task %s: %s", name, e)
         return None
+
+
+# =====================================================================
+# Celery Task Observability Signals
+# =====================================================================
+
+@task_failure.connect
+def on_task_failure(sender=None, task_id=None, exception=None, args=None, kwargs=None, **extras):
+    """Log and track task failures for observability."""
+    logger.exception(
+        "[CELERY ERROR] Task %s failed: %s",
+        sender.name if sender else "unknown",
+        exception,
+        extra={"task_id": task_id, "args": str(args)[:200], "kwargs": str(kwargs)[:200]}
+    )
+
+
+@task_retry.connect
+def on_task_retry(sender=None, request=None, reason=None, **extras):
+    """Log task retries."""
+    logger.warning(
+        "[CELERY RETRY] Task %s retrying: %s",
+        sender.name if sender else "unknown",
+        reason,
+        extra={"task_id": request.id if request else None}
+    )
+
+
+@task_success.connect
+def on_task_success(sender=None, result=None, **extras):
+    """Log successful task completion."""
+    logger.info(
+        "[CELERY SUCCESS] Task %s completed",
+        sender.name if sender else "unknown",
+    )
+
+
+# =====================================================================
+# Celery Task Base with Retry Logic
+# =====================================================================
+
+def create_resilient_task(
+    func,
+    autoretry_for=(Exception,),
+    max_retries=3,
+    retry_backoff=True,
+    retry_backoff_max=600,
+    retry_jitter=True,
+    default_retry_delay=60,
+):
+    """Create a resilient Celery task with automatic retry configuration."""
+    return celery_app.task(
+        func,
+        bind=True,
+        autoretry_for=autoretry_for,
+        max_retries=max_retries,
+        retry_backoff=retry_backoff,
+        retry_backoff_max=retry_backoff_max,
+        retry_jitter=retry_jitter,
+        default_retry_delay=default_retry_delay,
+    )

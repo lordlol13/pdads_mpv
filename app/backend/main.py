@@ -48,6 +48,29 @@ from app.backend.core.logging import ContextLogger
 logger = ContextLogger(__name__)
 
 # =====================================================================
+# Sentry Error Tracking (Production Observability)
+# =====================================================================
+if settings.SENTRY_DSN:
+    import sentry_sdk
+    from sentry_sdk.integrations.fastapi import FastApiIntegration
+    from sentry_sdk.integrations.celery import CeleryIntegration
+    from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
+
+    sentry_sdk.init(
+        dsn=settings.SENTRY_DSN,
+        environment=settings.APP_ENV,
+        traces_sample_rate=1.0 if settings.APP_ENV in ("production", "staging") else 0.1,
+        profiles_sample_rate=0.1,
+        integrations=[
+            FastApiIntegration(),
+            CeleryIntegration(),
+            SqlalchemyIntegration(),
+        ],
+        before_send=lambda event, hint: event if settings.APP_ENV in ("production", "staging") else None,
+    )
+    logger.info("[SENTRY] Error tracking initialized", environment=settings.APP_ENV)
+
+# =====================================================================
 # Lifespan Event Handler (FastAPI 0.93+)
 # =====================================================================
 
@@ -359,7 +382,12 @@ async def general_exception_handler(request: Request, exc: Exception):
     """Handle unexpected exceptions with sanitized error response."""
     correlation_id = getattr(request.state, "correlation_id", None)
     logger.set_correlation_id(correlation_id)
-    
+
+    # Track error for error rate monitoring
+    from app.backend.core.health import metrics
+    metrics.record_error(error_type=exc.__class__.__name__)
+    metrics.check_error_rate_threshold()
+
     logger.exception(
         "Unhandled exception",
         correlation_id=correlation_id,
