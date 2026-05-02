@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field, ConfigDict
 from sqlalchemy import text
 
 from app.backend.core.config import settings
-from app.backend.db.session import SessionLocal, engine
+from app.backend.db import session as db_session
 from app.backend.services.resilience_service import _cache_manager, _news_api_limiter
 import logging
 import os
@@ -153,7 +153,7 @@ async def check_database_health() -> ComponentHealth:
     """Check database connectivity — handles degraded mode."""
     start = datetime.now()
     # PRODUCTION FIX: Handle None engine (degraded mode)
-    if engine is None or SessionLocal is None:
+    if db_session.engine is None or db_session.SessionLocal is None:
         return ComponentHealth(
             name="database",
             status=HealthStatus.DEGRADED,  # Degraded, not unhealthy
@@ -162,7 +162,7 @@ async def check_database_health() -> ComponentHealth:
             details={"degraded": True, "reason": "DATABASE_URL not configured or invalid"},
         )
     try:
-        async with SessionLocal() as session:
+        async with db_session.SessionLocal() as session:
             await session.execute(text("SELECT 1"))
         response_time = (datetime.now() - start).total_seconds() * 1000
         return ComponentHealth(
@@ -289,7 +289,7 @@ async def check_parser_health() -> ComponentHealth:
     """
     start = datetime.now()
     try:
-        async with SessionLocal() as session:
+        async with db_session.SessionLocal() as session:
             result = await session.execute(
                 text("SELECT last_parsed_at FROM system_state WHERE name = :name"),
                 {"name": "parser"},
@@ -514,11 +514,15 @@ class MetricsCollector:
         )
 
 
+# Global metrics collector - initialized before use
+metrics = MetricsCollector()
+
+
 async def get_recommendation_metrics(timeframe_hours: int = 24) -> RecommendationMetrics:
     """Compute recommendation quality metrics from interaction logs."""
     cutoff = datetime.now(timezone.utc) - timedelta(hours=max(1, timeframe_hours))
 
-    async with SessionLocal() as session:
+    async with db_session.SessionLocal() as session:
         try:
             impressions_result = await session.execute(
                 text(
@@ -619,7 +623,7 @@ async def get_pipeline_metrics(timeframe_hours: int = 24) -> PipelineMetrics:
     """Compute pipeline operational metrics from raw_news and ai_news."""
     cutoff = datetime.now(timezone.utc) - timedelta(hours=max(1, timeframe_hours))
 
-    async with SessionLocal() as session:
+    async with db_session.SessionLocal() as session:
         total_result = await session.execute(
             text(
                 """
@@ -738,7 +742,3 @@ async def get_extended_metrics(timeframe_hours: int = 24) -> ExtendedMetricsData
         recommendation=recommendation,
         pipeline=pipeline,
     )
-
-
-# Global metrics collector
-metrics = MetricsCollector()

@@ -3,7 +3,7 @@ from typing import Optional
 import asyncio
 import re
 
-from app.backend.db.session import SessionLocal
+from app.backend.db import session as db_session
 from app.backend.services.ingestion_service import create_raw_news
 from app.backend.services.system_service import update_last_parsed_at
 
@@ -152,7 +152,7 @@ async def run_parser_async(
     import logging
     logger = logging.getLogger(__name__)
     
-    async with SessionLocal() as session:
+    async with db_session.SessionLocal() as session:
         try:
             from app.backend.services.article_processor import process_article
             from app.backend.services.http_client import get_async_client

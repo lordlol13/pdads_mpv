@@ -30,6 +30,7 @@ from app.backend.services.recommender_service import refresh_ai_news_embedding
 from app.backend.db.session import SessionLocal
 # FIX START - Observability integration
 from app.backend.services.async_utils import gather_with_concurrency
+from app.backend.services.observability_service import metrics
 
 
 BAD_PHRASES = [
@@ -1710,11 +1711,15 @@ def process_all_task() -> dict:
             )
 
             # Update metrics
-            await metrics.increment("pipeline.runs", 1)
-            await metrics.increment("pipeline.processed", processed)
-            await metrics.increment("pipeline.failed", failed)
-            await metrics.increment("pipeline.created", total_created)
-            await metrics.gauge("pipeline.ai_news_total", ai_news_count + total_created)
+            try:
+                if metrics is not None:
+                    await metrics.increment("pipeline.runs", 1)
+                    await metrics.increment("pipeline.processed", processed)
+                    await metrics.increment("pipeline.failed", failed)
+                    await metrics.increment("pipeline.created", total_created)
+                    await metrics.gauge("pipeline.ai_news_total", ai_news_count + total_created)
+            except Exception as e:
+                logger.warning(f"Failed to update metrics: {e}")
 
             # Structured logging
             obs_logger.info(

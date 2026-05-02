@@ -315,9 +315,9 @@ class Timer:
 async def get_system_metrics() -> dict[str, Any]:
     """Get comprehensive system metrics."""
     from sqlalchemy import text
-    from app.backend.db.session import SessionLocal
+    from app.backend.db import session as db_session
 
-    async with SessionLocal() as session:
+    async with db_session.SessionLocal() as session:
         # Database counts
         raw_count = await session.execute(text("SELECT COUNT(*) FROM raw_news"))
         ai_count = await session.execute(text("SELECT COUNT(*) FROM ai_news"))
@@ -404,32 +404,48 @@ async def log_startup_info():
     Log startup information for observability.
     Call this on application startup.
     """
-    from app.backend.core.config import settings
-    from app.backend.db.session import SessionLocal
-    from sqlalchemy import text
+    try:
+        from app.backend.core.config import settings
+        from app.backend.db import session as db_session
+        from sqlalchemy import text
+        global metrics
 
-    logger = get_logger("startup")
+        logger = get_logger("startup")
 
-    async with SessionLocal() as session:
-        raw_count = await session.execute(text("SELECT COUNT(*) FROM raw_news"))
-        ai_count = await session.execute(text("SELECT COUNT(*) FROM ai_news"))
-        user_count = await session.execute(text("SELECT COUNT(*) FROM users"))
+        # Safely check if SessionLocal is callable
+        if db_session.SessionLocal is None:
+            logger.warning("SessionLocal not initialized yet, skipping startup info logging")
+            return
 
-    logger.info(
-        "Application startup",
-        version="1.0.0",
-        environment="production" if not settings.DEBUG else "development",
-        database_url=str(settings.DATABASE_URL).split("@")[-1] if settings.DATABASE_URL else "none",  # Hide credentials
-        redis_url=str(settings.REDIS_URL).split("@")[-1] if settings.REDIS_URL else "none",
-        ai_news_count=ai_count.scalar_one(),
-        raw_news_count=raw_count.scalar_one(),
-        users_count=user_count.scalar_one(),
-        celery_broker=bool(settings.CELERY_BROKER_URL),
-        openai_enabled=bool(settings.OPENAI_API_KEY),
-    )
+        async with db_session.SessionLocal() as session:
+            raw_count = await session.execute(text("SELECT COUNT(*) FROM raw_news"))
+            ai_count = await session.execute(text("SELECT COUNT(*) FROM ai_news"))
+            user_count = await session.execute(text("SELECT COUNT(*) FROM users"))
 
-    # Update metrics
-    await metrics.gauge("pipeline.ai_news_total", ai_count.scalar_one())
-    await metrics.gauge("pipeline.raw_news_total", raw_count.scalar_one())
-    await metrics.gauge("pipeline.users_total", user_count.scalar_one())
-# FIX END
+        ai_count_val = ai_count.scalar_one() or 0
+        raw_count_val = raw_count.scalar_one() or 0
+        user_count_val = user_count.scalar_one() or 0
+
+        logger.info(
+            "Application startup",
+            version="1.0.0",
+            environment="production" if not settings.DEBUG else "development",
+            database_url=str(settings.DATABASE_URL).split("@")[-1] if settings.DATABASE_URL else "none",  # Hide credentials
+            redis_url=str(settings.REDIS_URL).split("@")[-1] if settings.REDIS_URL else "none",
+            ai_news_count=ai_count_val,
+            raw_news_count=raw_count_val,
+            users_count=user_count_val,
+            celery_broker=bool(settings.CELERY_BROKER_URL),
+            openai_enabled=bool(settings.OPENAI_API_KEY),
+        )
+
+        # Update metrics (with fallback if metrics not available)
+        try:
+            if metrics is not None:
+                await metrics.gauge("pipeline.ai_news_total", float(ai_count_val))
+                await metrics.gauge("pipeline.raw_news_total", float(raw_count_val))
+                await metrics.gauge("pipeline.users_total", float(user_count_val))
+        except Exception as e:
+            logger.warning(f"Failed to update metrics: {e}")
+    except Exception as e:
+        logger.exception(f"Error in log_startup_info: {e}")

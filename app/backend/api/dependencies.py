@@ -8,7 +8,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.backend.core.config import settings
 from app.backend.core.security import decode_access_token
-from app.backend.db.session import SessionLocal
+from app.backend.db import session as db_session
 from app.backend.services.auth_service import get_user_by_id
 
 logger = logging.getLogger(__name__)
@@ -17,7 +17,11 @@ bearer_scheme = HTTPBearer(auto_error=False)
 
 async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
     """Yield DB session with automatic rollback on error."""
-    async with SessionLocal() as session:
+    if db_session.SessionLocal is None:
+        logger.error("[DB ERROR] SessionLocal not initialized")
+        raise HTTPException(status_code=503, detail="Database not initialized")
+    
+    async with db_session.SessionLocal() as session:
         try:
             yield session
             await session.commit()

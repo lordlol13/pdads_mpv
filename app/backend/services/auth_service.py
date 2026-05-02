@@ -517,9 +517,9 @@ async def upsert_oauth_user(
         user = _parse_user_dict(row)
 
         try:
-            from app.backend.core.celery_app import celery_app
+            from app.backend.core.celery_app import send_task_safe
 
-            celery_app.send_task("recommender.refresh_user_embedding", args=[int(user["id"])])
+            send_task_safe("recommender.refresh_user_embedding", args=(int(user["id"]),))
         except Exception:
             logger.exception("failed to enqueue background embedding for oauth user id=%s", user.get("id"))
 
@@ -986,9 +986,9 @@ async def complete_verified_registration(
         logger.exception("failed to seed user_feed for new user id=%s", new_user_row.get("id"))
 
     try:
-        from app.backend.core.celery_app import celery_app
+        from app.backend.core.celery_app import send_task_safe
 
-        celery_app.send_task("recommender.refresh_user_embedding", args=[int(new_user_row["id"])])
+        send_task_safe("recommender.refresh_user_embedding", args=(int(new_user_row["id"]),))
     except Exception:
         logger.exception("failed to enqueue background embedding for new user id=%s", new_user_row.get("id"))
 
@@ -1050,9 +1050,9 @@ async def register_user(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to create user")
 
     try:
-        from app.backend.core.celery_app import celery_app
+        from app.backend.core.celery_app import send_task_safe
 
-        celery_app.send_task("recommender.refresh_user_embedding", args=[int(row["id"])])
+        send_task_safe("recommender.refresh_user_embedding", args=(int(row["id"]),))
     except Exception:
         logger.exception("failed to enqueue background embedding for registered user id=%s", row.get("id"))
 

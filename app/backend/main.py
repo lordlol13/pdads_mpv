@@ -14,6 +14,7 @@ Provides REST API for:
 from pathlib import Path
 import time
 import os
+import traceback
 from contextlib import asynccontextmanager
 from sqlalchemy import text
 import asyncio
@@ -93,11 +94,6 @@ async def lifespan(app: FastAPI):
         cors_allow_origin_regex=settings.CORS_ALLOW_ORIGIN_REGEX or None,
     )
 
-    try:
-        from app.backend.services.observability_service import log_startup_info
-        await log_startup_info()
-    except Exception as e:
-        logger.warning(f"Startup observability logging failed: {e}")
     # ---------- Safe startup checks (DB, Redis, Alembic) ----------
     try:
         # Initialize DB engine first (lazy initialization)
@@ -121,23 +117,23 @@ async def lifespan(app: FastAPI):
             set_degraded_mode(f"Database unavailable: {e}")
             logger.warning("Database health check failed after retries; continuing in degraded mode", error=str(e))
 
-        # Redis health check with retries
+        # Redis health check with retries in production; fail fast in local/dev.
         async def _check_redis_once():
-            try:
-                client = await _cache_manager._get_client()
-                if client is None:
-                    raise RuntimeError("Redis client not available")
-                await client.ping()
-            except Exception as _e:
-                raise
+            client = await _cache_manager._get_client()
+            if client is None:
+                raise RuntimeError("Redis client not available")
+            await client.ping()
 
         try:
-            await retry_async(_check_redis_once, max_attempts=5, base_delay_seconds=1)
+            if settings.DEBUG or settings.APP_ENV.lower() == "dev":
+                await _check_redis_once()
+            else:
+                await retry_async(_check_redis_once, max_attempts=5, base_delay_seconds=1)
             logger.info("Redis health check passed")
         except Exception as e:
             from app.backend.core.health import set_degraded_mode
             set_degraded_mode(f"Redis unavailable: {e}")
-            logger.warning("Redis health check failed after retries; continuing in degraded mode", error=str(e))
+            logger.warning("Redis health check failed; continuing in degraded mode", error=str(e))
 
         # Run alembic upgrade head non-fatally
         async def _run_alembic():
@@ -397,7 +393,10 @@ async def general_exception_handler(request: Request, exc: Exception):
     # Don't expose internal error details in production
     if settings.DEBUG:
         message = str(exc)
-        details = {"exception": exc.__class__.__name__}
+        details = {
+            "exception": exc.__class__.__name__,
+            "traceback": traceback.format_exc(),
+        }
     else:
         message = "Internal server error. Please try again later."
         details = None
@@ -468,7 +467,6 @@ async def root_readiness():
 
 # API routes
 app.include_router(auth_router, prefix="/api")
-app.include_router(auth_router)  # Also register auth router at root for compatibility with clients calling /auth/*
 app.include_router(ingestion_router, prefix="/api")
 app.include_router(feed_router, prefix="/api")
 app.include_router(pipeline_router, prefix="/api")

@@ -47,6 +47,9 @@ from app.backend.services.recommender_service import (
 from app.backend.services.user_behavior import compute_user_preferences, add_exploration
 
 from app.backend.core.config import settings
+from app.backend.core.logging import ContextLogger
+
+logger = ContextLogger(__name__)
 
 from app.backend.services.media_service import canonical_image_key
 
@@ -2055,10 +2058,12 @@ async def get_user_feed(session: AsyncSession, user_id: int, limit: int = 50) ->
     ai_news_total = ai_news_total_result.scalar_one() or 0
 
     if ai_news_total < 10:
-        logger.warning("[FEED] ai_news count low (%s < 10), bypassing filters", ai_news_total)
+        logger.warning(f"[FEED] ai_news count low ({ai_news_total} < 10), bypassing filters")
         bypass_result = await session.execute(
             text("""
                 SELECT
+                    :user_id::integer AS user_id,
+                    0::integer AS user_feed_id,
                     an.id AS ai_news_id,
                     an.raw_news_id,
                     an.target_persona,
@@ -2077,13 +2082,13 @@ async def get_user_feed(session: AsyncSession, user_id: int, limit: int = 50) ->
                     an.embedding_vector
                 FROM ai_news an
                 ORDER BY an.created_at DESC
-                LIMIT :limit
+                LIMIT :limit::integer
             """),
-            {"limit": limit},
+            {"user_id": user_id, "limit": limit},
         )
         bypass_rows = [dict(row) for row in bypass_result.mappings().all()]
         if bypass_rows:
-            logger.info("[FEED] bypass returned %s rows", len(bypass_rows))
+            logger.info(f"[FEED] bypass returned {len(bypass_rows)} rows")
             return bypass_rows[:limit]
     # FIX END
 
@@ -2299,7 +2304,7 @@ async def get_user_feed(session: AsyncSession, user_id: int, limit: int = 50) ->
 
         if not deduped_rows or len(deduped_rows) < 10:
 
-            logger.info("[FEED FALLBACK] AI feed has %s items, fetching from raw_news", len(deduped_rows) if deduped_rows else 0)
+            logger.info(f"[FEED FALLBACK] AI feed has {len(deduped_rows) if deduped_rows else 0} items, fetching from raw_news")
 
             q = """
 
@@ -2317,7 +2322,7 @@ async def get_user_feed(session: AsyncSession, user_id: int, limit: int = 50) ->
 
             raw_rows = [dict(r) for r in res.mappings().all()]
 
-            logger.info("[FEED FALLBACK] Found %s items in raw_news", len(raw_rows))
+            logger.info(f"[FEED FALLBACK] Found {len(raw_rows)} items in raw_news")
 
             mapped = []
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Iterable
 
-from app.backend.db.session import SessionLocal
+from app.backend.db import session as db_session
 from app.backend.services.ingestion_service import create_raw_news
 
 
@@ -19,7 +19,7 @@ async def save_batch(articles: Iterable[dict[str, Any]], dry_run: bool = True) -
     errors = 0
     results = []
 
-    async with SessionLocal() as session:
+    async with db_session.SessionLocal() as session:
         for a in articles:
             payload = {
                 "title": a.get("title") or "",

@@ -1,12 +1,10 @@
-import logging
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-logger = logging.getLogger(__name__)
-
 from app.backend.api.dependencies import get_current_user, get_db_session
 from app.backend.core.config import settings
+from app.backend.core.logging import ContextLogger
 from app.backend.schemas.auth import (
     AuthForgotPasswordRequest,
     AuthForgotPasswordResponse,
@@ -47,7 +45,6 @@ from app.backend.services.oauth_service import (
     get_enabled_oauth_providers,
     handle_oauth_callback,
 )
-from app.backend.core.logging import ContextLogger
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 logger = ContextLogger(__name__)
@@ -137,38 +134,44 @@ async def register_complete(
         city=payload.city,
         region_code=payload.region_code,
     )
-    return UserPublic(**user)
+    return user
 
 
 @router.post("/register", response_model=UserPublic)
 async def register(payload: AuthRegisterRequest, session: AsyncSession = Depends(get_db_session)):
-    user = await register_user(
-        session,
-        username=payload.username,
-        email=payload.email,
-        password=payload.password,
-        location=payload.location,
-        interests=payload.interests,
-        country_code=payload.country_code,
-        region_code=payload.region_code,
-    )
-    return UserPublic(**user)
+    try:
+        user = await register_user(
+            session,
+            username=payload.username,
+            email=payload.email,
+            password=payload.password,
+            location=payload.location,
+            interests=payload.interests,
+            country_code=payload.country_code,
+            region_code=payload.region_code,
+        )
+        return user
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"[AUTH] Registration failed: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Registration service error")
 
 
 @router.post("/login", response_model=TokenResponse)
 async def login(payload: AuthLoginRequest, session: AsyncSession = Depends(get_db_session)):
     try:
-        logger.info("[AUTH] Login attempt: %s", payload.identifier)
+        logger.info(f"[AUTH] Login attempt: {payload.identifier}")
         user = await authenticate_user(session, payload.identifier, payload.password)
-        logger.info("[AUTH] User authenticated: id=%s", user.get("id"))
+        logger.info(f"[AUTH] User authenticated: id={user.get('id')}")
         token = issue_access_token(user)
-        logger.info("[AUTH] Token issued for user: %s", user.get("id"))
+        logger.info(f"[AUTH] Token issued for user: {user.get('id')}")
         return TokenResponse(access_token=token, expires_in_minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
     except HTTPException:
         # Re-raise HTTPException (401, 403) as-is for proper client handling
         raise
     except Exception as e:
-        logger.exception("[AUTH] Login failed for %s: %s", payload.identifier, e)
+        logger.exception(f"[AUTH] Login failed for {payload.identifier}: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Authentication service error")
 
 
@@ -196,7 +199,7 @@ async def oauth_callback(
         return RedirectResponse(url=build_oauth_error_redirect(message, provider), status_code=302)
     except Exception:
         correlation_id = getattr(request.state, "correlation_id", None)
-        logger.exception("OAuth callback crashed", correlation_id=correlation_id, provider=provider)
+        logger.exception("OAuth callback crashed", extra={"correlation_id": correlation_id, "provider": provider})
         message = "OAuth server error"
         if correlation_id:
             message = f"{message} (correlation_id={correlation_id})"

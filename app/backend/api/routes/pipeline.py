@@ -5,7 +5,7 @@ import logging
 LOG = logging.getLogger(__name__)
 
 from app.backend.core.celery_app import celery_app
-from app.backend.db.session import SessionLocal
+from app.backend.db import session as db_session
 from app.backend.schemas.pipeline import (
     EnqueueResponse,
     TaskStatusResponse,
@@ -46,7 +46,7 @@ async def trigger_parse():
 async def process_all_pending():
     """Process all raw_news with status 'pending'. Returns count of queued items."""
     try:
-        async with SessionLocal() as session:
+        async with db_session.SessionLocal() as session:
             status_debug = await session.execute(
                 text("SELECT process_status, COUNT(*) FROM raw_news GROUP BY process_status")
             )
@@ -168,7 +168,7 @@ async def list_raw_news(limit: int = Query(default=50, ge=1, le=200)):
     ORDER BY id DESC
     LIMIT :limit
     """
-    async with SessionLocal() as session:
+    async with db_session.SessionLocal() as session:
         result = await session.execute(text(query), {"limit": limit})
         return [RawNewsItem(**dict(row)) for row in result.mappings().all()]
 
@@ -184,7 +184,7 @@ async def list_ai_news(limit: int = Query(default=50, ge=1, le=200)):
     ORDER BY id DESC
     LIMIT :limit
     """
-    async with SessionLocal() as session:
+    async with db_session.SessionLocal() as session:
         result = await session.execute(text(query), {"limit": limit})
         return [AiNewsItem(**dict(row)) for row in result.mappings().all()]
 
@@ -282,7 +282,7 @@ async def admin_reset():
     - Resets attempt_count to 0
     """
     try:
-        async with SessionLocal() as session:
+        async with db_session.SessionLocal() as session:
             # Delete all ai_news records
             delete_ai_query = "DELETE FROM ai_news"
             result_ai = await session.execute(text(delete_ai_query))
