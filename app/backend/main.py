@@ -77,14 +77,17 @@ async def lifespan(app: FastAPI):
         logger.warning(f"Startup observability logging failed: {e}")
     # ---------- Safe startup checks (DB, Redis, Alembic) ----------
     try:
-        # DB health check with retries (1,2,4,8,16)
-        from app.backend.db.session import engine
+        # Initialize DB engine first (lazy initialization)
+        import app.backend.db.session as db_session
         from app.backend.services.resilience_service import retry_async, _cache_manager
 
+        await db_session.init_engine()
+
+        # DB health check with retries (1,2,4,8,16)
         async def _check_db_once():
-            if engine is None:
+            if db_session.engine is None:
                 raise RuntimeError("DB engine not initialized")
-            async with engine.connect() as conn:
+            async with db_session.engine.connect() as conn:
                 await conn.execute(text("SELECT 1"))
 
         try:
@@ -93,7 +96,7 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             from app.backend.core.health import set_degraded_mode
             set_degraded_mode(f"Database unavailable: {e}")
-            logger.warning("Database health check failed after retries; continuing in degraded mode: %s", e)
+            logger.warning("Database health check failed after retries; continuing in degraded mode", error=str(e))
 
         # Redis health check with retries
         async def _check_redis_once():
@@ -111,7 +114,7 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             from app.backend.core.health import set_degraded_mode
             set_degraded_mode(f"Redis unavailable: {e}")
-            logger.warning("Redis health check failed after retries; continuing in degraded mode: %s", e)
+            logger.warning("Redis health check failed after retries; continuing in degraded mode", error=str(e))
 
         # Run alembic upgrade head non-fatally
         async def _run_alembic():
@@ -126,34 +129,34 @@ async def lifespan(app: FastAPI):
             # If multiple heads appear in output, log and skip upgrade
             head_lines = [l.strip() for l in stdout.splitlines() if l.strip()]
             if len(head_lines) > 1 or "Multiple head revisions are present" in stdout:
-                logger.error("Alembic multiple heads detected; skipping automatic upgrade: %s", stdout)
+                logger.error("Alembic multiple heads detected; skipping automatic upgrade", stdout=stdout)
                 return
 
             # Attempt upgrade
             up = await asyncio.to_thread(_run, ["alembic", "upgrade", "head"])
             if isinstance(up, Exception):
-                logger.error("Alembic upgrade invocation failed: %s", up)
+                logger.error("Alembic upgrade invocation failed", error=str(up))
             else:
                 if up.returncode != 0:
-                    logger.warning("Alembic upgrade failed (non-fatal): %s", up.stderr)
+                    logger.warning("Alembic upgrade failed (non-fatal)", stderr=up.stderr)
                 else:
-                    logger.info("Alembic upgrade succeeded: %s", up.stdout)
+                    logger.info("Alembic upgrade succeeded", stdout=up.stdout)
 
         try:
             await _run_alembic()
         except Exception as e:
             from app.backend.core.health import set_degraded_mode
             set_degraded_mode(f"Alembic migration failed: {e}")
-            logger.warning("Alembic check/upgrade failed (non-fatal): %s", e)
+            logger.warning("Alembic check/upgrade failed (non-fatal)", error=str(e))
 
     except Exception as _startup_exc:
-        logger.warning("Unexpected error during startup checks (continuing): %s", _startup_exc)
+        logger.warning("Unexpected error during startup checks (continuing)", error=str(_startup_exc))
 
     # PRODUCTION ALERT: Startup degraded mode check
     from app.backend.core.health import is_degraded, get_degraded_reasons
     if is_degraded():
         reasons = get_degraded_reasons()
-        logger.critical("[CRITICAL] System started in DEGRADED mode: %s", reasons)
+        logger.critical("[CRITICAL] System started in DEGRADED mode", reasons=reasons)
 
     # PRODUCTION: Periodic degraded mode warning (every 60s)
     async def _periodic_degraded_alert():
@@ -161,7 +164,7 @@ async def lifespan(app: FastAPI):
             await asyncio.sleep(60)
             if is_degraded():
                 reasons = get_degraded_reasons()
-                logger.warning("[ALERT] System still in DEGRADED mode: %s", reasons)
+                logger.warning("[ALERT] System still in DEGRADED mode", reasons=reasons)
 
     # Start periodic alert task in background (fire-and-forget)
     asyncio.create_task(_periodic_degraded_alert())

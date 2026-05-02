@@ -10,7 +10,7 @@ from typing import Any, Optional, Generic, TypeVar
 from datetime import datetime, timezone
 
 from fastapi import HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 T = TypeVar("T")
 
