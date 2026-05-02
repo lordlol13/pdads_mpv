@@ -154,9 +154,17 @@ async def register(payload: AuthRegisterRequest, session: AsyncSession = Depends
 
 @router.post("/login", response_model=TokenResponse)
 async def login(payload: AuthLoginRequest, session: AsyncSession = Depends(get_db_session)):
-    user = await authenticate_user(session, payload.identifier, payload.password)
-    token = issue_access_token(user)
-    return TokenResponse(access_token=token, expires_in_minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
+    try:
+        print(f"[LOGIN DEBUG] Starting login for: {payload.identifier}")
+        user = await authenticate_user(session, payload.identifier, payload.password)
+        print(f"[LOGIN DEBUG] User authenticated: id={user.get('id')}")
+        print(f"[LOGIN DEBUG] JWT_SECRET_KEY length: {len(settings.JWT_SECRET_KEY or '')}")
+        token = issue_access_token(user)
+        print(f"[LOGIN DEBUG] Token issued successfully")
+        return TokenResponse(access_token=token, expires_in_minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
+    except Exception as e:
+        print(f"[LOGIN DEBUG] ERROR: {type(e).__name__}: {e}")
+        raise
 
 
 @router.get("/oauth/providers", response_model=OAuthProvidersResponse)
