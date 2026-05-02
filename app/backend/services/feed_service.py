@@ -752,9 +752,9 @@ def _finalize_feed_rows(rows: list[dict[str, Any]], *, limit: int, user_id: int)
 
         emergency = _build_emergency_cards(required_total, user_id=user_id)
 
-        combined = deduped + emergency
+        needed = max(0, required_total - len(deduped))
 
-        deduped = _dedupe_feed_rows(combined, required_total)
+        deduped = deduped + emergency[:needed]
 
 
 

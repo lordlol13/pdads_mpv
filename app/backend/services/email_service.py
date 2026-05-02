@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 import smtplib
 from email.message import EmailMessage
@@ -102,13 +101,13 @@ async def send_verification_code_async(email: str, code: str) -> Tuple[bool, Opt
         return False, {"provider": "smtp", "error": str(exc)}
 
 
-def send_password_reset_code(email: str, code: str) -> Tuple[bool, Optional[Dict[str, Any]]]:
+async def send_password_reset_code(email: str, code: str) -> Tuple[bool, Optional[Dict[str, Any]]]:
     resend_html = (
         "<p>Your PDADS password reset code is: "
         f"<strong>{code}</strong></p>"
         f"<p>Code expires in {settings.PASSWORD_RESET_CODE_TTL_MINUTES} minutes.</p>"
     )
-    sent, provider_error = _send_with_resend(
+    sent, provider_error = await _send_with_resend_async(
         to_email=email,
         subject="PDADS password reset code",
         html=resend_html,
@@ -141,10 +140,6 @@ def send_password_reset_code(email: str, code: str) -> Tuple[bool, Optional[Dict
     except Exception as exc:
         logger.exception("Failed to send password reset email to %s", email)
         return False, {"provider": "smtp", "error": str(exc)}
-
-
-async def send_verification_code_async(email: str, code: str) -> Tuple[bool, Optional[Dict[str, Any]]]:
-    return await asyncio.to_thread(send_verification_code, email, code)
 
 
 async def send_password_reset_code_async(email: str, code: str) -> Tuple[bool, Optional[Dict[str, Any]]]:
