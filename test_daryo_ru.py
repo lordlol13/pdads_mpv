@@ -2,7 +2,7 @@
 import httpx
 from app.backend.services.news_api_service import _parse_rss_payload
 
-async def test():
+async def main():
     async with httpx.AsyncClient(follow_redirects=True) as client:
         try:
             r = await client.get('https://daryo.uz/ru/rss/')
@@ -14,4 +14,4 @@ async def test():
             print(f"Error: {e}")
 
 if __name__ == '__main__':
-    asyncio.run(test())
+    asyncio.run(main())

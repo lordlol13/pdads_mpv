@@ -53,4 +53,11 @@ async def generate_article(payload: GenerateArticleRequest, x_internal_api_key: 
         rewrite_round=payload.rewrite_round,
     )
 
+    if result is None:
+        return {
+            "final_title": payload.title,
+            "final_text": payload.raw_text[:500] if payload.raw_text else "",
+            "ai_score": 0.0,
+        }
+
     return result

@@ -15,17 +15,6 @@ def ensure_test_env(monkeypatch):
     os.environ.setdefault("OPENAI_API_KEY", "")
     os.environ.setdefault("GEMINI_API_KEY", "")
 
-    # Optionally monkeypatch heavy external functions to safe no-ops
-    try:
-        import app.backend.services.news_api_service as news_api_service
-
-        def noop_fetch(*args, **kwargs):
-            return []
-
-        monkeypatch.setattr(news_api_service, "fetch_articles_for_topics", lambda *a, **k: [])
-    except Exception:
-        pass
-
     # Provide a safe fallback if tests attempt to import a removed scraper symbol
     try:
         import app.backend.services as services_pkg

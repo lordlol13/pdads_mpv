@@ -177,6 +177,10 @@ def _parse_relative_or_local_text(text: str) -> Optional[datetime]:
         return None
     t = text.lower().strip()
     now = datetime.now(TZ)
+    # If the text looks like an ISO or absolute date, skip relative/time-only parsing
+    # so that "2026-04-19T12:34:00+05:00" is not misinterpreted as today at 12:34.
+    if re.search(r"\d{4}[-/]\d{1,2}[-/]\d{1,2}", t):
+        return None
     # hh:mm
     m = re.search(r"(\d{1,2}):(\d{2})", t)
     if m:
