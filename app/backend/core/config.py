@@ -138,6 +138,7 @@ class Settings(BaseSettings):
 
     # Concurrency controls
     LLM_CONCURRENCY: int = 2
+    GLOBAL_LLM_CONCURRENCY: int = 3  # Distributed limit across all workers (Redis-based)
 
     # Celery tuning (can be overridden via env)
     CELERY_WORKER_CONCURRENCY: int = 2

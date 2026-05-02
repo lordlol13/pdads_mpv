@@ -1178,7 +1178,7 @@ async def _openai_call_core(
                             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
                         ],
                     ),
-                    timeout=30.0,
+                    timeout=10.0,  # PRODUCTION: 10s timeout to prevent hanging
                 )
         else:
             response = await asyncio.wait_for(
@@ -1191,7 +1191,7 @@ async def _openai_call_core(
                         {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
                     ],
                 ),
-                timeout=30.0,
+                timeout=10.0,  # PRODUCTION: 10s timeout to prevent hanging
             )
 
         content = response.choices[0].message.content or "{}"

@@ -1,7 +1,7 @@
 """add processing_started_at to raw_news
 
 Revision ID: 20260424_0008
-Revises: 20260423_0007
+Revises: 20260423_0008
 Create Date: 2026-05-01 00:00:00
 """
 
@@ -10,7 +10,7 @@ import sqlalchemy as sa
 
 
 revision = "20260424_0008"
-down_revision = "20260423_0007"
+down_revision = "20260423_0008"
 branch_labels = None
 depends_on = None
 

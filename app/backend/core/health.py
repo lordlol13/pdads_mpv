@@ -9,12 +9,94 @@ from datetime import datetime, timezone, timedelta
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from sqlalchemy import text
 
 from app.backend.core.config import settings
-from app.backend.db.session import SessionLocal
+from app.backend.db.session import SessionLocal, engine
 from app.backend.services.resilience_service import _cache_manager, _news_api_limiter
+import logging
+import os
+
+logger = logging.getLogger(__name__)
+
+# PRODUCTION: External webhook alerting
+ALERT_WEBHOOK_URL = os.getenv("ALERT_WEBHOOK_URL", "").strip() or None
+
+def _log_task_error(task: asyncio.Task) -> None:
+    """Log task exception safely — senior+ level safety."""
+    try:
+        exc = task.exception()
+        if exc:
+            logger.error("[WEBHOOK ERROR] %s", exc)
+    except Exception:
+        logger.exception("[WEBHOOK ERROR] failed to retrieve exception")
+
+
+def _safe_fire_and_forget(coro) -> None:
+    """Safely schedule async task with exception logging — never crashes app."""
+    try:
+        task = asyncio.create_task(coro)
+        task.add_done_callback(_log_task_error)
+    except RuntimeError:
+        logger.warning("[WEBHOOK] Event loop not available, skipping alert")
+
+
+async def _send_degraded_alert(reasons: list[str], timestamp: str) -> None:
+    """Send degraded alert to external webhook — fire-and-forget, never blocks."""
+    if not ALERT_WEBHOOK_URL:
+        return  # No webhook configured, skip silently
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            await client.post(
+                ALERT_WEBHOOK_URL,
+                json={
+                    "status": "degraded",
+                    "reasons": reasons,
+                    "timestamp": timestamp,
+                    "service": "news-ai-backend",
+                },
+            )
+    except Exception as e:
+        # FAIL-SAFE: Ignore webhook failures, never break main app
+        logger.debug("[ALERT] Webhook send failed (ignored): %s", e)
+
+# PRODUCTION: Global degraded mode tracking
+_system_degraded = False
+_degraded_reasons: list[str] = []
+_degraded_since: datetime | None = None
+
+def set_degraded_mode(reason: str) -> None:
+    """Mark system as degraded with specific reason — logs CRITICAL and sends webhook."""
+    global _system_degraded, _degraded_reasons, _degraded_since
+    _system_degraded = True
+    if reason not in _degraded_reasons:
+        _degraded_reasons.append(reason)
+        if _degraded_since is None:
+            _degraded_since = datetime.now(timezone.utc)
+        timestamp = _degraded_since.isoformat()
+        # PRODUCTION ALERT: CRITICAL log with timestamp
+        logger.critical(
+            "[ALERT] System entered DEGRADED mode: reason=%s, timestamp=%s, all_reasons=%s",
+            reason,
+            timestamp,
+            _degraded_reasons
+        )
+        # PRODUCTION: Send external webhook alert (fire-and-forget, safe)
+        _safe_fire_and_forget(_send_degraded_alert(_degraded_reasons.copy(), timestamp))
+
+def is_degraded() -> bool:
+    """Check if system is in degraded mode."""
+    return _system_degraded
+
+def get_degraded_reasons() -> list[str]:
+    """Get list of degradation reasons."""
+    return _degraded_reasons.copy()
+
+def get_degraded_since() -> datetime | None:
+    """Get timestamp when system first entered degraded mode."""
+    return _degraded_since
 
 
 class HealthStatus(str, Enum):
@@ -39,12 +121,16 @@ class SystemHealth(BaseModel):
     timestamp: datetime
     version: str
     components: list[ComponentHealth]
-    
+
     # Uptime info
     environment: str
+
+    # PRODUCTION: Degraded mode visibility
+    degraded_reasons: list[str] = Field(default_factory=list)
+    degraded_since: str | None = None
     
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "status": "healthy",
                 "timestamp": "2026-04-10T12:00:00Z",
@@ -60,11 +146,21 @@ class SystemHealth(BaseModel):
                 ],
             }
         }
+    )
 
 
 async def check_database_health() -> ComponentHealth:
-    """Check database connectivity."""
+    """Check database connectivity — handles degraded mode."""
     start = datetime.now()
+    # PRODUCTION FIX: Handle None engine (degraded mode)
+    if engine is None or SessionLocal is None:
+        return ComponentHealth(
+            name="database",
+            status=HealthStatus.DEGRADED,  # Degraded, not unhealthy
+            message="Database unavailable — system in degraded mode",
+            response_time_ms=0.0,
+            details={"degraded": True, "reason": "DATABASE_URL not configured or invalid"},
+        )
     try:
         async with SessionLocal() as session:
             await session.execute(text("SELECT 1"))
@@ -268,12 +364,18 @@ async def get_system_health() -> SystemHealth:
     else:
         overall_status = HealthStatus.HEALTHY
     
+    # PRODUCTION: Include degraded mode info in health response
+    degraded_reasons_list = get_degraded_reasons()
+    degraded_since_dt = get_degraded_since()
+
     return SystemHealth(
         status=overall_status,
         timestamp=datetime.now(timezone.utc),
         version="0.1.0",
         environment=settings.APP_ENV,
         components=components,
+        degraded_reasons=degraded_reasons_list,
+        degraded_since=degraded_since_dt.isoformat() if degraded_since_dt else None,
     )
 
 
@@ -285,8 +387,8 @@ class MetricsData(BaseModel):
     cache_hit_rate: float
     rate_limits_triggered: int
     
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "uptime_seconds": 3600.0,
                 "total_requests": 1250,
@@ -295,6 +397,7 @@ class MetricsData(BaseModel):
                 "rate_limits_triggered": 1,
             }
         }
+    )
 
 
 class RecommendationMetrics(BaseModel):

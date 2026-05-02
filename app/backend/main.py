@@ -14,6 +14,10 @@ Provides REST API for:
 from pathlib import Path
 import time
 import os
+from contextlib import asynccontextmanager
+from sqlalchemy import text
+import asyncio
+import subprocess
 
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -44,6 +48,135 @@ from app.backend.core.logging import ContextLogger
 logger = ContextLogger(__name__)
 
 # =====================================================================
+# Lifespan Event Handler (FastAPI 0.93+)
+# =====================================================================
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Manage application lifecycle: startup and shutdown."""
+    # Startup
+    print(f"[API] Starting {settings.APP_NAME}")
+    print(f"[API] Environment: {settings.APP_ENV}")
+    print(f"[API] Debug mode: {settings.DEBUG}")
+    logger.info(
+        "Starting app",
+        app_name=settings.APP_NAME,
+        environment=settings.APP_ENV,
+        debug=settings.DEBUG,
+    )
+    logger.info(
+        "CORS configured",
+        cors_allow_origins=settings.cors_allow_origins,
+        cors_allow_origin_regex=settings.CORS_ALLOW_ORIGIN_REGEX or None,
+    )
+
+    try:
+        from app.backend.services.observability_service import log_startup_info
+        await log_startup_info()
+    except Exception as e:
+        logger.warning(f"Startup observability logging failed: {e}")
+    # ---------- Safe startup checks (DB, Redis, Alembic) ----------
+    try:
+        # DB health check with retries (1,2,4,8,16)
+        from app.backend.db.session import engine
+        from app.backend.services.resilience_service import retry_async, _cache_manager
+
+        async def _check_db_once():
+            if engine is None:
+                raise RuntimeError("DB engine not initialized")
+            async with engine.connect() as conn:
+                await conn.execute(text("SELECT 1"))
+
+        try:
+            await retry_async(_check_db_once, max_attempts=5, base_delay_seconds=1)
+            logger.info("Database health check passed")
+        except Exception as e:
+            from app.backend.core.health import set_degraded_mode
+            set_degraded_mode(f"Database unavailable: {e}")
+            logger.warning("Database health check failed after retries; continuing in degraded mode: %s", e)
+
+        # Redis health check with retries
+        async def _check_redis_once():
+            try:
+                client = await _cache_manager._get_client()
+                if client is None:
+                    raise RuntimeError("Redis client not available")
+                await client.ping()
+            except Exception as _e:
+                raise
+
+        try:
+            await retry_async(_check_redis_once, max_attempts=5, base_delay_seconds=1)
+            logger.info("Redis health check passed")
+        except Exception as e:
+            from app.backend.core.health import set_degraded_mode
+            set_degraded_mode(f"Redis unavailable: {e}")
+            logger.warning("Redis health check failed after retries; continuing in degraded mode: %s", e)
+
+        # Run alembic upgrade head non-fatally
+        async def _run_alembic():
+            def _run(cmd):
+                try:
+                    return subprocess.run(cmd, capture_output=True, text=True)
+                except Exception as ex:
+                    return ex
+
+            heads = await asyncio.to_thread(_run, ["alembic", "heads"])
+            stdout = getattr(heads, "stdout", str(heads))
+            # If multiple heads appear in output, log and skip upgrade
+            head_lines = [l.strip() for l in stdout.splitlines() if l.strip()]
+            if len(head_lines) > 1 or "Multiple head revisions are present" in stdout:
+                logger.error("Alembic multiple heads detected; skipping automatic upgrade: %s", stdout)
+                return
+
+            # Attempt upgrade
+            up = await asyncio.to_thread(_run, ["alembic", "upgrade", "head"])
+            if isinstance(up, Exception):
+                logger.error("Alembic upgrade invocation failed: %s", up)
+            else:
+                if up.returncode != 0:
+                    logger.warning("Alembic upgrade failed (non-fatal): %s", up.stderr)
+                else:
+                    logger.info("Alembic upgrade succeeded: %s", up.stdout)
+
+        try:
+            await _run_alembic()
+        except Exception as e:
+            from app.backend.core.health import set_degraded_mode
+            set_degraded_mode(f"Alembic migration failed: {e}")
+            logger.warning("Alembic check/upgrade failed (non-fatal): %s", e)
+
+    except Exception as _startup_exc:
+        logger.warning("Unexpected error during startup checks (continuing): %s", _startup_exc)
+
+    # PRODUCTION ALERT: Startup degraded mode check
+    from app.backend.core.health import is_degraded, get_degraded_reasons
+    if is_degraded():
+        reasons = get_degraded_reasons()
+        logger.critical("[CRITICAL] System started in DEGRADED mode: %s", reasons)
+
+    # PRODUCTION: Periodic degraded mode warning (every 60s)
+    async def _periodic_degraded_alert():
+        while True:
+            await asyncio.sleep(60)
+            if is_degraded():
+                reasons = get_degraded_reasons()
+                logger.warning("[ALERT] System still in DEGRADED mode: %s", reasons)
+
+    # Start periodic alert task in background (fire-and-forget)
+    asyncio.create_task(_periodic_degraded_alert())
+
+    yield
+
+    # Shutdown
+    from app.backend.services.resilience_service import shutdown_resilience
+    from app.backend.services.http_client import close_async_clients
+
+    await shutdown_resilience()
+    await close_async_clients()
+    logger.info("Application shutdown complete")
+
+# =====================================================================
 # Application Factory
 # =====================================================================
 
@@ -54,6 +187,7 @@ app = FastAPI(
     docs_url="/api/docs" if settings.DEBUG else None,
     redoc_url="/api/redoc" if settings.DEBUG else None,
     openapi_url="/api/openapi.json" if settings.DEBUG else None,
+    lifespan=lifespan,
 )
 
 # =====================================================================
@@ -326,39 +460,3 @@ else:
 # Startup/Shutdown Events
 # =====================================================================
 
-@app.on_event("startup")
-async def startup():
-    """Application startup hook."""
-    print(f"[API] Starting {settings.APP_NAME}")
-    print(f"[API] Environment: {settings.APP_ENV}")
-    print(f"[API] Debug mode: {settings.DEBUG}")
-    logger.info(
-        "Starting app",
-        app_name=settings.APP_NAME,
-        environment=settings.APP_ENV,
-        debug=settings.DEBUG,
-    )
-    logger.info(
-        "CORS configured",
-        cors_allow_origins=settings.cors_allow_origins,
-        cors_allow_origin_regex=settings.CORS_ALLOW_ORIGIN_REGEX or None,
-    )
-
-    # FIX START - Observability: log startup info
-    try:
-        from app.backend.services.observability_service import log_startup_info
-        await log_startup_info()
-    except Exception as e:
-        logger.warning(f"Startup observability logging failed: {e}")
-    # FIX END
-
-
-@app.on_event("shutdown")
-async def shutdown():
-    """Application shutdown hook."""
-    from app.backend.services.resilience_service import shutdown_resilience
-    from app.backend.services.http_client import close_async_clients
-
-    await shutdown_resilience()
-    await close_async_clients()
-    logger.info("Application shutdown complete")

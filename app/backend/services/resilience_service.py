@@ -494,6 +494,77 @@ def with_cache(namespace: str, ttl_hours: int = 24):
     return decorator
 
 
+# =====================================================================
+# Distributed Semaphore (Redis-based for cross-worker coordination)
+# =====================================================================
+
+class DistributedSemaphore:
+    """
+    Distributed semaphore using Redis for coordination across workers.
+    
+    Prevents thundering herd and rate limiting for shared resources like LLM APIs.
+    """
+    
+    def __init__(self, key: str, limit: int, ttl: int = 60):
+        """
+        Args:
+            key: Redis key for the semaphore
+            limit: Max concurrent holders
+            ttl: Auto-expire after seconds (prevents stuck locks)
+        """
+        self.key = key
+        self.limit = int(limit)
+        self.ttl = int(ttl)
+        self._acquired = False
+    
+    async def acquire(self, timeout: float = 30.0) -> bool:
+        """Try to acquire semaphore slot within timeout."""
+        try:
+            client = await _cache_manager._get_client()
+            start = time.time()
+            
+            while time.time() - start < timeout:
+                val = await client.incr(self.key)
+                
+                # First to acquire: set expiry
+                if val == 1:
+                    await client.expire(self.key, self.ttl)
+                
+                if val <= self.limit:
+                    self._acquired = True
+                    return True
+                
+                # Exceeded limit: decrement and backoff
+                await client.decr(self.key)
+                await asyncio.sleep(0.1 + random.random() * 0.4)
+            
+            return False
+        
+        except Exception as e:
+            logger.error(f"DistributedSemaphore acquire failed: {e}")
+            # Fail open on Redis errors (allow operation)
+            return True
+    
+    async def release(self):
+        """Release semaphore slot."""
+        if self._acquired:
+            try:
+                client = await _cache_manager._get_client()
+                await client.decr(self.key)
+                self._acquired = False
+            except Exception as e:
+                logger.error(f"DistributedSemaphore release failed: {e}")
+    
+    async def __aenter__(self):
+        acquired = await self.acquire()
+        if not acquired:
+            raise TimeoutError(f"Failed to acquire semaphore {self.key}")
+        return self
+    
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self.release()
+
+
 async def shutdown_resilience():
     """Cleanup resilience resources."""
     try:

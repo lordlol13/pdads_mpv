@@ -29,22 +29,7 @@ from app.backend.services.news_api_service import fetch_articles_for_topics
 from app.backend.services.recommender_service import refresh_ai_news_embedding
 from app.backend.db.session import SessionLocal
 # FIX START - Observability integration
-from app.backend.services.observability_service import (
-    get_logger,
-    metrics,
-    health_monitor,
-    Timer,
-    set_correlation_id,
-)
-# FIX END
-
-logger = logging.getLogger(__name__)
-LOG = logger
-# FIX - Use structured logger
-obs_logger = get_logger("pipeline")
-
-# FIX - Global semaphore for LLM concurrency control (max 3 concurrent calls)
-_llm_semaphore = asyncio.Semaphore(3)
+from app.backend.services.async_utils import gather_with_concurrency
 
 
 BAD_PHRASES = [
@@ -504,18 +489,22 @@ async def _fetch_raw_news(session: AsyncSession, raw_news_id: int) -> Optional[d
     return dict(row)
 
 
-async def _load_cohort_personas(session: AsyncSession) -> list[dict[str, str | None]]:
+async def _load_cohort_personas(session: AsyncSession, max_personas: int = 500) -> list[dict[str, str | None]]:
+    """Load distinct personas from active users with limit for scalability."""
     query = """
     SELECT interests, location, country_code
     FROM users
     WHERE is_active = TRUE
+    LIMIT :limit
     """
-    result = await session.execute(text(query))
+    result = await session.execute(text(query), {"limit": max_personas * 10})
     rows = [dict(row) for row in result.mappings().all()]
 
     persona_contexts: list[dict[str, str | None]] = []
     seen_labels: set[str] = set()
     for row in rows:
+        if len(persona_contexts) >= max_personas:
+            break
         interests = row.get("interests")
         geo = str(row.get("location") or "").strip().lower() or None
         country_code = str(row.get("country_code") or "").strip().upper() or None
@@ -523,6 +512,8 @@ async def _load_cohort_personas(session: AsyncSession) -> list[dict[str, str | N
         topics = _extract_topics(interests) or ["general"]
 
         for topic in topics:
+            if len(persona_contexts) >= max_personas:
+                break
             label = _build_target_persona_label(topic, profession, geo, country_code)
             if label in seen_labels:
                 continue
@@ -539,7 +530,7 @@ async def _load_cohort_personas(session: AsyncSession) -> list[dict[str, str | N
 
     if not persona_contexts:
         return [{"topic": "general", "profession": None, "geo": None, "country_code": None, "label": "general"}]
-    return persona_contexts  # NOTE: Creates ai_news for ALL personas: 321 raw_news × N personas = 321*N ai_news
+    return persona_contexts
 
 
 async def _generate_with_quality_loop(
@@ -587,22 +578,26 @@ async def _generate_with_quality_loop(
 
     for rewrite_round in range(1, settings.PIPELINE_MAX_REWRITE_ROUNDS + 1):
         try:
-            # Clean text before sending to AI
             clean_raw_text = clean_text(raw_row.get("raw_text") or "")
             cleaned_title = clean_text(raw_row.get("title") or "")
 
-            # FIX: Limit LLM concurrency to max 3 concurrent calls
-            async with _llm_semaphore:
-                generated = await generate_news(
-                    raw_text=clean_raw_text,
-                    title=cleaned_title,
-                    category=raw_row.get("category"),
-                    target_persona=topic,
-                    region=raw_row.get("region"),
-                    profession=profession,
-                    user_geo=geo,
-                    rewrite_round=rewrite_round,
-                )
+            # DISTRIBUTED LLM RATE LIMITING: Coordinate across ALL workers
+            llm_limit = int(getattr(settings, "GLOBAL_LLM_CONCURRENCY", 3))
+            try:
+                async with DistributedSemaphore("llm.calls", llm_limit, ttl=30):
+                    generated = await generate_news(
+                        raw_text=clean_raw_text,
+                        title=cleaned_title,
+                        category=raw_row.get("category"),
+                        target_persona=topic,
+                        region=raw_row.get("region"),
+                        profession=profession,
+                        user_geo=geo,
+                        rewrite_round=rewrite_round,
+                    )
+            except TimeoutError:
+                LOG.warning(f"LLM semaphore timeout for raw_news_id={raw_row.get('id')}, skipping round {rewrite_round}")
+                generated = None
         except Exception as e:
             LOG.exception(f"generate_news failed for raw_news_id={raw_row.get('id')} round={rewrite_round}: {e}")
             # try next round; if all rounds fail we'll fallback below
@@ -798,102 +793,85 @@ async def _upsert_ai_news_for_persona(
     params["image_urls"] = json.dumps(media_urls, ensure_ascii=False)
     params["video_urls"] = json.dumps(video_urls, ensure_ascii=False)
 
+    is_sqlite = session.get_bind().dialect.name == "sqlite"
     if is_sqlite:
         img_sql = ":image_urls"
         vid_sql = ":video_urls"
     else:
-        # PostgreSQL: convert JSON string parameter into text[] using jsonb_array_elements_text
-        # Use CAST(:param AS jsonb) to avoid parser issues with '::' after a bind
         img_sql = "ARRAY(SELECT jsonb_array_elements_text(CAST(:image_urls AS jsonb)))"
         vid_sql = "ARRAY(SELECT jsonb_array_elements_text(CAST(:video_urls AS jsonb)))"
 
-    if existing_id is not None:
-        logger.info(f"[UPSERT] UPDATE existing_id={existing_id} raw_news_id={raw_news_id}")
-        update_query = f"""
-        UPDATE ai_news
-        SET final_title = :final_title,
-            final_text = :final_text,
-            image_urls = {img_sql},
-            video_urls = {vid_sql},
-            category = :category,
-            ai_score = :ai_score,
-            embedding_id = :embedding_id,
-            vector_status = :vector_status
-        WHERE id = :id
+    # ATOMIC UPSERT: Handle concurrent inserts safely with ON CONFLICT
+    if not is_sqlite:
+        # PostgreSQL: Atomic ON CONFLICT with UNIQUE constraint
+        upsert_query = f"""
+        INSERT INTO ai_news (
+            raw_news_id, target_persona, final_title, final_text,
+            image_urls, video_urls, category, ai_score, embedding_id, vector_status
+        )
+        VALUES (
+            :raw_news_id, :target_persona, :final_title, :final_text,
+            {img_sql}, {vid_sql}, :category, :ai_score, :embedding_id, :vector_status
+        )
+        ON CONFLICT (raw_news_id, target_persona) DO UPDATE SET
+            final_title = EXCLUDED.final_title,
+            final_text = EXCLUDED.final_text,
+            image_urls = EXCLUDED.image_urls,
+            video_urls = EXCLUDED.video_urls,
+            category = EXCLUDED.category,
+            ai_score = EXCLUDED.ai_score,
+            embedding_id = EXCLUDED.embedding_id,
+            vector_status = EXCLUDED.vector_status,
+            updated_at = NOW()
         RETURNING id
         """
-        update_result = await session.execute(text(update_query), {**params, "id": existing_id})
-        updated_ai_news_id = update_result.scalar_one()
-        logger.info(f"[UPSERT] UPDATED ai_news_id={updated_ai_news_id} raw_news_id={raw_news_id}")
+        logger.info(f"[UPSERT] ATOMIC raw_news_id={raw_news_id} persona={target_persona}")
+        result = await session.execute(text(upsert_query), params)
+        ai_news_id = result.scalar_one()
         await session.commit()
-        LOG.info("[AI] updated ai_news id=%s raw_news_id=%s", updated_ai_news_id, raw_news_id)
-        await refresh_ai_news_embedding(
-            session,
-            updated_ai_news_id,
-            title=str(generated.get("final_title") or ""),
-            final_text=str(generated.get("final_text") or ""),
-            category=str(generated.get("category") or None),
-            target_persona=target_persona,
-            raw_text=str(raw_row.get("raw_text") or ""),
-            region=str(raw_row.get("region") or None),
-        )
-        return updated_ai_news_id
-
-    insert_query = f"""
-    INSERT INTO ai_news (
-        raw_news_id,
-        target_persona,
-        final_title,
-        final_text,
-        image_urls,
-        video_urls,
-        category,
-        ai_score,
-        embedding_id,
-        vector_status
-    )
-    VALUES (
-        :raw_news_id,
-        :target_persona,
-        :final_title,
-        :final_text,
-        {img_sql},
-        {vid_sql},
-        :category,
-        :ai_score,
-        :embedding_id,
-        :vector_status
-    )
-    RETURNING id
-    """
-
-    # FIX START - Handle unique constraint violation (concurrent insert protection)
-    logger.info(f"[UPSERT] INSERTING raw_news_id={raw_news_id} persona={target_persona}")
-    try:
-        insert_result = await session.execute(text(insert_query), params)
-        ai_news_id = insert_result.scalar_one()
-        logger.info(f"[UPSERT] INSERTED ai_news_id={ai_news_id} raw_news_id={raw_news_id}")
+        logger.info(f"[UPSERT] UPSERTED ai_news_id={ai_news_id}")
+    else:
+        # SQLite: INSERT OR REPLACE (loses old id on conflict)
+        if existing_id:
+            update_query = f"""
+            UPDATE ai_news
+            SET final_title = :final_title,
+                final_text = :final_text,
+                image_urls = {img_sql},
+                video_urls = {vid_sql},
+                category = :category,
+                ai_score = :ai_score,
+                embedding_id = :embedding_id,
+                vector_status = :vector_status
+            WHERE id = :id
+            RETURNING id
+            """
+            result = await session.execute(text(update_query), {**params, "id": existing_id})
+            ai_news_id = result.scalar_one()
+            logger.info(f"[UPSERT] UPDATED existing={existing_id}")
+        else:
+            insert_query = f"""
+            INSERT OR IGNORE INTO ai_news (
+                raw_news_id, target_persona, final_title, final_text,
+                image_urls, video_urls, category, ai_score, embedding_id, vector_status
+            )
+            VALUES (
+                :raw_news_id, :target_persona, :final_title, :final_text,
+                {img_sql}, {vid_sql}, :category, :ai_score, :embedding_id, :vector_status
+            )
+            RETURNING id
+            """
+            result = await session.execute(text(insert_query), params)
+            ai_news_id = result.scalar_one_or_none()
+            if not ai_news_id:
+                # Re-fetch if IGNORE prevented insert
+                lookup = await session.execute(
+                    text("SELECT id FROM ai_news WHERE raw_news_id = :rid AND target_persona = :tp"),
+                    {"rid": raw_news_id, "tp": target_persona}
+                )
+                ai_news_id = lookup.scalar_one()
+            logger.info(f"[UPSERT] INSERTED={ai_news_id}")
         await session.commit()
-        logger.info(f"[UPSERT] COMMITTED ai_news_id={ai_news_id} raw_news_id={raw_news_id}")
-        LOG.info("[AI] created ai_news id=%s raw_news_id=%s", ai_news_id, raw_news_id)
-    except IntegrityError as ie:
-        # FIX: Another process inserted the same record concurrently
-        await session.rollback()
-        logger.warning(f"[UPSERT] IntegrityError: duplicate ai_news for raw_news_id={raw_news_id}, persona={target_persona}: {ie}")
-        # Fetch the existing record
-        existing_result = await session.execute(
-            text("SELECT id FROM ai_news WHERE raw_news_id = :raw_id AND target_persona = :persona"),
-            {"raw_id": raw_news_id, "persona": target_persona},
-        )
-        ai_news_id = existing_result.scalar_one()
-        logger.info(f"[UPSERT] Using existing ai_news id={ai_news_id} after IntegrityError")
-        # FIX END
-    except Exception as e:
-        # CRITICAL FIX: Log any other insert errors and re-raise
-        logger.error(f"[UPSERT] INSERT FAILED raw_news_id={raw_news_id}: {type(e).__name__}: {e}")
-        await session.rollback()
-        raise
-    # FIX END
     await refresh_ai_news_embedding(
         session,
         ai_news_id,
@@ -1405,7 +1383,8 @@ async def _process_raw_news_async(
 )
 def process_raw_news(self, raw_news_id: int, personas: list[dict[str, str | None]] | None = None) -> dict:
     attempt = self.request.retries + 1
-    logger.info("process_raw_news started raw_news_id=%s attempt=%s", raw_news_id, attempt)
+    max_retries = self.max_retries
+    logger.info("process_raw_news started raw_news_id=%s attempt=%s/%s", raw_news_id, attempt, max_retries + 1)
 
     try:
         # FIX: Use asyncio.run() instead of manual loop management
@@ -1413,10 +1392,16 @@ def process_raw_news(self, raw_news_id: int, personas: list[dict[str, str | None
         logger.info("[WORKER] process_raw_news finished raw_news_id=%s result=%s", raw_news_id, result)
         return result
     except SQLAlchemyError as e:
-        logger.exception("db error raw_news_id=%s attempt=%s error=%s", raw_news_id, attempt, e)
+        if self.request.retries >= max_retries:
+            logger.error("[CELERY] FINAL FAILURE raw_news_id=%s after %s retries: %s", raw_news_id, max_retries, e)
+        else:
+            logger.warning("db error raw_news_id=%s attempt=%s/%s: %s", raw_news_id, attempt, max_retries + 1, e)
         raise
     except Exception as e:
-        logger.exception("unexpected error raw_news_id=%s attempt=%s error=%s", raw_news_id, attempt, e)
+        if self.request.retries >= max_retries:
+            logger.error("[CELERY] FINAL FAILURE raw_news_id=%s after %s retries: %s", raw_news_id, max_retries, e)
+        else:
+            logger.warning("unexpected error raw_news_id=%s attempt=%s/%s: %s", raw_news_id, attempt, max_retries + 1, e)
         raise
 
 
@@ -1690,14 +1675,13 @@ def process_all_task() -> dict:
                     logger.exception("[PIPELINE] failed raw_news_id=%s", raw_id)
                     return {"status": "failed", "raw_id": raw_id, "created": 0}
 
-            # FIX - Parallel processing with limited concurrency
-            semaphore = asyncio.Semaphore(5)  # Max 5 concurrent
-
-            async def process_with_semaphore(raw_id: int) -> dict:
-                async with semaphore:
-                    return await process_single(raw_id)
-
-            results = await asyncio.gather(*[process_with_semaphore(rid) for rid in pending_ids])
+            # BOUNDED CONCURRENCY: Use utility to limit concurrent workers
+            max_concurrent = int(os.getenv("PIPELINE_CONCURRENCY", "5"))
+            coros = [process_single(rid) for rid in pending_ids]
+            results = await gather_with_concurrency(max_concurrent, coros, return_exceptions=True)
+            
+            # Filter exceptions
+            results = [r if not isinstance(r, Exception) else {"status": "failed", "raw_id": None, "created": 0} for r in results]
 
             # FIX - Aggregate results
             processed = sum(1 for r in results if r["status"] == "processed")

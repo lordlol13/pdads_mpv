@@ -13,6 +13,7 @@ permissions:
 
 env:
   IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/pdads_mpv
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   test_build:
@@ -48,7 +49,7 @@ jobs:
         env:
           PYTHONPATH: .
           # FIX START - Test environment variables
-          DATABASE_URL: "sqlite+aiosqlite:///./test.db"
+          DATABASE_URL: "sqlite"
           REDIS_URL: "redis://localhost:6379/0"
           JWT_SECRET_KEY: "test-secret-key-123456789012345678901234"
           # FIX END

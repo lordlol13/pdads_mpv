@@ -6,16 +6,17 @@ import smtplib
 from email.message import EmailMessage
 from typing import Any, Dict, Optional, Tuple
 
+import httpx
+
 from app.backend.core.config import settings
 
 logger = logging.getLogger(__name__)
 
 
-def _send_with_resend(*, to_email: str, subject: str, html: str) -> Tuple[bool, Optional[Dict[str, Any]]]:
-    """Attempt to send via Resend using httpx -> requests -> SDK.
+async def _send_with_resend_async(*, to_email: str, subject: str, html: str) -> Tuple[bool, Optional[Dict[str, Any]]]:
+    """Async Resend email send using httpx.
 
-    Returns (True, None) on success. On failure returns (False, error_dict)
-    where error_dict contains provider/status/message for easier debugging.
+    Returns (True, None) on success. On failure returns (False, error_dict).
     """
     if not (settings.RESEND_API_KEY or "").strip():
         return False, {"provider": "resend", "error": "no_api_key"}
@@ -26,81 +27,36 @@ def _send_with_resend(*, to_email: str, subject: str, html: str) -> Tuple[bool, 
         "subject": subject,
         "html": html,
     }
-
     headers = {"Authorization": f"Bearer {settings.RESEND_API_KEY}", "Content-Type": "application/json"}
 
-    last_error: Optional[Dict[str, Any]] = None
-
-    # 1) httpx (preferred)
     try:
-        import httpx
-
-        try:
-            resp = httpx.post(
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
                 "https://api.resend.com/emails",
                 json=payload,
                 headers=headers,
-                timeout=10.0,
             )
-            if 200 <= resp.status_code < 300:
-                return True, None
-            try:
-                body = resp.json()
-                message = body.get("message") or body.get("error") or str(body)
-            except Exception:
-                message = resp.text
-            logger.error(
-                "Resend httpx request failed for %s: status=%s body=%s",
-                to_email,
-                resp.status_code,
-                message,
-            )
-            last_error = {"provider": "resend", "status": resp.status_code, "message": message}
-        except Exception as exc_httpx:
-            logger.exception("Resend httpx request error for %s: %s", to_email, exc_httpx)
-            last_error = {"provider": "resend", "error": str(exc_httpx)}
-    except Exception:
-        logger.debug("httpx not available for Resend HTTP send, will try requests")
-
-    # 2) requests fallback
-    try:
-        import requests
-
+        if 200 <= resp.status_code < 300:
+            return True, None
         try:
-            resp = requests.post(
-                "https://api.resend.com/emails",
-                json=payload,
-                headers=headers,
-                timeout=10,
-            )
-            if 200 <= resp.status_code < 300:
-                return True, None
-            try:
-                body = resp.json()
-                message = body.get("message") or body.get("error") or str(body)
-            except Exception:
-                message = resp.text
-            logger.error(
-                "Resend requests request failed for %s: status=%s body=%s",
-                to_email,
-                resp.status_code,
-                message,
-            )
-            last_error = {"provider": "resend", "status": resp.status_code, "message": message}
-        except Exception as exc_requests:
-            logger.exception("Resend requests error for %s: %s", to_email, exc_requests)
-            last_error = {"provider": "resend", "error": str(exc_requests)}
-    except Exception:
-        logger.debug("requests not available for Resend HTTP send")
-
-    # Stop after HTTP attempts; SDK imports are fragile in deployed environments.
-    if last_error is None:
-        last_error = {"provider": "resend", "error": "unknown_error"}
-    return False, last_error
+            body = resp.json()
+            message = body.get("message") or body.get("error") or str(body)
+        except Exception:
+            message = resp.text
+        logger.error(
+            "Resend async request failed for %s: status=%s body=%s",
+            to_email,
+            resp.status_code,
+            message,
+        )
+        return False, {"provider": "resend", "status": resp.status_code, "message": message}
+    except Exception as exc:
+        logger.exception("Resend async error for %s: %s", to_email, exc)
+        return False, {"provider": "resend", "error": str(exc)}
 
 
-def send_verification_code(email: str, code: str) -> Tuple[bool, Optional[Dict[str, Any]]]:
-    """Send verification code via Resend or SMTP fallback.
+async def send_verification_code_async(email: str, code: str) -> Tuple[bool, Optional[Dict[str, Any]]]:
+    """Send verification code via Resend (async).
 
     Returns (sent: bool, provider_error: dict|None).
     """
@@ -109,7 +65,7 @@ def send_verification_code(email: str, code: str) -> Tuple[bool, Optional[Dict[s
         f"<strong>{code}</strong></p>"
         f"<p>Code expires in {settings.AUTH_VERIFICATION_CODE_TTL_MINUTES} minutes.</p>"
     )
-    sent, provider_error = _send_with_resend(
+    sent, provider_error = await _send_with_resend_async(
         to_email=email,
         subject="PDADS verification code",
         html=resend_html,
@@ -118,7 +74,7 @@ def send_verification_code(email: str, code: str) -> Tuple[bool, Optional[Dict[s
         return True, None
 
     if not (settings.SMTP_HOST or "").strip():
-        logger.info("Email provider is not configured, verification code for %s is %s", email, code)
+        logger.info("Email provider not configured, verification code for %s is %s", email, code)
         return False, provider_error
 
     message = EmailMessage()
@@ -192,4 +148,20 @@ async def send_verification_code_async(email: str, code: str) -> Tuple[bool, Opt
 
 
 async def send_password_reset_code_async(email: str, code: str) -> Tuple[bool, Optional[Dict[str, Any]]]:
-    return await asyncio.to_thread(send_password_reset_code, email, code)
+    """Send password reset code via Resend (async)."""
+    resend_html = (
+        "<p>Your PDADS password reset code is: "
+        f"<strong>{code}</strong></p>"
+        f"<p>Code expires in {settings.PASSWORD_RESET_CODE_TTL_MINUTES} minutes.</p>"
+    )
+    sent, provider_error = await _send_with_resend_async(
+        to_email=email,
+        subject="PDADS password reset code",
+        html=resend_html,
+    )
+    if sent:
+        return True, None
+
+    if not (settings.SMTP_HOST or "").strip():
+        logger.info("Email provider not configured, reset code for %s is %s", email, code)
+        return False, provider_error

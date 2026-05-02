@@ -64,8 +64,8 @@ class APIResponse(BaseModel, Generic[T]):
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     correlation_id: Optional[str] = None
     
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "success": True,
                 "data": {},
@@ -74,6 +74,7 @@ class APIResponse(BaseModel, Generic[T]):
                 "correlation_id": "req_abc123"
             }
         }
+    )
 
 
 def success_response(
