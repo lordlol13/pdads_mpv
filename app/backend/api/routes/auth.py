@@ -1,6 +1,9 @@
+import logging
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
+
+logger = logging.getLogger(__name__)
 
 from app.backend.api.dependencies import get_current_user, get_db_session
 from app.backend.core.config import settings
@@ -155,16 +158,18 @@ async def register(payload: AuthRegisterRequest, session: AsyncSession = Depends
 @router.post("/login", response_model=TokenResponse)
 async def login(payload: AuthLoginRequest, session: AsyncSession = Depends(get_db_session)):
     try:
-        print(f"[LOGIN DEBUG] Starting login for: {payload.identifier}")
+        logger.info("[AUTH] Login attempt: %s", payload.identifier)
         user = await authenticate_user(session, payload.identifier, payload.password)
-        print(f"[LOGIN DEBUG] User authenticated: id={user.get('id')}")
-        print(f"[LOGIN DEBUG] JWT_SECRET_KEY length: {len(settings.JWT_SECRET_KEY or '')}")
+        logger.info("[AUTH] User authenticated: id=%s", user.get("id"))
         token = issue_access_token(user)
-        print(f"[LOGIN DEBUG] Token issued successfully")
+        logger.info("[AUTH] Token issued for user: %s", user.get("id"))
         return TokenResponse(access_token=token, expires_in_minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
-    except Exception as e:
-        print(f"[LOGIN DEBUG] ERROR: {type(e).__name__}: {e}")
+    except HTTPException:
+        # Re-raise HTTPException (401, 403) as-is for proper client handling
         raise
+    except Exception as e:
+        logger.exception("[AUTH] Login failed for %s: %s", payload.identifier, e)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Authentication service error")
 
 
 @router.get("/oauth/providers", response_model=OAuthProvidersResponse)

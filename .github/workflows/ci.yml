@@ -58,6 +58,7 @@ jobs:
           DATABASE_URL: "sqlite"
           REDIS_URL: "redis://localhost:6379/0"
           JWT_SECRET_KEY: "test-secret-key-123456789012345678901234"
+          SESSION_SECRET_KEY: "test-session-secret-key-123456789012345678901234"
           # FIX END
         run: |
           pytest -q

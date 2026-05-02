@@ -260,18 +260,21 @@ class Settings(BaseSettings):
     def _validate_security(self) -> "Settings":
         env = (self.APP_ENV or "dev").strip().lower()
         weak_values = {"", "change_me_super_secret", "changeme", "secret"}
+        is_production = env in {"prod", "production", "stage", "staging"}
 
-        if env in {"prod", "production", "stage", "staging"}:
-            jwt_secret = (self.JWT_SECRET_KEY or "").strip()
-            if jwt_secret in weak_values or len(jwt_secret) < 32:
-                raise ValueError("JWT_SECRET_KEY must be set to a strong value in production/staging")
+        # JWT_SECRET_KEY validation - REQUIRED for all environments
+        jwt_secret = (self.JWT_SECRET_KEY or "").strip()
+        if not jwt_secret:
+            raise RuntimeError("JWT_SECRET_KEY is required - set it in environment variables")
+        if is_production and (jwt_secret in weak_values or len(jwt_secret) < 32):
+            raise ValueError("JWT_SECRET_KEY must be at least 32 characters and not a weak/default value in production/staging")
 
-        if not (self.JWT_SECRET_KEY or "").strip():
-            # Dev-only fallback to prevent shipping predictable secrets.
-            self.JWT_SECRET_KEY = f"dev-{secrets.token_urlsafe(32)}"
-
-        if not (self.SESSION_SECRET_KEY or "").strip():
-            self.SESSION_SECRET_KEY = f"session-{secrets.token_urlsafe(32)}"
+        # SESSION_SECRET_KEY validation - REQUIRED for all environments
+        session_secret = (self.SESSION_SECRET_KEY or "").strip()
+        if not session_secret:
+            raise RuntimeError("SESSION_SECRET_KEY is required - set it in environment variables")
+        if is_production and (session_secret in weak_values or len(session_secret) < 32):
+            raise ValueError("SESSION_SECRET_KEY must be at least 32 characters and not a weak/default value in production/staging")
 
         return self
 
@@ -284,3 +287,5 @@ print(f"[STARTUP] DEBUG: {settings.DEBUG}")
 print(f"[STARTUP] DATABASE_URL: {settings.DATABASE_URL[:50]}..." if settings.DATABASE_URL else "[STARTUP] DATABASE_URL: NOT SET!")
 print(f"[STARTUP] REDIS_URL: {settings.REDIS_URL[:30]}..." if settings.REDIS_URL else "[STARTUP] REDIS_URL: NOT SET!")
 print(f"[STARTUP] CELERY_BROKER_URL: {settings.CELERY_BROKER_URL[:30]}..." if settings.CELERY_BROKER_URL else "[STARTUP] CELERY_BROKER_URL: NOT SET!")
+print(f"[STARTUP] JWT configured: {bool(settings.JWT_SECRET_KEY)} (length: {len(settings.JWT_SECRET_KEY or '')})")
+print(f"[STARTUP] SESSION_SECRET configured: {bool(settings.SESSION_SECRET_KEY)} (length: {len(settings.SESSION_SECRET_KEY or '')})")
