@@ -671,17 +671,6 @@ async def _upsert_ai_news_for_persona(
     raw_news_id = raw_row["id"]
     logger.info(f"[UPSERT] START raw_news_id={raw_news_id} persona={target_persona}")
 
-    # FIX START - Prevent duplicates: check if ai_news already exists for this raw_news + persona
-    dup_check = await session.execute(
-        text("SELECT id FROM ai_news WHERE raw_news_id = :raw_id AND target_persona = :persona LIMIT 1"),
-        {"raw_id": raw_news_id, "persona": target_persona},
-    )
-    existing_id = dup_check.scalar_one_or_none()
-    if existing_id:
-        logger.info(f"[UPSERT] DUPLICATE raw_news_id={raw_news_id} persona={target_persona} existing_ai_news_id={existing_id}")
-        return int(existing_id)
-    # FIX END
-
     # Allow caller to provide a pre-generated payload (to enable concurrent LLM calls).
     if generated is None:
         generated = await _generate_with_quality_loop(raw_row, topic, profession, geo)
@@ -717,28 +706,10 @@ async def _upsert_ai_news_for_persona(
         "vector_status": "pending",
     }
 
-    # CRITICAL FIX: REMOVED aggressive cross-raw_news duplicate check
-    # This check was preventing ai_news creation for different raw_news with similar titles
-    # ONLY check for duplicates within same raw_news_id + target_persona (handled above)
-    # The original code was returning existing ai_news from DIFFERENT raw_news, causing
-    # raw_news to be marked 'generated' without creating new ai_news records.
-    logger.info(f"[UPSERT] SKIPPING cross-raw_news duplicate check for raw_news_id={raw_news_id}")
+    # IDEMPOTENCY: DB is source of truth - ON CONFLICT handles race conditions
+    logger.info(f"[IDEMPOTENT INSERT] raw_news_id={raw_news_id} persona={target_persona}")
 
-    # Final duplicate check before INSERT/UPDATE
-    existing_query = """
-    SELECT id
-    FROM ai_news
-    WHERE raw_news_id = :raw_news_id
-      AND target_persona = :target_persona
-    ORDER BY id
-    LIMIT 1
-    """
-    existing_result = await session.execute(text(existing_query), params)
-    existing_id = existing_result.scalar_one_or_none()
-    if existing_id:
-        logger.info(f"[UPSERT] EXISTING raw_news_id={raw_news_id} persona={target_persona} ai_news_id={existing_id}")
-
-    reserved_image_keys = await _load_reserved_image_keys(session, exclude_ai_news_id=existing_id)
+    reserved_image_keys = await _load_reserved_image_keys(session, exclude_ai_news_id=None)
     # Build media query prioritizing article title and category over persona/topic
     media_query = " ".join(
         part
@@ -801,57 +772,13 @@ async def _upsert_ai_news_for_persona(
         img_sql = "ARRAY(SELECT jsonb_array_elements_text(CAST(:image_urls AS jsonb)))"
         vid_sql = "ARRAY(SELECT jsonb_array_elements_text(CAST(:video_urls AS jsonb)))"
 
-    # ATOMIC UPSERT: Handle concurrent inserts safely with ON CONFLICT
+    # ATOMIC UPSERT: Single CTE query - no extra roundtrip on conflict
+    # IDEMPOTENCY: First successful result is preserved, no overwrites on retry
     if not is_sqlite:
-        # PostgreSQL: Atomic ON CONFLICT with UNIQUE constraint
+        # PostgreSQL: Single atomic query with CTE - always returns id
         upsert_query = f"""
-        INSERT INTO ai_news (
-            raw_news_id, target_persona, final_title, final_text,
-            image_urls, video_urls, category, ai_score, embedding_id, vector_status
-        )
-        VALUES (
-            :raw_news_id, :target_persona, :final_title, :final_text,
-            {img_sql}, {vid_sql}, :category, :ai_score, :embedding_id, :vector_status
-        )
-        ON CONFLICT (raw_news_id, target_persona) DO UPDATE SET
-            final_title = EXCLUDED.final_title,
-            final_text = EXCLUDED.final_text,
-            image_urls = EXCLUDED.image_urls,
-            video_urls = EXCLUDED.video_urls,
-            category = EXCLUDED.category,
-            ai_score = EXCLUDED.ai_score,
-            embedding_id = EXCLUDED.embedding_id,
-            vector_status = EXCLUDED.vector_status,
-            updated_at = NOW()
-        RETURNING id
-        """
-        logger.info(f"[UPSERT] ATOMIC raw_news_id={raw_news_id} persona={target_persona}")
-        result = await session.execute(text(upsert_query), params)
-        ai_news_id = result.scalar_one()
-        await session.commit()
-        logger.info(f"[UPSERT] UPSERTED ai_news_id={ai_news_id}")
-    else:
-        # SQLite: INSERT OR REPLACE (loses old id on conflict)
-        if existing_id:
-            update_query = f"""
-            UPDATE ai_news
-            SET final_title = :final_title,
-                final_text = :final_text,
-                image_urls = {img_sql},
-                video_urls = {vid_sql},
-                category = :category,
-                ai_score = :ai_score,
-                embedding_id = :embedding_id,
-                vector_status = :vector_status
-            WHERE id = :id
-            RETURNING id
-            """
-            result = await session.execute(text(update_query), {**params, "id": existing_id})
-            ai_news_id = result.scalar_one()
-            logger.info(f"[UPSERT] UPDATED existing={existing_id}")
-        else:
-            insert_query = f"""
-            INSERT OR IGNORE INTO ai_news (
+        WITH inserted AS (
+            INSERT INTO ai_news (
                 raw_news_id, target_persona, final_title, final_text,
                 image_urls, video_urls, category, ai_score, embedding_id, vector_status
             )
@@ -859,18 +786,46 @@ async def _upsert_ai_news_for_persona(
                 :raw_news_id, :target_persona, :final_title, :final_text,
                 {img_sql}, {vid_sql}, :category, :ai_score, :embedding_id, :vector_status
             )
+            ON CONFLICT (raw_news_id, target_persona) DO NOTHING
             RETURNING id
-            """
-            result = await session.execute(text(insert_query), params)
-            ai_news_id = result.scalar_one_or_none()
-            if not ai_news_id:
-                # Re-fetch if IGNORE prevented insert
-                lookup = await session.execute(
-                    text("SELECT id FROM ai_news WHERE raw_news_id = :rid AND target_persona = :tp"),
-                    {"rid": raw_news_id, "tp": target_persona}
-                )
-                ai_news_id = lookup.scalar_one()
-            logger.info(f"[UPSERT] INSERTED={ai_news_id}")
+        )
+        SELECT id FROM inserted
+        UNION ALL
+        SELECT id FROM ai_news
+        WHERE raw_news_id = :raw_news_id AND target_persona = :target_persona
+        LIMIT 1
+        """
+        logger.info(f"[IDEMPOTENT INSERT] raw_news_id={raw_news_id} persona={target_persona}")
+        result = await session.execute(text(upsert_query), params)
+        ai_news_id = result.scalar_one()
+        logger.info(f"[IDEMPOTENT INSERT] ai_news_id={ai_news_id}")
+
+        await session.commit()
+    else:
+        # SQLite: Atomic INSERT OR IGNORE for idempotency
+        insert_query = f"""
+        INSERT OR IGNORE INTO ai_news (
+            raw_news_id, target_persona, final_title, final_text,
+            image_urls, video_urls, category, ai_score, embedding_id, vector_status
+        )
+        VALUES (
+            :raw_news_id, :target_persona, :final_title, :final_text,
+            {img_sql}, {vid_sql}, :category, :ai_score, :embedding_id, :vector_status
+        )
+        RETURNING id
+        """
+        result = await session.execute(text(insert_query), params)
+        ai_news_id = result.scalar_one_or_none()
+        if not ai_news_id:
+            # Re-fetch if IGNORE prevented insert (already exists)
+            lookup = await session.execute(
+                text("SELECT id FROM ai_news WHERE raw_news_id = :rid AND target_persona = :tp"),
+                {"rid": raw_news_id, "tp": target_persona}
+            )
+            ai_news_id = lookup.scalar_one()
+            logger.info(f"[IDEMPOTENT INSERT] SQLite skipped duplicate, existing ai_news_id={ai_news_id}")
+        else:
+            logger.info(f"[IDEMPOTENT INSERT] SQLite inserted ai_news_id={ai_news_id}")
         await session.commit()
     await refresh_ai_news_embedding(
         session,
@@ -1152,6 +1107,38 @@ async def _cleanup_ai_products_async() -> dict[str, Any]:
         }
 
 
+async def _check_idempotency(
+    session: AsyncSession,
+    raw_news_id: int,
+    persona: dict[str, Any] | None = None,
+) -> tuple[bool, str | None]:
+    """
+    Lightweight idempotency check - DB is source of truth.
+
+    Returns (should_skip, reason) tuple.
+    - should_skip: True if processing should be skipped (for logging only)
+    - reason: Explanation for skipping (or None if not skipping)
+    """
+    # Minimal check: just build persona key for logging
+    if persona is not None:
+        topic = str(persona.get("topic") or persona.get("type") or "general").strip().lower()
+        profession = str(persona.get("profession") or "").strip().lower() or None
+        geo = str(persona.get("geo") or "").strip().lower() or None
+
+        persona_parts = [topic]
+        if profession:
+            persona_parts.append(profession)
+        if geo:
+            persona_parts.append(geo)
+        persona_key = "_".join(persona_parts)
+
+        # Log only - DB handles actual idempotency via ON CONFLICT
+        logger.debug("[IDEMPOTENCY CHECK] raw_news_id=%s persona=%s", raw_news_id, persona_key)
+
+    # Never skip here - let DB be source of truth via ON CONFLICT
+    return False, None
+
+
 async def _process_raw_news_async(
     raw_news_id: int,
     attempt: int,
@@ -1174,13 +1161,8 @@ async def _process_raw_news_async(
                 return {"status": "failed", "reason": "raw_news_not_found", "raw_news_id": raw_news_id}
 
             if current_status in {"generated", "completed"}:
-                existing_ai = await session.execute(
-                    text("SELECT 1 FROM ai_news WHERE raw_news_id = :raw_id LIMIT 1"),
-                    {"raw_id": raw_news_id},
-                )
-                if existing_ai.scalar_one_or_none() is not None:
-                    logger.info("[PIPELINE] raw_news_id=%s already generated, skipping", raw_news_id)
-                    return {"status": "skipped", "reason": "already_generated", "raw_news_id": raw_news_id}
+                # IDEMPOTENCY: DB is source of truth, skip early return
+                logger.info("[IDEMPOTENCY] raw_news_id=%s status=%s, will check per persona", raw_news_id, current_status)
 
             claimed = await _claim_raw_news_for_processing(session, raw_news_id)
             if not claimed:
@@ -1497,18 +1479,43 @@ def scheduled_cleanup_ai_products() -> dict:
     max_retries=3,
 )
 def refresh_user_embedding_task(user_id: int, history_limit: int | None = None) -> dict:
+    """
+    Refresh user embedding with idempotency protection.
+
+    Prevents duplicate processing by checking if embedding was recently refreshed.
+    """
     logger.info("recommender.refresh_user_embedding task started user_id=%s", user_id)
     try:
         # FIX: Use asyncio.run() instead of manual loop management
         async def _run():
             async with SessionLocal() as session:
+                # IDEMPOTENCY: Check if embedding was recently refreshed (within 5 minutes)
+                recent_result = await session.execute(
+                    text(
+                        """
+                        SELECT 1 FROM user_interaction_embeddings
+                        WHERE user_id = :user_id
+                        AND updated_at > NOW() - INTERVAL '5 minutes'
+                        LIMIT 1
+                        """
+                    ),
+                    {"user_id": user_id},
+                )
+                if recent_result.scalar_one_or_none() is not None:
+                    logger.info(
+                        "[IDEMPOTENCY] Skipping refresh_user_embedding for user_id=%s (recently updated)",
+                        user_id,
+                    )
+                    return {"status": "skipped", "reason": "recently_updated", "user_id": user_id}
+
                 # Import at runtime to reduce import-time coupling
                 from app.backend.services.recommender_service import refresh_user_embedding
                 await refresh_user_embedding(session, int(user_id), history_limit=history_limit)
+                return {"status": "ok", "user_id": user_id}
 
-        asyncio.run(_run())
+        result = asyncio.run(_run())
         logger.info("[WORKER] recommender.refresh_user_embedding finished user_id=%s", user_id)
-        return {"status": "ok", "user_id": user_id}
+        return result
     except Exception as e:
         logger.exception("recommender.refresh_user_embedding failed user_id=%s: %s", user_id, e)
         raise
