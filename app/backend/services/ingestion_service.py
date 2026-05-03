@@ -172,6 +172,15 @@ async def create_raw_news(session: AsyncSession, payload: dict[str, Any]) -> dic
     cleaned_raw_text = clean_text(payload.get("raw_text"))
     cleaned_title = clean_text(payload.get("title"))
 
+    if "TEST" in cleaned_title.upper():
+        logger.warning("[INGESTION] skipped test payload title=%s", cleaned_title)
+        return {
+            "id": -1,
+            "title": cleaned_title,
+            "source_url": normalized_url or payload.get("source_url"),
+            "process_status": "ignored_test",
+        }
+
     params = {
         "title": cleaned_title,
         # store normalized URL when possible
@@ -183,15 +192,11 @@ async def create_raw_news(session: AsyncSession, payload: dict[str, Any]) -> dic
         "region": payload.get("region"),
         "is_urgent": payload.get("is_urgent", False),
     }
-    print(f"[DEBUG] SAVING: {params['title']}")
-    print(f"[DEBUG] SAVING image_url: {params.get('image_url')}")
-
     try:
         result = await session.execute(text(insert_query_pg), params)
         await session.commit()
     except Exception as e:
         logger.exception("[ERROR] create_raw_news primary insert failed: %s", e)
-        print(f"[ERROR] create_raw_news: {e}")
         try:
             await session.rollback()
         except Exception:

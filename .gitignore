@@ -23,3 +23,11 @@ __pycache__/
 server.err
 server.log
 run_local.py
+
+celerybeat-schedule*
+*.db
+*.sqlite3
+check_*.py
+reset_*.py
+test_*.py
+trigger_*.py

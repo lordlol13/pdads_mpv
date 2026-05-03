@@ -225,6 +225,8 @@ def _dedupe_feed_rows(rows: list[dict[str, Any]], limit: int) -> list[dict[str, 
 
     idx_to_sigs: dict[int, set[str]] = {}
 
+    used_ai_news_ids: set[int] = set()
+
 
 
     def _make_signatures(row: dict[str, Any]) -> list[str]:
@@ -308,6 +310,16 @@ def _dedupe_feed_rows(rows: list[dict[str, Any]], limit: int) -> list[dict[str, 
 
 
     for row in rows:
+
+        ai_news_id = int(row.get("ai_news_id") or 0)
+
+        if ai_news_id > 0:
+
+            if ai_news_id in used_ai_news_ids:
+
+                continue
+
+            used_ai_news_ids.add(ai_news_id)
 
         sigs = _make_signatures(row)
 
@@ -587,6 +599,66 @@ def _pick_primary_image(item: dict[str, Any]) -> str:
 
 
 
+def select_images(images: Any) -> list[str]:
+
+    if not images:
+
+        return []
+
+
+
+    collected: list[str] = []
+
+    if isinstance(images, list):
+
+        collected = [str(v).strip() for v in images if str(v).strip()]
+
+    elif isinstance(images, str):
+
+        raw = images.strip()
+
+        if not raw:
+
+            return []
+
+        try:
+
+            parsed = json.loads(raw)
+
+            if isinstance(parsed, list):
+
+                collected = [str(v).strip() for v in parsed if str(v).strip()]
+
+            else:
+
+                collected = [raw]
+
+        except Exception:
+
+            collected = [raw]
+
+
+
+    unique: list[str] = []
+
+    seen: set[str] = set()
+
+    for value in collected:
+
+        if value in seen:
+
+            continue
+
+        seen.add(value)
+
+        unique.append(value)
+
+
+
+    return unique[:4] if len(unique) >= 4 else unique
+
+
+
 
 
 def normalize_feed_item(item: dict[str, Any], *, source: str = "ai") -> dict[str, Any]:
@@ -613,7 +685,9 @@ def normalize_feed_item(item: dict[str, Any], *, source: str = "ai") -> dict[str
 
 
 
-    primary_image = _pick_primary_image(item)
+    selected_images = select_images(item.get("image_urls"))
+
+    primary_image = _pick_primary_image({"image_urls": selected_images, "image_url": item.get("image_url")})
 
     ai_score = float(item.get("ai_score") or 0.0)
 
@@ -643,7 +717,7 @@ def normalize_feed_item(item: dict[str, Any], *, source: str = "ai") -> dict[str
 
         "source_url": source_url,
 
-        "image_urls": [primary_image],
+        "image_urls": selected_images or [primary_image],
 
         "image_url": primary_image,
 
@@ -1601,54 +1675,6 @@ async def _log_feed_impressions(session: AsyncSession, *, user_id: int, rows: li
 
 
 
-        # Record an impression as a 'viewed' interaction so the same item is not re-served to the user
-
-        try:
-
-            await session.execute(
-
-                text(
-
-                    f"""
-
-                    INSERT INTO interactions (user_id, ai_news_id, liked, viewed, watch_time, created_at)
-
-                    SELECT :user_id, :ai_news_id, NULL, TRUE, NULL, {now_sql}
-
-                    WHERE NOT EXISTS (
-
-                        SELECT 1 FROM interactions i
-
-                        WHERE i.user_id = :user_id
-
-                          AND i.ai_news_id = :ai_news_id
-
-                          AND COALESCE(i.viewed, FALSE) = TRUE
-
-                    )
-
-                    """
-
-                ),
-
-                {
-
-                    "user_id": user_id,
-
-                    "ai_news_id": ai_news_id,
-
-                },
-
-            )
-
-        except Exception:
-
-            # Silently ignore impression->interaction failures to avoid breaking feed serving
-
-            pass
-
-
-
     await session.commit()
 
 
@@ -1934,22 +1960,17 @@ async def get_user_feed(session: AsyncSession, user_id: int, limit: int = 50) ->
         ON lc.ai_news_id = uf.ai_news_id
 
     WHERE uf.user_id = :user_id
+        AND (:only_unseen = FALSE OR COALESCE(li.viewed, FALSE) = FALSE)
+        AND COALESCE(an.final_title, '') NOT ILIKE '%test%'
+        AND COALESCE(an.final_text, '') NOT ILIKE '%test%'
 
-        AND (
-
-            :exclude_viewed = FALSE
-
-            OR NOT (COALESCE(li.viewed, FALSE) = TRUE AND sn.id IS NULL)
-
-        )
-
-    ORDER BY rank_score DESC, uf.id DESC
+    ORDER BY uf.ai_news_id, uf.created_at DESC, rank_score DESC
 
     LIMIT :query_limit
 
     """
 
-    async def _load_rows(exclude_viewed: bool) -> list[dict[str, Any]]:
+    async def _load_rows(only_unseen: bool = True) -> list[dict[str, Any]]:
 
         result = await session.execute(
 
@@ -1961,7 +1982,7 @@ async def get_user_feed(session: AsyncSession, user_id: int, limit: int = 50) ->
 
                 "query_limit": query_limit,
 
-                "exclude_viewed": exclude_viewed,
+                "only_unseen": only_unseen,
 
             },
 
@@ -1971,7 +1992,7 @@ async def get_user_feed(session: AsyncSession, user_id: int, limit: int = 50) ->
 
 
 
-    rows = await _load_rows(True)
+    rows = await _load_rows(only_unseen=True)
 
     if not rows:
 
@@ -1979,7 +2000,7 @@ async def get_user_feed(session: AsyncSession, user_id: int, limit: int = 50) ->
 
         if inserted > 0:
 
-            rows = await _load_rows(True)
+            rows = await _load_rows(only_unseen=True)
 
 
 
@@ -1987,7 +2008,7 @@ async def get_user_feed(session: AsyncSession, user_id: int, limit: int = 50) ->
 
     try:
 
-        current_count = len(rows or [])
+        current_count = len([r for r in (rows or []) if not r.get("is_viewed")])
 
         if current_count < int(limit or 50):
 
@@ -2001,7 +2022,7 @@ async def get_user_feed(session: AsyncSession, user_id: int, limit: int = 50) ->
 
                     if added > 0:
 
-                        rows = await _load_rows(True)
+                        rows = await _load_rows(only_unseen=True)
 
                 except Exception:
 
@@ -2049,15 +2070,8 @@ async def get_user_feed(session: AsyncSession, user_id: int, limit: int = 50) ->
 
 
 
-    # Safety fallback: do not return empty feed solely because all items were marked viewed.
-    # Mark these items so frontend knows they are previously viewed.
-
     if not rows:
-
-        rows = await _load_rows(False)
-        for r in rows:
-            r["is_viewed"] = True
-        logger.info(f"[FEED] Safety fallback: returning {len(rows)} previously viewed items")
+        logger.info("[FEED] no unseen rows available")
 
 
 
@@ -2088,7 +2102,8 @@ async def get_user_feed(session: AsyncSession, user_id: int, limit: int = 50) ->
                 FALSE AS viewed,
                 an.embedding_vector
             FROM ai_news an
-            ORDER BY an.created_at DESC
+            WHERE COALESCE(an.final_title, '') NOT ILIKE '%test%'
+            ORDER BY an.created_at DESC, RANDOM()
             LIMIT :limit
         """).bindparams(
             bindparam("user_id", type_=Integer),
@@ -2113,7 +2128,7 @@ async def get_user_feed(session: AsyncSession, user_id: int, limit: int = 50) ->
     # Load ONLY unseen rows — do not reload with exclude_viewed=False
     # which would re-include already viewed items (causing duplicates).
 
-    rows = await _load_rows(True)
+    rows = await _load_rows(only_unseen=True)
 
     if not rows:
 
@@ -2121,7 +2136,7 @@ async def get_user_feed(session: AsyncSession, user_id: int, limit: int = 50) ->
 
         if inserted > 0:
 
-            rows = await _load_rows(True)
+            rows = await _load_rows(only_unseen=True)
 
 
 
@@ -2146,7 +2161,7 @@ async def get_user_feed(session: AsyncSession, user_id: int, limit: int = 50) ->
 
                     if added > 0:
 
-                        rows = await _load_rows(True)
+                        rows = await _load_rows(only_unseen=True)
 
                 except Exception:
 
@@ -2324,7 +2339,8 @@ async def get_user_feed(session: AsyncSession, user_id: int, limit: int = 50) ->
 
             FROM raw_news
 
-            ORDER BY created_at DESC
+            WHERE COALESCE(title, '') NOT ILIKE '%test%'
+            ORDER BY created_at DESC, RANDOM()
 
             LIMIT :limit
 
@@ -2464,7 +2480,8 @@ async def get_user_feed(session: AsyncSession, user_id: int, limit: int = 50) ->
 
             LEFT JOIN raw_news rn ON an.raw_news_id = rn.id
 
-            ORDER BY an.created_at DESC, an.id DESC
+            WHERE COALESCE(an.final_title, '') NOT ILIKE '%test%'
+            ORDER BY an.created_at DESC, RANDOM(), an.id DESC
 
             LIMIT :limit
 
@@ -2484,7 +2501,8 @@ async def get_user_feed(session: AsyncSession, user_id: int, limit: int = 50) ->
 
             FROM raw_news
 
-            ORDER BY created_at DESC
+            WHERE COALESCE(title, '') NOT ILIKE '%test%'
+            ORDER BY created_at DESC, RANDOM()
 
             LIMIT :limit
 

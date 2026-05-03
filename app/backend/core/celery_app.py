@@ -1,6 +1,7 @@
 from celery import Celery
 from celery.signals import task_failure, task_retry, task_success
 import os
+import tempfile
 import logging
 from typing import Any
 
@@ -84,10 +85,11 @@ print(f"[WORKER] Broker: {settings.CELERY_BROKER_URL[:40]}..." if settings.CELER
 print(f"[WORKER] Backend: {settings.CELERY_RESULT_BACKEND[:40]}..." if settings.CELERY_RESULT_BACKEND else "[WORKER] Backend: NOT SET")
 print(f"[WORKER] Eager mode: {is_eager}")
 
-# FIX START - Configure beat scheduler to use /tmp for Railway (avoid cached schedule issues)
+# FIX START - Configure beat scheduler file with cross-platform temp path
 celery_app.conf.beat_scheduler = "celery.beat:PersistentScheduler"
-celery_app.conf.beat_schedule_filename = "/tmp/celerybeat-schedule"
-print("[BEAT] schedule file set to /tmp/celerybeat-schedule")
+_beat_schedule_file = os.getenv("CELERY_BEAT_SCHEDULE_FILE") or os.path.join(tempfile.gettempdir(), "celerybeat-schedule")
+celery_app.conf.beat_schedule_filename = _beat_schedule_file
+print(f"[BEAT] schedule file set to {_beat_schedule_file}")
 # FIX END
 
 try:
