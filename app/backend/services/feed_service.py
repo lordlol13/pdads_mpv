@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 
 
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, Integer, text
 
 from sqlalchemy.exc import IntegrityError
 
@@ -668,6 +668,8 @@ def normalize_feed_item(item: dict[str, Any], *, source: str = "ai") -> dict[str
         "created_at": item.get("created_at"),
 
         "rank_score": float(item.get("rank_score") or 0.0),
+
+        "is_viewed": bool(item.get("is_viewed")),
 
     }
 
@@ -1873,6 +1875,8 @@ async def get_user_feed(session: AsyncSession, user_id: int, limit: int = 50) ->
 
         COALESCE(cc.comment_count, 0) AS comment_count,
 
+        COALESCE(li.viewed, FALSE) AS is_viewed,
+
         (
 
             COALESCE(uf.ai_score, 0)
@@ -2046,10 +2050,14 @@ async def get_user_feed(session: AsyncSession, user_id: int, limit: int = 50) ->
 
 
     # Safety fallback: do not return empty feed solely because all items were marked viewed.
+    # Mark these items so frontend knows they are previously viewed.
 
     if not rows:
 
         rows = await _load_rows(False)
+        for r in rows:
+            r["is_viewed"] = True
+        logger.info(f"[FEED] Safety fallback: returning {len(rows)} previously viewed items")
 
 
 
@@ -2059,31 +2067,35 @@ async def get_user_feed(session: AsyncSession, user_id: int, limit: int = 50) ->
 
     if ai_news_total < 10:
         logger.warning(f"[FEED] ai_news count low ({ai_news_total} < 10), bypassing filters")
+        bypass_query = text("""
+            SELECT
+                :user_id AS user_id,
+                0 AS user_feed_id,
+                an.id AS ai_news_id,
+                an.raw_news_id,
+                an.target_persona,
+                an.final_title,
+                an.final_text,
+                an.image_urls,
+                an.video_urls,
+                an.category,
+                an.ai_score,
+                an.created_at,
+                FALSE AS saved,
+                0 AS comment_count,
+                0 AS like_count,
+                NULL AS liked,
+                FALSE AS viewed,
+                an.embedding_vector
+            FROM ai_news an
+            ORDER BY an.created_at DESC
+            LIMIT :limit
+        """).bindparams(
+            bindparam("user_id", type_=Integer),
+            bindparam("limit", type_=Integer),
+        )
         bypass_result = await session.execute(
-            text("""
-                SELECT
-                    :user_id::integer AS user_id,
-                    0::integer AS user_feed_id,
-                    an.id AS ai_news_id,
-                    an.raw_news_id,
-                    an.target_persona,
-                    an.final_title,
-                    an.final_text,
-                    an.image_urls,
-                    an.video_urls,
-                    an.category,
-                    an.ai_score,
-                    an.created_at,
-                    FALSE AS saved,
-                    0 AS comment_count,
-                    0 AS like_count,
-                    NULL AS liked,
-                    FALSE AS viewed,
-                    an.embedding_vector
-                FROM ai_news an
-                ORDER BY an.created_at DESC
-                LIMIT :limit::integer
-            """),
+            bypass_query,
             {"user_id": user_id, "limit": limit},
         )
         bypass_rows = [dict(row) for row in bypass_result.mappings().all()]
@@ -2098,11 +2110,10 @@ async def get_user_feed(session: AsyncSession, user_id: int, limit: int = 50) ->
 
 
 
-    # Prefer loading all candidate rows (including previously viewed)
+    # Load ONLY unseen rows — do not reload with exclude_viewed=False
+    # which would re-include already viewed items (causing duplicates).
 
-    # — we will rank everything instead of hard-filtering.
-
-    rows = await _load_rows(False)
+    rows = await _load_rows(True)
 
     if not rows:
 
@@ -2110,7 +2121,7 @@ async def get_user_feed(session: AsyncSession, user_id: int, limit: int = 50) ->
 
         if inserted > 0:
 
-            rows = await _load_rows(False)
+            rows = await _load_rows(True)
 
 
 
@@ -2120,11 +2131,12 @@ async def get_user_feed(session: AsyncSession, user_id: int, limit: int = 50) ->
 
     try:
 
-        current_count = len(rows or [])
+        # Only count unseen items for top-up decision
+        unseen_count = len([r for r in (rows or []) if not r.get("is_viewed")])
 
-        if current_count < int(limit or 50):
+        if unseen_count < int(limit or 50):
 
-            needed = int(limit or 50) - current_count
+            needed = int(limit or 50) - unseen_count
 
             if needed > 0:
 
@@ -2134,7 +2146,7 @@ async def get_user_feed(session: AsyncSession, user_id: int, limit: int = 50) ->
 
                     if added > 0:
 
-                        rows = await _load_rows(False)
+                        rows = await _load_rows(True)
 
                 except Exception:
 

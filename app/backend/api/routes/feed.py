@@ -45,7 +45,7 @@ async def my_feed(
         return [FeedItem(**item) for item in items]
     except Exception as exc:
         correlation_id = getattr(request.state, "correlation_id", None)
-        logger.exception("GET /api/feed/me crashed", correlation_id=correlation_id, exception_type=exc.__class__.__name__)
+        logger.exception(f"GET /api/feed/me crashed: {exc.__class__.__name__}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error") from exc
 
 

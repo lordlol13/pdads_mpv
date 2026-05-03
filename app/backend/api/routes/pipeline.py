@@ -15,6 +15,7 @@ from app.backend.schemas.pipeline import (
 from app.backend.tasks.parser_task import parse_news_task
 from app.backend.services.parser import run_parser_async
 from brain.tasks.pipeline_tasks import process_raw_news, _process_raw_news_async
+from app.backend.services.ingestion_service import insert_test_raw_news
 
 router = APIRouter(prefix="/pipeline", tags=["pipeline"])
 
@@ -123,20 +124,22 @@ async def process_all_pending():
 
 # FIX START - Force-run endpoint for quick testing
 @router.post("/force-run")
-async def force_run_pipeline():
+async def force_run_pipeline(test_insert: bool = Query(default=False)):
     """
     Queue pipeline processing task immediately (non-blocking).
     Returns task_id for status tracking.
     """
     try:
-        # FIX - Use async dispatch (non-blocking) instead of apply()
-        task = celery_app.send_task("brain.tasks.pipeline_tasks.process_all_task")
-
-        return {
-            "status": "queued",
-            "task_id": task.id,
-            "message": "Pipeline processing queued"
-        }
+        async with db_session.SessionLocal() as session:
+            if test_insert:
+                await insert_test_raw_news(session)
+                LOG.info("[INGESTION] test insert executed")
+            result = await run_parser_async(per_rss_limit=5, per_site_limit=10, dry_run=False)
+            return {
+                "status": "completed",
+                "message": "Pipeline ingestion executed",
+                "result": result,
+            }
     except Exception as e:
         LOG.exception("[FORCE_RUN] Error: %s", e)
         raise HTTPException(status_code=500, detail=str(e))

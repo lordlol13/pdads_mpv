@@ -1738,3 +1738,13 @@ def _strip_json_code_fence(content: str) -> str:
             cleaned = cleaned[:-3].strip()
     return cleaned
 
+
+def clean_text(text: str | None) -> str:
+    import html
+    import re
+    if not text:
+        return ""
+    txt = html.unescape(str(text))
+    txt = re.sub(r"\s+", " ", txt)
+    return txt.strip()
+

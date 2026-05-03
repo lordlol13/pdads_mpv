@@ -27,10 +27,14 @@ from app.backend.services.media_service import (
 )
 from app.backend.services.news_api_service import fetch_articles_for_topics
 from app.backend.services.recommender_service import refresh_ai_news_embedding
-from app.backend.db.session import SessionLocal
+from app.backend.db import session as db_session  # FIX: Import module, not the None value at import-time
 # FIX START - Observability integration
 from app.backend.services.async_utils import gather_with_concurrency
 from app.backend.services.observability_service import metrics
+
+# FIX: Initialize logger
+logger = logging.getLogger(__name__)
+LOG = logger  # Alias for compatibility
 
 
 BAD_PHRASES = [
@@ -234,18 +238,9 @@ def _enforce_cross_post_unique_images(
         if len(unique_urls) >= limit:
             return unique_urls
 
-    # Ensure we still return enough media by generating deterministic unique fallbacks.
-    fallback_index = 0
-    max_attempts = max(24, limit * 8)
-    while len(unique_urls) < limit and fallback_index < max_attempts:
-        candidate = _build_unique_fallback_image_url(seed_base, fallback_index)
-        fallback_index += 1
-        key = canonical_image_key(candidate)
-        if not key or key in reserved_keys or key in local_keys:
-            continue
-        unique_urls.append(candidate)
-        local_keys.add(key)
-
+    # Do not fabricate fallback images here; prefer returning as many unique
+    # real images as available up to the requested limit. This keeps the
+    # pipeline flexible and avoids placeholder content.
     return unique_urls[:limit]
 
 
@@ -367,13 +362,14 @@ async def _set_status(
     error_message: Optional[str] = None,
     attempt_count: Optional[int] = None,
 ) -> None:
-
+    allowed_statuses = {"pending", "new", "failed", "generated", "classified"}
+    if status not in allowed_statuses:
+        status = "pending"
 
     query = """
     UPDATE raw_news
     SET process_status = :status,
         error_message = :error_message,
-        processing_started_at = CASE WHEN :status = 'processing' THEN COALESCE(processing_started_at, CURRENT_TIMESTAMP) ELSE processing_started_at END,
         attempt_count = COALESCE(:attempt_count, attempt_count)
     WHERE id = :raw_news_id
     """
@@ -411,31 +407,29 @@ async def _claim_raw_news_for_processing(
     session: AsyncSession,
     raw_news_id: int,
 ) -> bool:
-    # Only allow claiming items that are not currently 'processing' and
-    # that have not exhausted retry attempts. This prevents re-claiming
-    # items that are actively being processed by another worker.
+    # FIX: Don't set 'processing' status - it's not allowed by CHECK constraint
+    # Valid values are: 'pending', 'new', 'failed', 'generated', 'classified'
+    # Just update attempt_count to track retries without changing status
     max_attempts = int(os.getenv("PIPELINE_MAX_ATTEMPTS", str(getattr(settings, 'PIPELINE_MAX_ATTEMPTS', 3))))
     query = """
     UPDATE raw_news
-    SET process_status = :status,
-        error_message = NULL,
+    SET error_message = NULL,
         processing_started_at = :now,
         attempt_count = COALESCE(attempt_count, 0) + 1
     WHERE id = :raw_news_id
       AND (
           process_status IS NULL
-          OR process_status IN ('pending', 'new', 'failed', 'generated', 'classified')
+          OR process_status IN ('pending', 'new', 'failed')
       )
       AND COALESCE(attempt_count, 0) < :max_attempts
     """
-    now_iso = datetime.utcnow().isoformat()
+    now = datetime.utcnow()
     result = await session.execute(
         text(query),
         {
-            "status": "processing",
             "raw_news_id": raw_news_id,
             "max_attempts": max_attempts,
-            "now": now_iso,
+            "now": now,
         },
     )
     return bool(result.rowcount)
@@ -1044,7 +1038,8 @@ async def _populate_user_feed_for_ai_news(
 
 
 async def _schedule_ingestion_batch_async() -> dict[str, Any]:
-    async with SessionLocal() as session:
+    logger.info("[INGESTION] started")
+    async with db_session.SessionLocal() as session:
         persona_contexts = await _load_cohort_personas(session)
         topics = list(dict.fromkeys([str(p.get("topic") or "general") for p in persona_contexts]))
         country_codes = [str(p.get("country_code") or "").strip().upper() for p in persona_contexts if p.get("country_code")]
@@ -1076,7 +1071,7 @@ async def _schedule_ingestion_batch_async() -> dict[str, Any]:
 
 
 async def _cleanup_ai_products_async() -> dict[str, Any]:
-    async with SessionLocal() as session:
+    async with db_session.SessionLocal() as session:
         # Delete generated AI products older than configured retention
         ai_query = """
         DELETE FROM ai_news
@@ -1145,7 +1140,7 @@ async def _process_raw_news_async(
     attempt: int,
     personas: list[dict[str, str | None]] | None = None,
 ) -> dict:
-    async with SessionLocal() as session:
+    async with db_session.SessionLocal() as session:
         lock_acquired = False
         try:
             lock_acquired = await _try_advisory_lock(session, raw_news_id)
@@ -1172,6 +1167,7 @@ async def _process_raw_news_async(
                 return {"status": "skipped", "reason": "already_claimed", "raw_news_id": raw_news_id}
 
             await session.commit()
+            logger.info("[PIPELINE] picked raw_news_id=%s for processing", raw_news_id)
 
             raw_row = await _fetch_raw_news(session, raw_news_id)
             if not raw_row:
@@ -1260,6 +1256,7 @@ async def _process_raw_news_async(
 
             for persona in unique_personas:
                 try:
+                    logger.info("[PIPELINE] generating ai_news for raw_news_id=%s", raw_news_id)
                     print("[PIPELINE] generating for:", persona)
 
                     topic = str(persona.get("topic") or "general").strip().lower()
@@ -1270,6 +1267,8 @@ async def _process_raw_news_async(
                     clean_raw_text = clean_text(raw_row.get("raw_text") or "")
                     cleaned_title = clean_text(raw_row.get("title") or "")
 
+                    # FIX: Log LLM call
+                    logger.info("[LLM] called for raw_news_id=%s topic=%s", raw_news_id, topic)
                     # Call LLM generator with bounding (semaphore applied inside _generate_with_quality_loop or generate_news)
                     generated = await generate_news(
                         raw_text=clean_raw_text,
@@ -1282,6 +1281,7 @@ async def _process_raw_news_async(
                         rewrite_round=1,
                     )
 
+                    logger.info("[LLM] returned result for raw_news_id=%s", raw_news_id)
                     print("[PIPELINE] generated:", generated)
 
                     if not generated:
@@ -1303,6 +1303,8 @@ async def _process_raw_news_async(
                     ai_news_id = await _upsert_ai_news_for_persona(session, raw_row, persona, generated=generated)
                     ai_news_ids.append(ai_news_id)
 
+                    # FIX: Log successful insert
+                    logger.info("[PIPELINE] ai_news inserted for raw_news_id=%s ai_news_id=%s", raw_news_id, ai_news_id)
                     print("[PIPELINE] SAVED ai_news_id:", ai_news_id)
 
                     saved = True
@@ -1311,6 +1313,18 @@ async def _process_raw_news_async(
                 except Exception as e:
                     print("[PIPELINE ERROR]:", e)
                     logger.exception("[PIPELINE] emergency fix generation error: %s", e)
+                    # FIX: Fail-safe - reset status to pending on exception
+                    try:
+                        await _set_status(
+                            session=session,
+                            raw_news_id=raw_news_id,
+                            status="pending",
+                            error_message=str(e)[:500],
+                        )
+                        await session.commit()
+                        logger.info("[PIPELINE] fail-safe: reset raw_news_id=%s to pending after exception", raw_news_id)
+                    except Exception as reset_e:
+                        logger.exception("[PIPELINE] fail-safe reset failed: %s", reset_e)
                     await session.rollback()
                     continue
 
@@ -1321,7 +1335,7 @@ async def _process_raw_news_async(
             await _set_status(
                 session=session,
                 raw_news_id=raw_news_id,
-                status="completed",
+                status="generated",
                 error_message=None,
             )
             await session.commit()
@@ -1336,15 +1350,17 @@ async def _process_raw_news_async(
         except Exception as e:
             await session.rollback()
             try:
+                # FIX: Fail-safe - reset to pending instead of failed to allow retry
                 await _set_status(
                     session=session,
                     raw_news_id=raw_news_id,
-                    status="failed",
+                    status="pending",
                     error_message=str(e)[:2000],
                 )
                 await session.commit()
-            except Exception:
-                logger.exception("failed to persist failed status raw_news_id=%s", raw_news_id)
+                logger.info("[PIPELINE] fail-safe: reset raw_news_id=%s to pending after exception", raw_news_id)
+            except Exception as reset_e:
+                logger.exception("[PIPELINE] fail-safe reset failed for raw_news_id=%s: %s", raw_news_id, reset_e)
             raise
         finally:
             if lock_acquired:
@@ -1416,7 +1432,8 @@ async def _schedule_feed_ingestion_async() -> dict[str, Any]:
     hard import-time dependency failures when optional parsing libs are not
     installed in some environments.
     """
-    async with SessionLocal() as session:
+    logger.info("[INGESTION] started")
+    async with db_session.SessionLocal() as session:
         try:
             try:
                 # Import at runtime to keep startup resilient
@@ -1489,7 +1506,7 @@ def refresh_user_embedding_task(user_id: int, history_limit: int | None = None) 
     try:
         # FIX: Use asyncio.run() instead of manual loop management
         async def _run():
-            async with SessionLocal() as session:
+            async with db_session.SessionLocal() as session:
                 # IDEMPOTENCY: Check if embedding was recently refreshed (within 5 minutes)
                 recent_result = await session.execute(
                     text(
@@ -1556,7 +1573,7 @@ def process_all_task() -> dict:
         failed = 0
         skipped = 0
 
-        async with SessionLocal() as session:
+        async with db_session.SessionLocal() as session:
             recovered = await _recover_stale_processing_rows(
                 session,
                 int(os.getenv("PIPELINE_PROCESSING_TTL_MINUTES", "10")),
@@ -1636,7 +1653,7 @@ def process_all_task() -> dict:
                     timeout_seconds = int(os.getenv("PIPELINE_PROCESS_TIMEOUT", str(settings.CELERY_TASK_TIME_LIMIT)))
                     # Per-row exponential backoff + jitter to avoid thundering herd on retries
                     try:
-                        async with SessionLocal() as backoff_session:
+                        async with db_session.SessionLocal() as backoff_session:
                             ac_res = await backoff_session.execute(
                                 text("SELECT COALESCE(attempt_count, 0) FROM raw_news WHERE id = :id"),
                                 {"id": raw_id},
@@ -1669,7 +1686,7 @@ def process_all_task() -> dict:
                     if created_count == 0:
                         return {"status": "failed", "raw_id": raw_id, "created": 0, "reason": "no_ai_news_created"}
 
-                    async with SessionLocal() as update_session:
+                    async with db_session.SessionLocal() as update_session:
                         await update_session.execute(
                             text("UPDATE raw_news SET process_status = :st, error_message = NULL WHERE id = :id"),
                             {"st": "completed", "id": raw_id},

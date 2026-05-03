@@ -93,7 +93,7 @@ class Settings(BaseSettings):
     CORS_ALLOW_ORIGIN_REGEX: str = ""
     TRUSTED_HOSTS: str = "*"
 
-    PIPELINE_MAX_ATTEMPTS: int = 1
+    PIPELINE_MAX_ATTEMPTS: int = 3
     PIPELINE_TARGET_SCORE: float = 8.0
     PIPELINE_MIN_SCORE: float = 6.0  # Lowered for testing
     PIPELINE_MAX_REWRITE_ROUNDS: int = 1  # DEBUG: 1 round for speed

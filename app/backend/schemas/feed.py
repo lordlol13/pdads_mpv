@@ -26,6 +26,7 @@ class FeedItem(BaseModel):
     like_count: int = 0
     saved: bool | None = None
     comment_count: int = 0
+    is_viewed: bool = False
     created_at: datetime | None = None
 
     @field_validator("image_urls", "video_urls", mode="before")
