@@ -3,8 +3,11 @@ import html
 import logging
 import re
 from typing import Any
+from io import BytesIO
 from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode, urljoin
 
+import httpx
+from PIL import Image
 from fastapi import HTTPException, status
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,6 +31,31 @@ created_at, process_status, error_message, attempt_count, content_hash
 # Cache result of schema check to avoid repeated information_schema queries
 _IMAGE_HASH_EXISTS: bool | None = None
 _DB_URL_LOGGED = False
+ALLOWED_DOMAINS = ["bbc.com", "reuters.com", "techcrunch.com"]
+
+
+def is_valid_source(url: str | None) -> bool:
+    value = (url or "").strip().lower()
+    if not value:
+        return False
+    return any(domain in value for domain in ALLOWED_DOMAINS)
+
+
+async def is_valid_image(url: str | None) -> bool:
+    value = (url or "").strip()
+    if not value:
+        return False
+    try:
+        async with httpx.AsyncClient(timeout=5.0, follow_redirects=True) as client:
+            response = await client.get(value)
+            if response.status_code != 200:
+                return False
+
+            image = Image.open(BytesIO(response.content))
+            width, height = image.size
+            return width >= 600 and height >= 400
+    except Exception:
+        return False
 
 
 def get_image_hash(url: str | None) -> str | None:
@@ -87,6 +115,14 @@ async def create_raw_news(session: AsyncSession, payload: dict[str, Any]) -> dic
 
     source_url = payload.get("source_url") or None
     normalized_url = _normalize_source_url(source_url)
+    if not is_valid_source(normalized_url or source_url):
+        logger.warning("[INGESTION] skipped source outside allowlist url=%s", normalized_url or source_url)
+        return {
+            "id": -1,
+            "title": (payload.get("title") or "").strip(),
+            "source_url": normalized_url or source_url,
+            "process_status": "ignored_source",
+        }
 
     def clean_text(text: str | None) -> str:
         if not text:
@@ -107,6 +143,10 @@ async def create_raw_news(session: AsyncSession, payload: dict[str, Any]) -> dic
             image_url = urljoin(normalized_url or source_url, image_url)
     if _looks_like_logo_url(image_url):
         logger.warning("[DEBUG] image_url looks like logo, dropping it: %s", image_url)
+        image_url = None
+
+    if image_url and not await is_valid_image(image_url):
+        logger.info("[INGESTION] dropped low-quality image url=%s", image_url)
         image_url = None
 
     image_hash = get_image_hash(image_url)

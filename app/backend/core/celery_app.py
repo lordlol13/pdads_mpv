@@ -46,12 +46,10 @@ celery_app.autodiscover_tasks(
     force=True,
 )
 
-try:
-    import app.backend.tasks.parser_task  # noqa: F401
-    import brain.tasks.pipeline_tasks  # noqa: F401
-    import recommender.tasks  # noqa: F401
-except Exception as import_exc:
-    logger.exception("[CELERY] explicit task import failed: %s", import_exc)
+# NOTE: Avoid explicit top-level imports of task modules here.
+# Importing task modules at import time may trigger circular imports
+# (for example between `brain.tasks` and `recommender`). Rely on
+# Celery's `autodiscover_tasks` and string task names instead.
 
 
 # Log configuration
@@ -108,10 +106,12 @@ def is_redis_available() -> bool:
     broker = (settings.CELERY_BROKER_URL or "").strip()
     if not broker:
         return False
-    # Production Redis should not be localhost
+    # Local Redis: allow in non-production (dev/test), but disallow empty in production
     if broker.startswith("redis://localhost") or broker.startswith("redis://127.0.0.1"):
-        # Local Redis - skip in production
-        return False
+        env = (settings.APP_ENV or "dev").strip().lower()
+        is_production = env in {"prod", "production", "stage", "staging"}
+        return not is_production
+
     return True
 
 

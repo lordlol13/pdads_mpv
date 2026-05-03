@@ -64,8 +64,20 @@ _SOCIAL_TABLES_READY_DIALECTS: set[str] = set()
 LOCAL_FALLBACK_IMAGE_URL = "/PR.ADS.png"
 
 EMERGENCY_SOURCE_URL_BASE = "https://pdads-mpv.vercel.app/emergency"
+ALLOWED_DOMAINS = ["bbc.com", "reuters.com", "techcrunch.com"]
 
 MIN_FEED_ITEMS = 20
+
+
+def is_valid_source(url: str | None) -> bool:
+
+    value = str(url or "").strip().lower()
+
+    if not value:
+
+        return False
+
+    return any(domain in value for domain in ALLOWED_DOMAINS)
 
 
 
@@ -1988,7 +2000,8 @@ async def get_user_feed(session: AsyncSession, user_id: int, limit: int = 50) ->
 
         )
 
-        return [dict(row) for row in result.mappings().all()]
+        loaded = [dict(row) for row in result.mappings().all()]
+        return [row for row in loaded if is_valid_source(row.get("source_url"))]
 
 
 

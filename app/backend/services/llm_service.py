@@ -997,53 +997,32 @@ def _persona_profile_for_prompt(
     }
 
 
-# FIX START - Strict Uzbek news writer prompt
+# FIX START - Strict Russian news writer prompt
 def _build_editorial_system_prompt(*, language_hint: str, min_words: int, max_words: int) -> str:
     """
-    STRICT Uzbek news writer prompt.
-    Output ONLY Uzbek (Latin). ZERO English/Russian.
-    150-250 words, 2-4 paragraphs.
+    STRICT Russian news writer prompt.
+    Output ONLY Russian. No English words.
+    Minimum 120 words.
     """
     word_range = f"{min_words}-{max_words}" if max_words > 0 else f"{min_words}+"
     return (
-        "Siz O'zbekistoning professional yangiliklar muxbiri va jiddiy tahrirchisisiz. "
-        "Vazifangiz: yangiliklarni FAQAT O'ZBEK TILIDA (LOTIN ALIFBOSI) yozing. "
-        "BARCHA MATN FAQAT O'ZBEK TILIDA BO'LISHI SHART! "
-        "INGLIZ YOKI RUS TILIDA BIR SO'Z HAM BO'LMASIN!\n\n"
-        "QATTIY QOIDALAR (BUZMANG!):\n"
-        "1. TIL: Faqat O'ZBEK tili (LOTIN alifbosi). INGLIZ yoki RUS tilida bir so'z ham bo'lmasin!\n"
-        "   - Kompaniya nomlari (Meta, Google, Apple) va texnik atamalar (AI, API, GPU) bundan mustasno\n"
-        "   - Qolgan BARCHA so'zlar FAQAT o'zbek tilida!\n"
-        "2. UZUNLIK: 150-250 so'z. KAMIDA 120 SO'Z BO'LISHI SHART!\n"
-        "3. PARAGRAFLAR: 2-4 paragraf. Har bir paragraf 3-5 jumladan iborat.\n"
-        "4. USLUB: Professional yangiliklar uslubi. Jurnalistik, aniq, keskin, faktga asoslangan.\n"
-        "5. MAZMUN: Engaging va informative bo'lsin. Yangilik qiymatli va qiziqarli bo'lishi kerak.\n"
-        "6. TA'QIQ LANGAN (ishlatmang!):\n"
-        "   - 'Bu juda muhim', 'Zamonaviy dunyoda', 'Foydalanuvchilar uchun'\n"
-        "   - 'Siz uchun ahamiyati', 'Asosiy fakt va raqamlar'\n"
-        "NAMUNA (yaxshi):\n"
-        "Input: Meta plans to use employee activity data to improve AI models.\n"
-        "Sarlavha: Meta sun'iy intellektni yaxshilash uchun xodimlar ma'lumotidan foydalanadi\n"
-        "Matn: Meta kompaniyasi sun'iy intellekt modellarini rivojlantirish maqsadida xodimlarning ish faoliyatiga oid ma'lumotlarni tahlil qilishni rejalashtirmoqda. "
-        "Ushbu jarayonda tizim ichidagi harakatlar, bosilgan tugmalar va ish jarayonidagi boshqa raqamli izlar o'rganiladi. "
-        "Kompaniya bu ma'lumotlardan foydalanib, sun'iy intellekt modellarining aniqligini oshirish va natijalarni yaxshilashni maqsad qilgan. "
-        "Tahlil jarayonida xodimlarning kundalik ish faoliyati, dasturiy ta'minotdan foydalanish statistikasi va raqamli muloqot ma'lumotlari qamrab olinadi. "
-        "\n"
-        "Shu bilan birga, bunday yondashuv maxfiylik va ma'lumotlarni himoya qilish sohasida jiddiy savollar keltirib chiqarmoqda. "
-        "Mutaxassislar fikricha, xodimlar ma'lumotlaridan bunday keng miqyosda foydalanish shaxsiy hayot huquqlariga ta'sir qilishi mumkin. "
-        "Kompaniya esa barcha ma'lumotlarni anonimlashtirilgan holda ishlatishini ta'kidlamoqda.\n"
-        "\n"
-        f"OUTPUT (JSON format, qo'shimcha matn yo'q):\n"
-        f"final_title: qisqa, aniq sarlavha (10-15 so'z, FAQAT O'ZBEK TILIDA)\n"
-        f"final_text: 2-4 paragraf, {word_range} so'z, FAQAT O'ZBEK TILI, INGLIZ/RUS SO'ZLARI TAQIQLANADI\n"
-        f"ai_score: 0-10 baho (sifat bahosi)\n"
-        f"category: 'technology'\n"
-        f"target_persona: ai|tashkent|uz\n"
-        "\n"
-        "ESLATMA: Agar yangilik to'liq AI/texnologiya mavzusida bo'lmasa, undagi "
-        "avtomatlashtirish, raqamli texnologiyalar, zamonaviy uskunalar kabi jihatlarni ajratib oling. "
-        "Masalan, avtomobil ishlab chiqarish -> zamonaviy robotlashtirilgan ishlab chiqarish texnologiyalari.\n"
-        "FAQAT O'ZBEK TILIDA JSON QAYTARING!"
+        "You are a professional journalist.\n"
+        "Write the article ONLY in Russian.\n"
+        "No English words allowed.\n"
+        "Minimum 120 words.\n"
+        "Clear and natural style.\n\n"
+        "STRICT REQUIREMENTS:\n"
+        "1. Language: Russian only, no English words.\n"
+        "2. Length: at least 120 words, target range " + word_range + ".\n"
+        "3. Structure: 2-4 paragraphs.\n"
+        "4. Tone: factual, concise, readable, journalistic.\n"
+        "5. Avoid generic filler and repeated sentences.\n\n"
+        "Output JSON only with keys:\n"
+        "final_title\n"
+        "final_text\n"
+        "ai_score\n"
+        "category\n"
+        "target_persona\n"
     )
     # FIX END
 
@@ -1079,7 +1058,7 @@ def _build_editorial_user_payload(
         },
         "user_profile": persona,
         "requirements": {
-            "language": "uzbek_latin_only",
+            "language": "russian_only",
             "length": "150-250_words",  # FIX - Changed from 200-250
             "min_words": 120,  # FIX - Minimum validation threshold
             "paragraphs": "2-4_paragraphs",  # FIX - Allow up to 4 paragraphs
