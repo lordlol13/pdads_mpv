@@ -50,7 +50,7 @@ async def _send_with_resend_async(*, to_email: str, subject: str, html: str) -> 
         )
         return False, {"provider": "resend", "status": resp.status_code, "message": message}
     except Exception as exc:
-        logger.exception("Resend async error for %s: %s", to_email, exc)
+        logger.exception(f"Resend async error for {to_email}: {exc}")
         return False, {"provider": "resend", "error": str(exc)}
 
 
@@ -73,7 +73,7 @@ async def send_verification_code_async(email: str, code: str) -> Tuple[bool, Opt
         return True, None
 
     if not (settings.SMTP_HOST or "").strip():
-        logger.info("Email provider not configured, verification code for %s is %s", email, code)
+        logger.info(f"Email provider not configured, verification code for {email} is {code}")
         return False, provider_error
 
     message = EmailMessage()
@@ -97,7 +97,7 @@ async def send_verification_code_async(email: str, code: str) -> Tuple[bool, Opt
             smtp.send_message(message)
         return True, None
     except Exception as exc:
-        logger.exception("Failed to send verification email to %s", email)
+        logger.exception(f"Failed to send verification email to {email}")
         return False, {"provider": "smtp", "error": str(exc)}
 
 
@@ -116,7 +116,7 @@ async def send_password_reset_code(email: str, code: str) -> Tuple[bool, Optiona
         return True, None
 
     if not (settings.SMTP_HOST or "").strip():
-        logger.info("Email provider is not configured, password reset code for %s is %s", email, code)
+        logger.info(f"Email provider is not configured, password reset code for {email} is {code}")
         return False, provider_error
 
     message = EmailMessage()
@@ -138,7 +138,7 @@ async def send_password_reset_code(email: str, code: str) -> Tuple[bool, Optiona
             smtp.send_message(message)
         return True, None
     except Exception as exc:
-        logger.exception("Failed to send password reset email to %s", email)
+        logger.exception(f"Failed to send password reset email to {email}")
         return False, {"provider": "smtp", "error": str(exc)}
 
 
@@ -158,5 +158,5 @@ async def send_password_reset_code_async(email: str, code: str) -> Tuple[bool, O
         return True, None
 
     if not (settings.SMTP_HOST or "").strip():
-        logger.info("Email provider not configured, reset code for %s is %s", email, code)
+        logger.info(f"Email provider not configured, reset code for {email} is {code}")
         return False, provider_error

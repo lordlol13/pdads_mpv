@@ -49,6 +49,17 @@ function personaBadge(item: FeedItem): string {
   return tokens.join(' • ') || (item.category || 'general').trim();
 }
 
+function dedupeFeedItems(items: FeedItem[]): FeedItem[] {
+  const seen = new Set<number>();
+  return items.filter((item) => {
+    if (seen.has(item.ai_news_id)) {
+      return false;
+    }
+    seen.add(item.ai_news_id);
+    return true;
+  });
+}
+
 export function BackendMainFeed({ currentUser, onLogout }: BackendMainFeedProps) {
   const { language, setLanguage, t } = useLanguage();
   const [feedData, setFeedData] = useState<FeedItem[]>([]);
@@ -104,7 +115,7 @@ export function BackendMainFeed({ currentUser, onLogout }: BackendMainFeedProps)
     setFeedError('');
     try {
       const items = await newsService.getFeed(50);
-      setFeedData(items);
+      setFeedData(dedupeFeedItems(items));
     } catch (error) {
       setFeedError(error instanceof Error ? error.message : 'Unable to load feed');
     } finally {
@@ -210,12 +221,25 @@ export function BackendMainFeed({ currentUser, onLogout }: BackendMainFeedProps)
 
   const handleReactToNews = async (aiNewsId: number, liked: boolean) => {
     if (!currentUser) {
-      return;
+      return false;
     }
-    await newsService.react({ user_id: currentUser.id, ai_news_id: aiNewsId, liked });
+    const response = await newsService.react({ user_id: currentUser.id, ai_news_id: aiNewsId, liked });
     setFeedData((previous) =>
-      previous.map((item) => (item.ai_news_id === aiNewsId ? { ...item, liked } : item)),
+      previous.map((item) => {
+        if (item.ai_news_id !== aiNewsId) {
+          return item;
+        }
+        const wasLiked = Boolean(item.liked);
+        const nextLiked = Boolean(response.liked);
+        const likeDelta = wasLiked === nextLiked ? 0 : nextLiked ? 1 : -1;
+        return {
+          ...item,
+          liked: nextLiked,
+          like_count: Math.max(0, Number(item.like_count || 0) + likeDelta),
+        };
+      }),
     );
+    return response.liked;
   };
 
   const handleViewed = async (aiNewsId: number) => {

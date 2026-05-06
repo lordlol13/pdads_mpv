@@ -23,7 +23,7 @@ async def ensure_system_state_table(session: AsyncSession) -> None:
         )
         await session.commit()
     except Exception as e:
-        logger.exception("ensure_system_state_table failed: %s", e)
+        logger.exception(f"ensure_system_state_table failed: {e}")
         try:
             await session.rollback()
         except Exception:
@@ -49,7 +49,7 @@ async def update_last_parsed_at(session: AsyncSession, name: str = "parser") -> 
         )
         await session.commit()
     except Exception as e:
-        logger.exception("update_last_parsed_at failed: %s", e)
+        logger.exception(f"update_last_parsed_at failed: {e}")
         try:
             await session.rollback()
         except Exception:

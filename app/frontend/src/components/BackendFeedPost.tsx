@@ -13,7 +13,7 @@ interface BackendFeedPostProps {
   isActive: boolean;
   currentUserId: number;
   onToggleSaved: (aiNewsId: number) => Promise<boolean>;
-  onReactToNews: (aiNewsId: number, liked: boolean) => Promise<void>;
+  onReactToNews: (aiNewsId: number, liked: boolean) => Promise<boolean>;
   onViewed: (aiNewsId: number) => Promise<void>;
   onTagClick?: (tag: string) => void;  // FIX - Clickable tags for smart feed filtering
   activeTag?: string | null;  // FIX - Highlight active tag for AI personalization feel
@@ -185,6 +185,7 @@ export function BackendFeedPost({
   const [descHeight, setDescHeight] = useState<number>(60); // viewport height in vh for modal
   const [showComments, setShowComments] = useState(false);
   const [showShareSheet, setShowShareSheet] = useState(false);
+  const [isLikePending, setIsLikePending] = useState(false);
   const [newComment, setNewComment] = useState('');
   const [commentsList, setCommentsList] = useState<CommentItem[]>([]);
   const [commentsLoading, setCommentsLoading] = useState(false);
@@ -291,17 +292,24 @@ export function BackendFeedPost({
   }, [commentsList.length, item.ai_news_id, showComments]);
 
   const handleLike = async () => {
-    const nextLiked = !isLiked;
-    setIsLiked(nextLiked);
-    setLikesCount((previous) => Math.max(0, previous + (nextLiked ? 1 : -1)));
+    if (isLikePending) {
+      return;
+    }
+
     setActionError('');
+    setIsLikePending(true);
 
     try {
-      await onReactToNews(item.ai_news_id, nextLiked);
+      const liked = await onReactToNews(item.ai_news_id, true);
+      setIsLiked(liked);
+      setLikesCount((previous) => {
+        const likeDelta = liked === isLiked ? 0 : liked ? 1 : -1;
+        return Math.max(0, previous + likeDelta);
+      });
     } catch (error) {
-      setIsLiked(!nextLiked);
-      setLikesCount((previous) => previous + (nextLiked ? -1 : 1));
       setActionError(error instanceof Error ? error.message : 'Unable to update reaction');
+    } finally {
+      setIsLikePending(false);
     }
   };
 
@@ -461,9 +469,9 @@ export function BackendFeedPost({
                   </button>
                 ) : null}
                 <div className="absolute bottom-24 left-1/2 -translate-x-1/2 flex gap-1.5 z-10">
-                  {urls.map((_, index) => (
+                  {urls.map((url, index) => (
                     <div
-                      key={index}
+                      key={url || `image-${index}`}
                       className={`w-1.5 h-1.5 rounded-full transition-all duration-300 ${index === currentImageIndex ? 'bg-white w-4' : 'bg-white/40'}`}
                     />
                   ))}
@@ -507,6 +515,7 @@ export function BackendFeedPost({
               event.stopPropagation();
               void handleLike();
             }}
+            disabled={isLikePending}
             className="p-2.5 sm:p-3 bg-white/10 dark:bg-black/40 backdrop-blur-xl rounded-full border border-border dark:border-white/5 hover:scale-110 active:scale-95 transition-all"
           >
             <Heart className={`w-6 h-6 sm:w-7 sm:h-7 ${isLiked ? 'text-red-500 fill-red-500' : 'text-[var(--popover-foreground)] dark:text-white'}`} />
@@ -690,9 +699,9 @@ export function BackendFeedPost({
                 {/* FIX START - Add clickable item.topics tags */}
                 {item.topics && item.topics.length > 0 && (
                   <div className="flex flex-wrap gap-2 mt-3">
-                    {item.topics.map((tag, i) => (
+                    {item.topics.map((tag) => (
                       <button
-                        key={i}
+                        key={tag}
                         onClick={(e) => {
                           e.stopPropagation();
                           // FIX START - Log user action for analytics

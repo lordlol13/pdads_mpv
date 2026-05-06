@@ -1,19 +1,19 @@
 # ============================================
-# Остановка всех сервисов
-# Для Windows PowerShell
+# Stop all services
+# Windows PowerShell
 # ============================================
 
-Write-Host "🛑 Остановка всех сервисов PD.ADS MVP..." -ForegroundColor Red
+Write-Host "Stopping all PD.ADS MVP services..." -ForegroundColor Red
 
-# Остановка Docker контейнеров
-Write-Host "`n🐳 Остановка Docker контейнеров..." -ForegroundColor Yellow
+# Stop Docker containers
+Write-Host "`nStopping Docker containers..." -ForegroundColor Yellow
 docker stop pdads-postgres pdads-redis 2>$null
-Write-Host "✅ Docker контейнеры остановлены" -ForegroundColor Green
+Write-Host "Docker containers stopped" -ForegroundColor Green
 
-# Остановка Celery процессов
-Write-Host "`n👷 Остановка Celery Worker..." -ForegroundColor Yellow
+# Stop Celery processes
+Write-Host "`nStopping Celery Worker..." -ForegroundColor Yellow
 taskkill /F /IM python.exe 2>$null
 
-Write-Host "`n✅ Все сервисы остановлены!" -ForegroundColor Green
+Write-Host "`nAll services stopped!" -ForegroundColor Green
 
 Pause

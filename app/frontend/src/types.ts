@@ -115,6 +115,5 @@ export interface CommentLikeToggleResponse {
 }
 
 export interface InteractionResponse {
-  id: number;
-  status: string;
+  liked: boolean;
 }

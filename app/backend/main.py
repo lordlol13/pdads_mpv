@@ -172,6 +172,20 @@ async def lifespan(app: FastAPI):
         logger.warning("Unexpected error during startup checks (continuing)", error=str(_startup_exc))
 
     # PRODUCTION ALERT: Startup degraded mode check
+        # DEV: Create test user for debugging (test@test.com / 123456)
+        if settings.APP_ENV == "dev":
+            try:
+                from app.backend.services.auth_service import create_test_user
+                async with db_session.engine.begin() as conn:
+                    from sqlalchemy.ext.asyncio import AsyncSession
+                    async_session = db_session.SessionLocal()
+                    try:
+                        await create_test_user(async_session)
+                    finally:
+                        await async_session.close()
+            except Exception as e:
+                logger.warning(f"Failed to create test user on startup (non-fatal): {e}")
+
     from app.backend.core.health import is_degraded, get_degraded_reasons
     if is_degraded():
         reasons = get_degraded_reasons()

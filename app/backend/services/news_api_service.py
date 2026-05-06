@@ -209,7 +209,7 @@ async def _classify_interest_topics(topics: list[str]) -> list[str]:
             return combined[:12]
     except Exception as exc:
         _mark_groq_backoff_if_needed(exc)
-        logger.warning("interest classification fallback triggered: %s", exc)
+        logger.warning(f"interest classification fallback triggered: {exc}")
 
     return normalized_topics
 
@@ -322,7 +322,7 @@ async def _ai_select_newsapi_articles(
             return selected[:max_items]
     except Exception as exc:
         _mark_groq_backoff_if_needed(exc)
-        logger.warning("news selection fallback triggered: %s", exc)
+        logger.warning(f"news selection fallback triggered: {exc}")
 
     return sampled[:max_items]
 

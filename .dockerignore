@@ -1,0 +1,16 @@
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+pytest-cache-files-*
+logs
+data/debug
+data/raw
+data/processed
+trash
+.venv
+node_modules
+app/frontend/node_modules
+app/frontend/dist
+.git

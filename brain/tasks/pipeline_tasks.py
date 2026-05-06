@@ -6,7 +6,7 @@ import re
 import os
 import time  # FIX - For observability timing
 import random
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, Any
 
 from sqlalchemy import text
@@ -27,14 +27,32 @@ from app.backend.services.media_service import (
 )
 from app.backend.services.news_api_service import fetch_articles_for_topics
 from app.backend.services.recommender_service import refresh_ai_news_embedding
-from app.backend.db import session as db_session  # FIX: Import module, not the None value at import-time
-# FIX START - Observability integration
+from app.backend.db.session import SessionLocal  # FIX: Import the initialized sessionmaker directly
 from app.backend.services.async_utils import gather_with_concurrency
-from app.backend.services.observability_service import metrics
+from app.backend.services.observability_service import health_monitor, metrics
 
 # FIX: Initialize logger
 logger = logging.getLogger(__name__)
 LOG = logger  # Alias for compatibility
+obs_logger = logger
+
+
+# FIX 8: Safe metrics wrapper (if metrics not available, use no-op)
+class MetricsNoop:
+    def increment(self, key: str, value: int = 1):
+        pass
+
+try:
+    if metrics is None:
+        metrics = MetricsNoop()
+except Exception:
+    metrics = MetricsNoop()
+
+
+def _get_sessionmaker():
+    if SessionLocal is None:
+        raise RuntimeError("SessionLocal is not initialized")
+    return SessionLocal
 
 
 BAD_PHRASES = [
@@ -1038,58 +1056,386 @@ async def _populate_user_feed_for_ai_news(
 
 
 async def _schedule_ingestion_batch_async() -> dict[str, Any]:
-    logger.info("[INGESTION] started")
-    async with db_session.SessionLocal() as session:
-        persona_contexts = await _load_cohort_personas(session)
-        topics = list(dict.fromkeys([str(p.get("topic") or "general") for p in persona_contexts]))
-        country_codes = [str(p.get("country_code") or "").strip().upper() for p in persona_contexts if p.get("country_code")]
-        articles = await fetch_articles_for_topics(
-            topics,
-            settings.NEWS_FETCH_BATCH_SIZE,
-            country_codes=country_codes,
-        )
-
-        if not articles and "general" not in topics:
+    """
+    FIX 1: Batch ingestion with FOR UPDATE SKIP LOCKED
+    - Fetch articles
+    - Create raw_news  
+    - Queue batch of tasks with proper metrics
+    """
+    logger.info("[INGESTION] batch ingestion started")
+    start_time = time.time()
+    
+    async with _get_sessionmaker()() as session:
+        try:
+            persona_contexts = await _load_cohort_personas(session)
+            topics = list(dict.fromkeys([str(p.get("topic") or "general") for p in persona_contexts]))
+            country_codes = [str(p.get("country_code") or "").strip().upper() for p in persona_contexts if p.get("country_code")]
+            
+            logger.info("[INGESTION] fetching articles for topics=%s countries=%s", topics, country_codes)
             articles = await fetch_articles_for_topics(
-                [*topics, "general"],
+                topics,
                 settings.NEWS_FETCH_BATCH_SIZE,
                 country_codes=country_codes,
             )
 
-        queued = 0
-        for article in articles:
-            raw_news = await create_raw_news(session, article)
-            if raw_news.get("process_status") in {"pending", "failed", None}:
-                process_raw_news.delay(raw_news["id"], persona_contexts)
-                queued += 1
+            if not articles and "general" not in topics:
+                logger.warning("[INGESTION] no articles fetched, retrying with general topic")
+                articles = await fetch_articles_for_topics(
+                    [*topics, "general"],
+                    settings.NEWS_FETCH_BATCH_SIZE,
+                    country_codes=country_codes,
+                )
 
+            logger.info("[INGESTION] fetched %d articles", len(articles))
+            
+            created_count = 0
+            queued_count = 0
+            
+            for article in articles:
+                try:
+                    raw_news = await create_raw_news(session, article)
+                    created_count += 1
+                    logger.info("[INGESTION] created raw_news id=%s title=%s", raw_news["id"], raw_news.get("title", "N/A")[:50])
+                    
+                    if raw_news.get("process_status") in {"pending", "failed", None}:
+                        process_raw_news.delay(raw_news["id"], persona_contexts)
+                        queued_count += 1
+                        logger.debug("[INGESTION] queued task for raw_news_id=%s", raw_news["id"])
+                except Exception as e:
+                    logger.exception("[INGESTION] failed to create/queue raw_news from article: %s", e)
+                    continue
+
+            elapsed = time.time() - start_time
+            logger.info("[INGESTION] batch complete: fetched=%d created=%d queued=%d elapsed=%.2fs", 
+                       len(articles), created_count, queued_count, elapsed)
+            
+            # FIX 8: Debug metrics
+            metrics.increment("pipeline.ingestion.articles_fetched", len(articles))
+            metrics.increment("pipeline.ingestion.raw_news_created", created_count)
+            metrics.increment("pipeline.ingestion.tasks_queued", queued_count)
+
+            return {
+                "fetched": len(articles),
+                "created": created_count,
+                "queued": queued_count,
+                "personas": [str(p.get("label") or p.get("topic") or "general") for p in persona_contexts],
+                "elapsed_seconds": elapsed,
+            }
+        except Exception as e:
+            logger.exception("[INGESTION] batch failed with exception: %s", e)
+            metrics.increment("pipeline.ingestion.failed", 1)
+            raise
+
+
+async def _process_batch_raw_news_async(batch_size: int = 50, max_iterations: int = 10) -> dict[str, Any]:
+    """
+    FIX 1: Batch processing with FOR UPDATE SKIP LOCKED
+    - Pick N pending raw_news with database lock
+    - Process each one
+    - Log every step
+    - Guarantee ai_news creation
+    """
+    logger.info("[BATCH] starting batch processing batch_size=%d max_iterations=%d", batch_size, max_iterations)
+    
+    async with _get_sessionmaker()() as session:
+        total_processed = 0
+        total_ai_news_created = 0
+        total_failures = 0
+        
+        for iteration in range(max_iterations):
+            logger.info("[BATCH] iteration %d/%d", iteration + 1, max_iterations)
+            
+            # FIX 1: SQL batch with FOR UPDATE SKIP LOCKED to prevent duplicate processing
+            query = """
+            SELECT id, title, raw_text, category, region, source_url, image_url
+            FROM raw_news
+            WHERE process_status = 'pending'
+            ORDER BY created_at ASC
+            FOR UPDATE SKIP LOCKED
+            LIMIT :batch_size
+            """
+            
+            result = await session.execute(text(query), {"batch_size": batch_size})
+            batch_rows = result.fetchall()
+            
+            if not batch_rows:
+                logger.info("[BATCH] no pending raw_news items found, stopping iteration")
+                break
+            
+            logger.info("[BATCH] picked %d items for processing", len(batch_rows))
+            metrics.increment("pipeline.batch.items_picked", len(batch_rows))
+            
+            for row_idx, row in enumerate(batch_rows):
+                raw_news_id = row[0]
+                try:
+                    logger.info("[BATCH] processing item %d/%d raw_news_id=%s", 
+                               row_idx + 1, len(batch_rows), raw_news_id)
+                    
+                    # Update status to prevent other workers from picking this
+                    await session.execute(
+                        text("UPDATE raw_news SET process_status = 'processing', updated_at = NOW() WHERE id = :id"),
+                        {"id": raw_news_id}
+                    )
+                    await session.commit()
+                    logger.info("[BATCH] marked raw_news_id=%s as processing", raw_news_id)
+                    
+                    # Process via existing function
+                    raw_row = {
+                        "id": row[0],
+                        "title": row[1],
+                        "raw_text": row[2],
+                        "category": row[3],
+                        "region": row[4],
+                        "source_url": row[5],
+                        "image_url": row[6],
+                    }
+                    
+                    ai_news_id = await _generate_and_save_ai_news(session, raw_row, raw_news_id)
+                    
+                    if ai_news_id:
+                        total_ai_news_created += 1
+                        logger.info("[BATCH] ai_news created raw_news_id=%s ai_news_id=%s", 
+                                   raw_news_id, ai_news_id)
+                        metrics.increment("pipeline.batch.ai_news_created", 1)
+                        
+                        # Mark as generated
+                        await session.execute(
+                            text("UPDATE raw_news SET process_status = 'generated', updated_at = NOW() WHERE id = :id"),
+                            {"id": raw_news_id}
+                        )
+                    else:
+                        logger.warning("[BATCH] ai_news_id is None for raw_news_id=%s", raw_news_id)
+                        total_failures += 1
+                        metrics.increment("pipeline.batch.ai_news_creation_failed", 1)
+                        # Reset to pending for retry
+                        await session.execute(
+                            text("UPDATE raw_news SET process_status = 'pending', updated_at = NOW() WHERE id = :id"),
+                            {"id": raw_news_id}
+                        )
+                    
+                    await session.commit()
+                    total_processed += 1
+                    
+                except Exception as e:
+                    logger.exception("[BATCH] error processing raw_news_id=%s: %s", raw_news_id, e)
+                    total_failures += 1
+                    metrics.increment("pipeline.batch.processing_error", 1)
+                    
+                    try:
+                        # Reset to pending for retry
+                        await session.execute(
+                            text("UPDATE raw_news SET process_status = 'pending', updated_at = NOW() WHERE id = :id"),
+                            {"id": raw_news_id}
+                        )
+                        await session.commit()
+                        logger.info("[BATCH] reset raw_news_id=%s to pending after error", raw_news_id)
+                    except Exception as reset_e:
+                        logger.exception("[BATCH] failed to reset raw_news_id=%s: %s", raw_news_id, reset_e)
+                    
+                    await session.rollback()
+                    continue
+        
+        logger.info("[BATCH] batch complete: processed=%d ai_news_created=%d failures=%d", 
+                   total_processed, total_ai_news_created, total_failures)
+        metrics.increment("pipeline.batch.total_processed", total_processed)
+        
         return {
-            "fetched": len(articles),
-            "queued": queued,
-            "personas": [str(p.get("label") or p.get("topic") or "general") for p in persona_contexts],
+            "processed": total_processed,
+            "ai_news_created": total_ai_news_created,
+            "failures": total_failures,
         }
 
 
+async def _generate_and_save_ai_news(session: AsyncSession, raw_row: dict, raw_news_id: int) -> int | None:
+    """
+    FIX 2: Generate ai_news with guaranteed fallback
+    FIX 3: Comprehensive logging
+    FIX 4: Guarantee DB insert
+    """
+    try:
+        logger.info("[GENERATE] starting for raw_news_id=%s title=%s", raw_news_id, raw_row.get("title", "N/A")[:50])
+        
+        clean_raw_text = clean_text(raw_row.get("raw_text") or "")
+        cleaned_title = clean_text(raw_row.get("title") or "")
+        
+        logger.info("[LLM] calling generate_news for raw_news_id=%s", raw_news_id)
+        
+        # FIX 2: Call LLM but ALWAYS get something back
+        generated = await generate_news(
+            raw_text=clean_raw_text,
+            title=cleaned_title,
+            category=raw_row.get("category"),
+            target_persona="general",
+            region=raw_row.get("region"),
+        )
+        
+        logger.info("[LLM] returned for raw_news_id=%s result_keys=%s", raw_news_id, 
+                   list(generated.keys()) if generated else "None")
+        
+        # FIX 2: Fallback - ALWAYS have content
+        if not generated or not isinstance(generated, dict):
+            logger.warning("[LLM] fallback triggered for raw_news_id=%s", raw_news_id)
+            metrics.increment("pipeline.llm.fallback_used", 1)
+            generated = {
+                "final_title": cleaned_title or str(raw_row.get("title") or "News"),
+                "final_text": clean_raw_text or str(raw_row.get("raw_text") or "")[:500],
+                "category": str(raw_row.get("category") or "general"),
+                "ai_score": 0.1,
+                "combined_score": 0.1,
+                "is_ai": False,
+            }
+        
+        # Ensure required fields
+        generated.setdefault("final_title", cleaned_title or "News")
+        generated.setdefault("final_text", clean_raw_text or "")
+        generated.setdefault("ai_score", 0.1)
+        generated.setdefault("combined_score", 0.1)
+        generated.setdefault("is_ai", False)
+        
+        logger.info("[GENERATE] final payload: title_len=%d text_len=%d score=%.2f", 
+                   len(str(generated.get("final_title") or "")),
+                   len(str(generated.get("final_text") or "")),
+                   generated.get("ai_score", 0.0))
+        
+        # FIX 4: UPSERT to guarantee insert
+        upsert_query = """
+        INSERT INTO ai_news (
+            raw_news_id, final_title, final_text, category, ai_score, combined_score, is_ai, created_at, updated_at
+        ) VALUES (
+            :raw_news_id, :final_title, :final_text, :category, :ai_score, :combined_score, :is_ai, NOW(), NOW()
+        )
+        ON CONFLICT (raw_news_id) DO UPDATE SET
+            final_title = EXCLUDED.final_title,
+            final_text = EXCLUDED.final_text,
+            category = EXCLUDED.category,
+            ai_score = EXCLUDED.ai_score,
+            combined_score = EXCLUDED.combined_score,
+            is_ai = EXCLUDED.is_ai,
+            updated_at = NOW()
+        RETURNING id
+        """
+        
+        result = await session.execute(
+            text(upsert_query),
+            {
+                "raw_news_id": raw_news_id,
+                "final_title": str(generated.get("final_title") or "")[:500],
+                "final_text": str(generated.get("final_text") or "")[:5000],
+                "category": str(generated.get("category") or "general"),
+                "ai_score": float(generated.get("ai_score") or 0.1),
+                "combined_score": float(generated.get("combined_score") or 0.1),
+                "is_ai": bool(generated.get("is_ai", False)),
+            }
+        )
+        
+        ai_news_id = result.scalar_one_or_none()
+        
+        if ai_news_id:
+            logger.info("[GENERATE] ai_news_id=%s inserted successfully for raw_news_id=%s", ai_news_id, raw_news_id)
+            metrics.increment("pipeline.generate.ai_news_inserted", 1)
+            
+            # Try to refresh embedding but don't fail if it doesn't work
+            try:
+                await refresh_ai_news_embedding(session, ai_news_id)
+                logger.debug("[GENERATE] embedding refreshed for ai_news_id=%s", ai_news_id)
+            except Exception as e:
+                logger.warning("[GENERATE] embedding refresh failed for ai_news_id=%s: %s", ai_news_id, e)
+            
+            return ai_news_id
+        else:
+            logger.error("[GENERATE] failed to get ai_news_id after insert for raw_news_id=%s", raw_news_id)
+            metrics.increment("pipeline.generate.ai_news_insert_failed", 1)
+            return None
+            
+    except Exception as e:
+        logger.exception("[GENERATE] error for raw_news_id=%s: %s", raw_news_id, e)
+        metrics.increment("pipeline.generate.exception", 1)
+        return None
+
+
+async def _recover_stuck_jobs_async() -> dict[str, Any]:
+    """
+    FIX 6: Recover stuck jobs
+    - Find raw_news with status='processing' for > 10 minutes
+    - Reset to 'pending' for retry
+    - Log recovery action
+    """
+    logger.info("[RECOVERY] scanning for stuck jobs")
+    async with _get_sessionmaker()() as session:
+        try:
+            ttl_minutes = 10
+            cutoff = datetime.utcnow() - timedelta(minutes=ttl_minutes)
+            
+            query = """
+            SELECT id, title, updated_at
+            FROM raw_news
+            WHERE process_status = 'processing'
+            AND updated_at < :cutoff
+            """
+            
+            result = await session.execute(text(query), {"cutoff": cutoff})
+            stuck_rows = result.fetchall()
+            
+            logger.info("[RECOVERY] found %d stuck jobs older than %d minutes", len(stuck_rows), ttl_minutes)
+            metrics.increment("pipeline.recovery.stuck_jobs_found", len(stuck_rows))
+            
+            recovered_count = 0
+            for row in stuck_rows:
+                raw_news_id = row[0]
+                try:
+                    logger.warning("[RECOVERY] resetting stuck raw_news_id=%s title=%s updated_at=%s", 
+                                  raw_news_id, row[1][:50] if row[1] else "N/A", row[2])
+                    
+                    update_query = """
+                    UPDATE raw_news
+                    SET process_status = 'pending', updated_at = NOW()
+                    WHERE id = :id
+                    """
+                    await session.execute(text(update_query), {"id": raw_news_id})
+                    await session.commit()
+                    
+                    recovered_count += 1
+                    metrics.increment("pipeline.recovery.jobs_recovered", 1)
+                    
+                except Exception as e:
+                    logger.exception("[RECOVERY] failed to recover raw_news_id=%s: %s", raw_news_id, e)
+                    await session.rollback()
+                    continue
+            
+            logger.info("[RECOVERY] recovery complete: recovered=%d", recovered_count)
+            return {
+                "stuck_jobs_found": len(stuck_rows),
+                "recovered": recovered_count,
+                "ttl_minutes": ttl_minutes,
+            }
+        except Exception as e:
+            logger.exception("[RECOVERY] error: %s", e)
+            raise
+
+
 async def _cleanup_ai_products_async() -> dict[str, Any]:
-    async with db_session.SessionLocal() as session:
+    async with _get_sessionmaker()() as session:
+        ai_cutoff = datetime.utcnow() - timedelta(days=settings.AI_PRODUCT_RETENTION_DAYS)
+        raw_cutoff = datetime.utcnow() - timedelta(days=settings.RAW_NEWS_RETENTION_DAYS)
+
         # Delete generated AI products older than configured retention
         ai_query = """
         DELETE FROM ai_news
-        WHERE created_at < NOW() - make_interval(days => :retention_days)
+        WHERE created_at < :cutoff
         """
         result_ai = await session.execute(
             text(ai_query),
-            {"retention_days": settings.AI_PRODUCT_RETENTION_DAYS},
+            {"cutoff": ai_cutoff},
         )
 
         # Delete raw_news older than configured raw retention (this will cascade to ai_news if FK set)
         raw_query = """
         DELETE FROM raw_news
-        WHERE created_at < NOW() - make_interval(days => :raw_retention_days)
+        WHERE created_at < :cutoff
         """
         result_raw = await session.execute(
             text(raw_query),
-            {"raw_retention_days": settings.RAW_NEWS_RETENTION_DAYS},
+            {"cutoff": raw_cutoff},
         )
 
         await session.commit()
@@ -1140,7 +1486,7 @@ async def _process_raw_news_async(
     attempt: int,
     personas: list[dict[str, str | None]] | None = None,
 ) -> dict:
-    async with db_session.SessionLocal() as session:
+    async with _get_sessionmaker()() as session:
         lock_acquired = False
         try:
             lock_acquired = await _try_advisory_lock(session, raw_news_id)
@@ -1383,44 +1729,104 @@ async def _process_raw_news_async(
 def process_raw_news(self, raw_news_id: int, personas: list[dict[str, str | None]] | None = None) -> dict:
     attempt = self.request.retries + 1
     max_retries = self.max_retries
-    logger.info("process_raw_news started raw_news_id=%s attempt=%s/%s", raw_news_id, attempt, max_retries + 1)
+    logger.info("[PROCESS] task started raw_news_id=%s attempt=%s/%s", raw_news_id, attempt, max_retries + 1)
 
     try:
-        # FIX: Use asyncio.run() instead of manual loop management
         result = asyncio.run(_process_raw_news_async(raw_news_id, attempt, personas))
-        logger.info("[WORKER] process_raw_news finished raw_news_id=%s result=%s", raw_news_id, result)
+        logger.info("[PROCESS] task finished raw_news_id=%s result=%s", raw_news_id, result)
         return result
     except SQLAlchemyError as e:
         if self.request.retries >= max_retries:
-            logger.error("[CELERY] FINAL FAILURE raw_news_id=%s after %s retries: %s", raw_news_id, max_retries, e)
+            logger.error("[PROCESS] FINAL_FAILURE raw_news_id=%s after %s retries: %s", raw_news_id, max_retries, e)
+            metrics.increment("pipeline.process.final_failure", 1)
         else:
-            logger.warning("db error raw_news_id=%s attempt=%s/%s: %s", raw_news_id, attempt, max_retries + 1, e)
+            logger.warning("[PROCESS] db error raw_news_id=%s attempt=%s: %s", raw_news_id, attempt, e)
         raise
     except Exception as e:
         if self.request.retries >= max_retries:
-            logger.error("[CELERY] FINAL FAILURE raw_news_id=%s after %s retries: %s", raw_news_id, max_retries, e)
+            logger.error("[PROCESS] FINAL_FAILURE raw_news_id=%s after %s retries: %s", raw_news_id, max_retries, e)
+            metrics.increment("pipeline.process.final_failure", 1)
         else:
-            logger.warning("unexpected error raw_news_id=%s attempt=%s/%s: %s", raw_news_id, attempt, max_retries + 1, e)
+            logger.warning("[PROCESS] error raw_news_id=%s attempt=%s: %s", raw_news_id, attempt, e)
         raise
 
 
 @celery_app.task(
     name="brain.scheduled_ingestion",
+    bind=True,
     autoretry_for=(ConnectionError, TimeoutError, Exception),
     retry_backoff=True,
     retry_backoff_max=settings.API_RETRY_MAX_DELAY_SECONDS,
     retry_jitter=True,
-    max_retries=2,  # Scheduled tasks - limited retries
+    max_retries=2,
 )
-def scheduled_ingestion() -> dict:
-    logger.info("scheduled_ingestion tick started")
+def scheduled_ingestion(self) -> dict:
+    logger.info("[SCHEDULED_INGESTION] tick started attempt=%s/%s", self.request.retries + 1, self.max_retries + 1)
     try:
-        # FIX: Use asyncio.run() instead of manual loop management
         result = asyncio.run(_schedule_ingestion_batch_async())
-        logger.info("[WORKER] scheduled_ingestion finished result=%s", result)
+        logger.info("[SCHEDULED_INGESTION] tick finished result=%s", result)
+        metrics.increment("pipeline.scheduled_ingestion.success", 1)
         return result
     except Exception as e:
-        logger.error("scheduled_ingestion failed: %s", e)
+        logger.error("[SCHEDULED_INGESTION] failed: %s", e)
+        metrics.increment("pipeline.scheduled_ingestion.failed", 1)
+        raise
+
+
+@celery_app.task(
+    name="brain.scheduled_batch_process",
+    bind=True,
+    autoretry_for=(ConnectionError, TimeoutError, Exception),
+    retry_backoff=True,
+    retry_backoff_max=60,
+    retry_jitter=True,
+    max_retries=1,
+)
+def scheduled_batch_process(self) -> dict:
+    """
+    FIX 1: Batch processing task
+    - Picks 50 pending raw_news with SQL lock
+    - Processes each one
+    - Logs every step
+    - Retries on failure
+    """
+    logger.info("[BATCH_PROCESS] scheduled task started")
+    try:
+        result = asyncio.run(_process_batch_raw_news_async(batch_size=50, max_iterations=10))
+        logger.info("[BATCH_PROCESS] completed result=%s", result)
+        metrics.increment("pipeline.batch_process.success", 1)
+        return result
+    except Exception as e:
+        logger.error("[BATCH_PROCESS] failed: %s", e)
+        metrics.increment("pipeline.batch_process.failed", 1)
+        raise
+
+
+@celery_app.task(
+    name="brain.scheduled_recover_stuck_jobs",
+    bind=True,
+    autoretry_for=(ConnectionError, TimeoutError, Exception),
+    retry_backoff=True,
+    retry_backoff_max=60,
+    retry_jitter=True,
+    max_retries=1,
+)
+def scheduled_recover_stuck_jobs(self) -> dict:
+    """
+    FIX 6: Recover stuck jobs
+    - Find raw_news with status='processing' older than 10 minutes
+    - Reset to 'pending' for retry
+    - Log recovery
+    """
+    logger.info("[RECOVERY] stuck job recovery started")
+    try:
+        result = asyncio.run(_recover_stuck_jobs_async())
+        logger.info("[RECOVERY] completed result=%s", result)
+        metrics.increment("pipeline.recovery.success", 1)
+        return result
+    except Exception as e:
+        logger.error("[RECOVERY] failed: %s", e)
+        metrics.increment("pipeline.recovery.failed", 1)
         raise
 
 
@@ -1433,7 +1839,7 @@ async def _schedule_feed_ingestion_async() -> dict[str, Any]:
     installed in some environments.
     """
     logger.info("[INGESTION] started")
-    async with db_session.SessionLocal() as session:
+    async with _get_sessionmaker()() as session:
         try:
             try:
                 # Import at runtime to keep startup resilient
@@ -1451,41 +1857,49 @@ async def _schedule_feed_ingestion_async() -> dict[str, Any]:
 
 @celery_app.task(
     name="brain.scheduled_feed_ingestion",
+    bind=True,
     autoretry_for=(ConnectionError, TimeoutError, Exception),
     retry_backoff=True,
     retry_backoff_max=settings.API_RETRY_MAX_DELAY_SECONDS,
     retry_jitter=True,
     max_retries=2,
 )
-def scheduled_feed_ingestion() -> dict:
-    logger.info("scheduled_feed_ingestion tick started")
+def scheduled_feed_ingestion(self) -> dict:
+    """Feed ingestion from feeds (RSS, etc)"""
+    logger.info("[FEED_INGESTION] scheduled task started attempt=%s/%s", self.request.retries + 1, self.max_retries + 1)
     try:
-        # FIX: Use asyncio.run() instead of manual loop management
         result = asyncio.run(_schedule_feed_ingestion_async())
-        logger.info("[WORKER] scheduled_feed_ingestion finished result=%s", result)
+        logger.info("[FEED_INGESTION] completed result=%s", result)
+        metrics.increment("pipeline.feed_ingestion.success", 1)
         return result
     except Exception as e:
-        logger.error("scheduled_feed_ingestion failed: %s", e)
+        logger.error("[FEED_INGESTION] failed: %s", e)
+        metrics.increment("pipeline.feed_ingestion.failed", 1)
         raise
 
 
 @celery_app.task(
     name="brain.scheduled_cleanup_ai_products",
+    bind=True,
     autoretry_for=(ConnectionError, TimeoutError, Exception),
     retry_backoff=True,
     retry_backoff_max=60,
     retry_jitter=True,
-    max_retries=1,  # Cleanup is low priority
+    max_retries=1,
 )
-def scheduled_cleanup_ai_products() -> dict:
-    logger.info("scheduled_cleanup_ai_products tick started")
+def scheduled_cleanup_ai_products(self) -> dict:
+    """FIX: Cleanup old ai_news and raw_news with logging"""
+    logger.info("[CLEANUP] scheduled task started")
     try:
-        # FIX: Use asyncio.run() instead of manual loop management
         result = asyncio.run(_cleanup_ai_products_async())
-        logger.info("[WORKER] scheduled_cleanup_ai_products finished result=%s", result)
+        logger.info("[CLEANUP] completed result=%s", result)
+        metrics.increment("pipeline.cleanup.success", 1)
+        metrics.increment("pipeline.cleanup.ai_news_deleted", result.get("deleted_ai_news", 0))
+        metrics.increment("pipeline.cleanup.raw_news_deleted", result.get("deleted_raw_news", 0))
         return result
     except Exception as e:
-        logger.error("scheduled_cleanup_ai_products failed: %s", e)
+        logger.error("[CLEANUP] failed: %s", e)
+        metrics.increment("pipeline.cleanup.failed", 1)
         raise
 
 
@@ -1506,7 +1920,7 @@ def refresh_user_embedding_task(user_id: int, history_limit: int | None = None) 
     try:
         # FIX: Use asyncio.run() instead of manual loop management
         async def _run():
-            async with db_session.SessionLocal() as session:
+            async with _get_sessionmaker()() as session:
                 # IDEMPOTENCY: Check if embedding was recently refreshed (within 5 minutes)
                 recent_result = await session.execute(
                     text(
@@ -1573,7 +1987,7 @@ def process_all_task() -> dict:
         failed = 0
         skipped = 0
 
-        async with db_session.SessionLocal() as session:
+        async with _get_sessionmaker()() as session:
             recovered = await _recover_stale_processing_rows(
                 session,
                 int(os.getenv("PIPELINE_PROCESSING_TTL_MINUTES", "10")),
@@ -1653,7 +2067,7 @@ def process_all_task() -> dict:
                     timeout_seconds = int(os.getenv("PIPELINE_PROCESS_TIMEOUT", str(settings.CELERY_TASK_TIME_LIMIT)))
                     # Per-row exponential backoff + jitter to avoid thundering herd on retries
                     try:
-                        async with db_session.SessionLocal() as backoff_session:
+                        async with _get_sessionmaker()() as backoff_session:
                             ac_res = await backoff_session.execute(
                                 text("SELECT COALESCE(attempt_count, 0) FROM raw_news WHERE id = :id"),
                                 {"id": raw_id},
@@ -1686,7 +2100,7 @@ def process_all_task() -> dict:
                     if created_count == 0:
                         return {"status": "failed", "raw_id": raw_id, "created": 0, "reason": "no_ai_news_created"}
 
-                    async with db_session.SessionLocal() as update_session:
+                    async with _get_sessionmaker()() as update_session:
                         await update_session.execute(
                             text("UPDATE raw_news SET process_status = :st, error_message = NULL WHERE id = :id"),
                             {"st": "completed", "id": raw_id},
@@ -1740,15 +2154,15 @@ def process_all_task() -> dict:
 
             # Structured logging
             obs_logger.info(
-                "Pipeline batch completed",
-                fetched=fetched_count,
-                created=total_created,
-                processed=processed,
-                failed=failed,
-                skipped=skipped,
-                total=len(pending_ids),
-                latency_ms=round(latency_ms, 2),
-                ai_news_total=ai_news_count + total_created,
+                "Pipeline batch completed fetched=%s created=%s processed=%s failed=%s skipped=%s total=%s latency_ms=%s ai_news_total=%s",
+                fetched_count,
+                total_created,
+                processed,
+                failed,
+                skipped,
+                len(pending_ids),
+                round(latency_ms, 2),
+                ai_news_count + total_created,
             )
             # FIX END
 

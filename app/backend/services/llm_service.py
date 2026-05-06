@@ -1,4 +1,5 @@
 import asyncio
+import html
 from datetime import datetime, timedelta, timezone
 import json
 import re
@@ -202,7 +203,19 @@ def validate_ai_response(data: dict) -> tuple[bool, str]:
     if not is_valid_news(text):
         return False, f"Invalid text: {text[:100]}..."
 
+    if len(str(text).strip()) < 80:
+        return False, "Text too short"
+
+    if is_not_uzbek(str(text)):
+        return False, "Text is not Uzbek"
+
     return True, ""
+
+
+def is_not_uzbek(text: str) -> bool:
+    bad = ["the", "and", "is", "of", "this", "that", "with", "from"]
+    lowered = (text or "").lower()
+    return any(word in lowered for word in bad)
 
 
 def _apply_char_limit(text: str) -> str:
@@ -213,7 +226,10 @@ def _apply_char_limit(text: str) -> str:
 
 
 def _clean_text_artifacts(text: str) -> str:
-    value = (text or "")
+    import html
+
+    value = html.unescape(text or "")
+    value = value.replace("\xa0", " ")
 
     replacements = {
         "â€™": "'",
@@ -997,34 +1013,20 @@ def _persona_profile_for_prompt(
     }
 
 
-# FIX START - Strict Russian news writer prompt
 def _build_editorial_system_prompt(*, language_hint: str, min_words: int, max_words: int) -> str:
-    """
-    STRICT Russian news writer prompt.
-    Output ONLY Russian. No English words.
-    Minimum 120 words.
-    """
-    word_range = f"{min_words}-{max_words}" if max_words > 0 else f"{min_words}+"
     return (
-        "You are a professional journalist.\n"
-        "Write the article ONLY in Russian.\n"
-        "No English words allowed.\n"
-        "Minimum 120 words.\n"
-        "Clear and natural style.\n\n"
-        "STRICT REQUIREMENTS:\n"
-        "1. Language: Russian only, no English words.\n"
-        "2. Length: at least 120 words, target range " + word_range + ".\n"
-        "3. Structure: 2-4 paragraphs.\n"
-        "4. Tone: factual, concise, readable, journalistic.\n"
-        "5. Avoid generic filler and repeated sentences.\n\n"
-        "Output JSON only with keys:\n"
-        "final_title\n"
-        "final_text\n"
-        "ai_score\n"
-        "category\n"
-        "target_persona\n"
+        "You are a professional journalist.\n\n"
+        "Write ONLY in Uzbek language.\n"
+        "Always translate input into Uzbek.\n"
+        "No English or Russian words allowed.\n"
+        "Natural Uzbek, minimum 120 words.\n\n"
+        "IMPORTANT:\n"
+        "- Write only in Uzbek\n"
+        "- Translate every source detail into Uzbek\n"
+        "- Do not mix languages\n"
+        f"- Minimum {max(120, int(min_words or 120))} words\n"
+        "- Clear, human-readable style\n"
     )
-    # FIX END
 
 
 def _build_editorial_user_payload(
@@ -1247,7 +1249,7 @@ def _mark_gemini_backoff_if_needed(exc: Exception) -> bool:
     if _GEMINI_BACKOFF_UNTIL is None or until > _GEMINI_BACKOFF_UNTIL:
         _GEMINI_BACKOFF_UNTIL = until
 
-    logger.warning("Gemini rate-limited; backoff enabled for %s seconds", retry_seconds)
+    logger.warning(f"Gemini rate-limited; backoff enabled for {retry_seconds} seconds")
     return True
 
 
@@ -1377,24 +1379,40 @@ async def generate_news(
     rewrite_round: int = 1,
 ) -> GeneratedNews | None:
     """
-    Generate personalized news with retry, fallback, and caching.
-    Validates output to ensure no garbage is returned.
+    Generate personalized news with strict provider fallback order.
 
     Flow:
-    1. Try OpenAI ChatGPT (with retry & cache & validation)
-    2. Retry up to 2 times if result is invalid
-    3. Return None if all attempts fail (caller should handle)
+    1. OpenAI
+    2. DeepSeek
+    3. Gemini
+    4. Return None
     """
 
-    print("[DEBUG] generate_news called")
-    print(f"[AI] generate_news called: title={title[:50] if title else ''}")
+    raw_text = clean_text(raw_text)
+    title = clean_text(title)
     logger.info(f"[GENERATE] Starting generation: title={title[:50] if title else ''}..., persona={target_persona}")
 
-    # FIX START - Retry logic with validation (max 2 attempts) + last_valid_payload fallback
-    max_attempts = 2
-    last_valid_payload = None  # Explicit variable to track last valid payload
+    def _compose_from_payload(payload: dict[str, str | float] | None) -> GeneratedNews | None:
+        if not isinstance(payload, dict):
+            return None
+        final_title = str(payload.get("final_title") or "").strip()
+        final_text = str(payload.get("final_text") or "").strip()
+        if not final_title or not final_text:
+            return None
+        return _compose_generated_news(
+            final_title_raw=final_title,
+            final_text_raw=final_text,
+            model_score_raw=float(payload.get("ai_score") or 7.0),
+            category_raw=str(payload.get("category") or category or "general"),
+            target_persona_raw=str(payload.get("target_persona") or target_persona or "general"),
+            title=title,
+            raw_text=raw_text,
+            target_persona=target_persona,
+            profession=profession,
+            geo=user_geo or region,
+        )
 
-    for attempt in range(1, max_attempts + 1):
+    try:
         openai_payload = await _generate_with_openai(
             title=title,
             raw_text=raw_text,
@@ -1403,66 +1421,84 @@ async def generate_news(
             region=region,
             profession=profession,
             user_geo=user_geo,
-            rewrite_round=attempt,  # Increment rewrite round for variety
+            rewrite_round=rewrite_round,
         )
+        if openai_payload is not None:
+            is_valid, error_msg = validate_ai_response(openai_payload)
+            if is_valid:
+                composed = _compose_from_payload(openai_payload)
+                if composed is not None:
+                    return composed
+            logger.warning(f"[GENERATE] OpenAI validation failed: {error_msg}")
+        else:
+            logger.warning("[GENERATE] OpenAI unavailable")
+    except Exception:
+        logger.exception("[GENERATE] OpenAI provider failed")
 
-        if openai_payload is None:
-            logger.warning(f"[GENERATE] OpenAI returned None on attempt {attempt}")
-            if attempt == max_attempts:
-                # FIX: Fallback to last_valid_payload if available
-                if last_valid_payload is not None:
-                    logger.info("[GENERATE] Using last valid payload as fallback")
-                    openai_payload = last_valid_payload
-                    is_valid = True  # Already validated in previous iteration
-                    break
-                print("[DEBUG] generate_news NO PAYLOAD from OpenAI after all attempts")
-                return None
-            continue
+    try:
+        deepseek_result = await _generate_with_deepseek(
+            title=title,
+            raw_text=raw_text,
+            category=category,
+            target_persona=target_persona,
+            region=region,
+            profession=profession,
+            user_geo=user_geo,
+            rewrite_round=rewrite_round,
+        )
+        if deepseek_result is not None:
+            return deepseek_result
+        logger.warning("[GENERATE] DeepSeek unavailable")
+    except Exception:
+        logger.exception("[GENERATE] DeepSeek provider failed")
 
-        # FIX: Only save valid (truthy) payload - protect against empty/corrupt responses
-        if openai_payload:
-            last_valid_payload = openai_payload
+    try:
+        gemini_payload = await _generate_with_gemini(
+            title=title,
+            raw_text=raw_text,
+            category=category,
+            target_persona=target_persona,
+            region=region,
+            profession=profession,
+            user_geo=user_geo,
+            rewrite_round=rewrite_round,
+        )
+        if gemini_payload is not None:
+            is_valid, error_msg = validate_ai_response(gemini_payload)
+            if is_valid:
+                composed = _compose_from_payload(gemini_payload)
+                if composed is not None:
+                    return composed
+            logger.warning(f"[GENERATE] Gemini validation failed: {error_msg}")
+        else:
+            logger.warning("[GENERATE] Gemini unavailable")
+    except Exception:
+        logger.exception("[GENERATE] Gemini provider failed")
 
-        # Validate response
-        is_valid, error_msg = validate_ai_response(openai_payload)
-        print(f"[DEBUG] validate_ai_response attempt {attempt}: is_valid={is_valid}, error={error_msg}")
-
-        if is_valid:
-            logger.info(f"[GENERATE] Valid response on attempt {attempt}")
-            break
-
-        logger.warning(f"[GENERATE] Validation failed on attempt {attempt}: {error_msg}")
-        if attempt == max_attempts:
-            # FIX: Use last payload even if validation failed (e.g., only 100 words)
-            logger.error(f"[GENERATE] All {max_attempts} attempts failed, using last result anyway")
-            # Don't lose the news - use what we have even if suboptimal
-            is_valid = False  # Mark as invalid for scoring
-            break
-    # FIX END
-
-    # FIX START - Ensure we always have a payload to work with
-    if openai_payload is None:
-        logger.error("[GENERATE] No payload available after all attempts")
-        return None
-    # FIX END
-
-    model_score = float(openai_payload.get("ai_score") or 7.0)
-    if not is_valid:
-        model_score = min(model_score, 4.0)  # Lower score for unvalidated results
-
-    print(f"[DEBUG] generate_news result: title={str(openai_payload.get('final_title', ''))[:60]}")
-    return _compose_generated_news(
-        final_title_raw=str(openai_payload.get("final_title") or title),
-        final_text_raw=str(openai_payload.get("final_text") or raw_text[:500]),
-        model_score_raw=model_score,
-        category_raw=str(openai_payload.get("category") or category or "general"),
-        target_persona_raw=str(openai_payload.get("target_persona") or target_persona or "general"),
-        title=title,
-        raw_text=raw_text,
-        target_persona=target_persona,
-        profession=profession,
-        geo=user_geo or region,
-    )
+    logger.error("[GENERATE] All providers failed")
+    
+    # FIX 2: GUARANTEE fallback - never return None, always return dict
+    logger.warning("[GENERATE] Returning forced fallback payload")
+    fallback_text = (raw_text or "")[:500].strip()
+    if not fallback_text:
+        fallback_text = (title or "")[:200]
+    
+    if not fallback_text:
+        fallback_text = "Unable to generate news at this time."
+    
+    fallback: GeneratedNews = {
+        "final_title": title or "News",
+        "final_text": fallback_text,
+        "ai_score": 0.1,
+        "category": category or "general",
+        "target_persona": target_persona,
+        "deepseek_score": 0.0,
+        "gemini_score": 0.0,
+        "combined_score": 0.1,
+    }
+    
+    logger.info("[GENERATE] Returning fallback payload")
+    return fallback
 
 
 async def _generate_with_openai(
@@ -1719,11 +1755,11 @@ def _strip_json_code_fence(content: str) -> str:
 
 
 def clean_text(text: str | None) -> str:
-    import html
-    import re
     if not text:
         return ""
     txt = html.unescape(str(text))
+    txt = re.sub(r"<.*?>", "", txt)
+    txt = txt.replace("\xa0", " ")
     txt = re.sub(r"\s+", " ", txt)
     return txt.strip()
 

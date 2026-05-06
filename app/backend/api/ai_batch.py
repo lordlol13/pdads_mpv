@@ -101,7 +101,7 @@ async def batch_ai(request: BatchRequest) -> Dict[str, Any]:
             try:
                 cached_user = await redis_client.get(ukey)
             except Exception:
-                logger.exception("Redis GET (user) failed for %s; treating as miss", ukey)
+                logger.exception(f"Redis GET (user) failed for {ukey}; treating as miss")
                 cached_user = None
 
             if cached_user:
@@ -109,14 +109,14 @@ async def batch_ai(request: BatchRequest) -> Dict[str, Any]:
                     cached_results[n.id] = json.loads(cached_user)
                     continue
                 except Exception:
-                    logger.exception("Failed to decode cached user result for %s", ukey)
+                    logger.exception(f"Failed to decode cached user result for {ukey}")
 
         # check base cache
         bkey = base_cache_key(n)
         try:
             cached_base = await redis_client.get(bkey)
         except Exception:
-            logger.exception("Redis GET (base) failed for %s; treating as miss", bkey)
+            logger.exception(f"Redis GET (base) failed for {bkey}; treating as miss")
             cached_base = None
 
         if cached_base:
@@ -128,7 +128,7 @@ async def batch_ai(request: BatchRequest) -> Dict[str, Any]:
                 else:
                     cached_results[n.id] = base_item
             except Exception:
-                logger.exception("Failed to decode base cached result for %s", bkey)
+                logger.exception(f"Failed to decode base cached result for {bkey}")
                 to_generate_base.append(n)
         else:
             to_generate_base.append(n)
@@ -187,7 +187,7 @@ News:
             try:
                 await redis_client.set(bkey, json.dumps(item, ensure_ascii=False), ex=BASE_TTL)
             except Exception:
-                logger.exception("Redis SET (base) failed for %s", bkey)
+                logger.exception(f"Redis SET (base) failed for {bkey}")
 
             bases[n.id] = item
             if user_needed:
@@ -214,7 +214,7 @@ News:
                     except Exception:
                         pass
             except Exception:
-                logger.exception("Redis GET (user pre-check) failed for %s", ukey)
+                logger.exception(f"Redis GET (user pre-check) failed for {ukey}")
 
             unique_personalize.append(n)
 
@@ -282,11 +282,11 @@ Items:
                 try:
                     await redis_client.set(ukey, json.dumps(pitem, ensure_ascii=False), ex=PERSONAL_TTL)
                 except Exception:
-                    logger.exception("Redis SET (user) failed for %s", ukey)
+                    logger.exception(f"Redis SET (user) failed for {ukey}")
 
                 cached_results[n.id] = pitem
 
     # 4) Final assembly in original order
     ordered = [cached_results.get(n.id) for n in news_list if n.id in cached_results]
-    logger.info("[AI] total=%s returned=%s", len(news_list), len(ordered))
+    logger.info(f"[AI] total={len(news_list)} returned={len(ordered)}")
     return {"data": ordered}

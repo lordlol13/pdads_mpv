@@ -87,15 +87,27 @@ async def create_interaction(
     current_user: dict = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ):
-    user_id = _current_user_id(current_user)
-    if payload.user_id != user_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Cannot create interaction for another user",
-        )
+    try:
+        if session is None:
+            raise RuntimeError("db_session_unavailable")
 
-    record = await record_user_interaction(session, payload.model_dump())
-    return InteractionResponse(id=record["id"], status="created")
+        user_id = _current_user_id(current_user)
+        if payload.ai_news_id <= 0:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ai_news_id must be > 0")
+
+        if payload.user_id != user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot create interaction for another user",
+            )
+
+        record = await record_user_interaction(session, payload.model_dump())
+        return InteractionResponse(liked=bool(record["liked"]))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Unexpected failure")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error") from exc
 
 
 @router.post("/saved/toggle", response_model=SavedToggleResponse)

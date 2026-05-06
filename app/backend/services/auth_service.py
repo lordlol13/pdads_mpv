@@ -233,7 +233,7 @@ async def _seed_user_feed_for_new_user(session: AsyncSession, *, user_id: int, t
     if not selected:
         return 0
 
-    now_sql = "CURRENT_TIMESTAMP" if session.get_bind().dialect.name == "sqlite" else "NOW()"
+    now_sql = "CURRENT_TIMESTAMP"
     inserted = 0
     for item in selected:
         result = await session.execute(
@@ -521,7 +521,7 @@ async def upsert_oauth_user(
 
             send_task_safe("recommender.refresh_user_embedding", args=(int(user["id"]),))
         except Exception:
-            logger.exception("failed to enqueue background embedding for oauth user id=%s", user.get("id"))
+            logger.exception(f"failed to enqueue background embedding for oauth user id={user.get('id')}")
 
     updated = await session.execute(
         text(
@@ -611,7 +611,10 @@ async def get_user_by_identifier(session: AsyncSession, identifier: str) -> dict
     """
     result = await session.execute(text(query), {"identifier": identifier.strip()})
     row = result.mappings().first()
-    return _parse_user_dict(row) if row else None
+    user = _parse_user_dict(row) if row else None
+    if user is not None:
+        user["hashed_password"] = user.get("password_hash")
+    return user
 
 
 async def get_user_by_id(session: AsyncSession, user_id: int) -> dict[str, Any] | None:
@@ -983,14 +986,14 @@ async def complete_verified_registration(
             topics=all_topics,
         )
     except Exception:
-        logger.exception("failed to seed user_feed for new user id=%s", new_user_row.get("id"))
+        logger.exception(f"failed to seed user_feed for new user id={new_user_row.get('id')}")
 
     try:
         from app.backend.core.celery_app import send_task_safe
 
         send_task_safe("recommender.refresh_user_embedding", args=(int(new_user_row["id"]),))
     except Exception:
-        logger.exception("failed to enqueue background embedding for new user id=%s", new_user_row.get("id"))
+        logger.exception(f"failed to enqueue background embedding for new user id={new_user_row.get('id')}")
 
     # No further commit required here; seeding/refresh may commit on their own.
 
@@ -1054,23 +1057,61 @@ async def register_user(
 
         send_task_safe("recommender.refresh_user_embedding", args=(int(row["id"]),))
     except Exception:
-        logger.exception("failed to enqueue background embedding for registered user id=%s", row.get("id"))
+        logger.exception(f"failed to enqueue background embedding for registered user id={row.get('id')}")
 
     return _parse_user_dict(row)
 
 
-async def authenticate_user(session: AsyncSession, identifier: str, password: str) -> dict[str, Any]:
+async def authenticate_user(session: AsyncSession, identifier: str, password: str) -> dict[str, Any] | None:
     user = await get_user_by_identifier(session, identifier)
-    if user is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+    logger.logger.info(f"LOGIN email={identifier} user_found={bool(user)}")
 
-    if not user.get("password_hash") or not verify_password(password, user["password_hash"]):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+    if not user:
+        return None
 
-    if user.get("is_active") is False:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User is inactive")
+    # FIX: Validate password_hash type for defensive programming
+    password_hash = user.get("hashed_password") or ""
+    if password_hash and not isinstance(password_hash, str):
+        logger.error(
+            "[AUTH] password_hash type mismatch: expected str, got %s for user_id=%s",
+            type(password_hash).__name__,
+            user.get("id")
+        )
+        return None
+
+    if not verify_password(password, password_hash):
+        return None
+
+    if not user.get("is_active"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Inactive user")
 
     return user
+
+async def create_test_user(session: AsyncSession) -> dict[str, Any] | None:
+    try:
+        existing = await get_user_by_identifier(session, "test@test.com")
+        if existing:
+            logger.info(f"TEST USER already exists: id={existing.get('id')}")
+            return existing
+        password_hash = hash_password("123456")
+        result = await session.execute(
+            text(
+                """INSERT INTO users (username, email, password_hash, is_active, is_verified, created_at, updated_at)
+                VALUES (:username, :email, :password_hash, :is_active, :is_verified, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                RETURNING id, username, email, is_active, is_verified"""
+            ),
+            {"username": "test_user", "email": "test@test.com", "password_hash": password_hash, "is_active": True, "is_verified": True},
+        )
+        await session.commit()
+        row = result.mappings().first()
+        if row:
+            user = _parse_user_dict(row)
+            logger.info(f"TEST USER created: id={user.get('id')} email={user.get('email')}")
+            return user
+    except Exception as e:
+        logger.warning(f"Failed to create test user: {e}")
+        await session.rollback()
+    return None
 
 
 async def create_password_reset_request(session: AsyncSession, *, email: str) -> bool:
@@ -1140,7 +1181,7 @@ async def create_password_reset_request(session: AsyncSession, *, email: str) ->
 
     sent, provider_error = await send_password_reset_code_async(email_clean, code)
     if not sent:
-        logger.warning("Password reset email send failed for %s: %s", email_clean, provider_error)
+        logger.warning(f"Password reset email send failed for {email_clean}: {provider_error}")
     return True
 
 

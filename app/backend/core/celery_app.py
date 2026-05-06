@@ -10,6 +10,10 @@ import redis as redis_lib
 from app.backend.core.config import settings
 
 logger = logging.getLogger(__name__)
+# Ensure DB is initialized before Celery starts to avoid SessionLocal None races
+from app.backend.db.session import engine, SessionLocal
+if SessionLocal is None:
+    raise RuntimeError("SessionLocal is not initialized")
 
 
 celery_app = Celery(
@@ -19,21 +23,38 @@ celery_app = Celery(
 )
 
 # FIX START - Set beat_schedule immediately after app creation (before autodiscover)
-# FIX - Increased frequency for faster data flow: parse every 60s, process every 120s
+# FIX 1,5,6: Updated schedule with batch processing, recovery, and ingestion
 celery_app.conf.update(
     beat_schedule={
-        "parse-news": {
-            "task": "app.backend.tasks.parser_task.parse_news_task",
-            "schedule": 60.0,  # FIX: 300s → 60s (parse more frequently)
+        # Main ingestion task - fetch articles from APIs
+        "scheduled-ingestion": {
+            "task": "brain.scheduled_ingestion",
+            "schedule": 60.0,  # Every 60 seconds
         },
-        "process-news": {
-            "task": "brain.tasks.pipeline_tasks.process_all_task",
-            "schedule": 120.0,  # FIX: 600s → 120s (process more frequently)
+        # FIX 1: Batch processing - pick 50 pending raw_news, process them with locks
+        "scheduled-batch-process": {
+            "task": "brain.scheduled_batch_process",
+            "schedule": 30.0,  # Every 30 seconds
+        },
+        # FIX 6: Job recovery - reset stuck processing jobs
+        "scheduled-recover-stuck-jobs": {
+            "task": "brain.scheduled_recover_stuck_jobs",
+            "schedule": 600.0,  # Every 10 minutes
+        },
+        # Feed ingestion from RSS/feeds
+        "scheduled-feed-ingestion": {
+            "task": "brain.scheduled_feed_ingestion",
+            "schedule": 300.0,  # Every 5 minutes
+        },
+        # Cleanup old ai_news and raw_news
+        "scheduled-cleanup-ai-products": {
+            "task": "brain.scheduled_cleanup_ai_products",
+            "schedule": 3600.0,  # Every hour
         },
     },
     timezone="UTC",
 )
-print("[BEAT DEBUG] schedule keys:", list(celery_app.conf.beat_schedule.keys()))
+logger.info("[BEAT] Updated schedule with batch processing, recovery, and ingestion tasks")
 # FIX END
 
 # Корректная регистрация задач
@@ -56,8 +77,7 @@ celery_app.autodiscover_tasks(
 # FIX: Only enable eager mode when explicitly requested (not by default in dev)
 # Eager mode causes event loop conflicts with asyncio.run()
 is_eager = os.getenv("CELERY_TASK_ALWAYS_EAGER", "").lower() == "true"
-logger.info("[CELERY] Starting with APP_ENV=%s, task_always_eager=%s, broker=%s", 
-            settings.APP_ENV, is_eager, settings.CELERY_BROKER_URL)
+logger.info(f"[CELERY] Starting with APP_ENV={settings.APP_ENV}, task_always_eager={is_eager}, broker={settings.CELERY_BROKER_URL}")
 
 # Basic runtime tuning for workers (can be overridden via env vars)
 celery_app.conf.update(
@@ -93,7 +113,7 @@ print(f"[BEAT] schedule file set to {_beat_schedule_file}")
 try:
     print("[CELERY] registered tasks:", sorted(celery_app.tasks.keys()))
 except Exception as tasks_exc:
-    logger.exception("[CELERY] failed to print registered tasks: %s", tasks_exc)
+    logger.exception(f"[CELERY] failed to print registered tasks: {tasks_exc}")
 
 
 def is_redis_available() -> bool:
@@ -124,7 +144,7 @@ def _get_redis_client():
         try:
             _redis_client = redis_lib.from_url(settings.REDIS_URL, decode_responses=True)
         except Exception as e:
-            logger.warning("[CELERY] Failed to connect to Redis for rate limiting: %s", e)
+            logger.warning(f"[CELERY] Failed to connect to Redis for rate limiting: {e}")
     return _redis_client
 
 
@@ -134,7 +154,7 @@ def send_task_safe(name: str, args: tuple | None = None, kwargs: dict | None = N
     Rate limiting: Max 1 task per user per 60 seconds for recommender.refresh_user_embedding.
     """
     if not is_redis_available():
-        logger.debug("[CELERY] Skipping task %s (Redis not available)", name)
+        logger.debug(f"[CELERY] Skipping task {name} (Redis not available)")
         return None
     
     # FIX START - Rate limiting for recommender task
@@ -147,14 +167,14 @@ def send_task_safe(name: str, args: tuple | None = None, kwargs: dict | None = N
                 # SET key with 60s expiry (NX = only if not exists)
                 # Returns True if key was set, False if already exists
                 if not redis_client.set(key, "1", ex=60, nx=True):
-                    logger.debug("[CELERY] Rate limited task %s for user_id=%s", name, user_id)
+                    logger.debug(f"[CELERY] Rate limited task {name} for user_id={user_id}")
                     return None
     # FIX END
     
     try:
         return celery_app.send_task(name, args=args, kwargs=kwargs, **options)
     except Exception as e:
-        logger.warning("[CELERY] Failed to send task %s: %s", name, e)
+        logger.warning(f"[CELERY] Failed to send task {name}: {e}")
         return None
 
 

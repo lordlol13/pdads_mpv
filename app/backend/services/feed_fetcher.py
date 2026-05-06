@@ -187,7 +187,7 @@ async def ingest_rss_feed(session, rss_url: str, limit: int = 10) -> int:
         return 0
 
     entries = getattr(feed, "entries", []) or []
-    logger.info("[INGESTION] fetched items count=%s", len(entries))
+    logger.info(f"[INGESTION] fetched items count={len(entries)}")
     if not entries:
         preview = (resp.text or "")[:300].replace("\n", " ")
         logger.warning("RSS feed returned no entries", url=rss_url, status_code=resp.status_code, preview=preview)
@@ -207,7 +207,7 @@ async def ingest_rss_feed(session, rss_url: str, limit: int = 10) -> int:
         else:
             content = entry.get("summary", "")
 
-        logger.info("[INGESTION] processing url=%s", link)
+        logger.info(f"[INGESTION] processing url={link}")
 
         # try feed-provided images
         image_url = None
@@ -284,7 +284,7 @@ async def ingest_site_frontpage(session, base_url: str, limit_links: int = 20) -
         if len(links) >= limit_links:
             break
 
-    logger.info("[INGESTION] fetched items count=%s", len(links))
+    logger.info(f"[INGESTION] fetched items count={len(links)}")
 
     count = 0
     async def _handle_link(link: str):
@@ -292,7 +292,7 @@ async def ingest_site_frontpage(session, base_url: str, limit_links: int = 20) -
         html = await _fetch_text(link)
         if not html:
             return
-        logger.info("[INGESTION] processing url=%s", link)
+        logger.info(f"[INGESTION] processing url={link}")
         result = await _process_article(session, link, html)
         if result:
             count += 1

@@ -49,7 +49,7 @@ async def get_current_user(
     try:
         payload = decode_access_token(credentials.credentials, settings.JWT_SECRET_KEY)
     except ValueError as exc:
-        logger.warning("[AUTH] Token decode failed: %s", exc)
+        logger.warning(f"[AUTH] Token decode failed: {exc}")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token") from exc
     except Exception as e:
         logger.exception("[AUTH] Unexpected token decode error")

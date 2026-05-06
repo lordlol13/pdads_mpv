@@ -51,7 +51,7 @@ class CircuitBreaker:
             if time.time() - self._last_failure_time > self.recovery_timeout:
                 self._state = CircuitState.HALF_OPEN
                 self._half_open_calls = 0
-                logger.info("[CIRCUIT BREAKER] %s entering HALF_OPEN state", self.name)
+                logger.info(f"[CIRCUIT BREAKER] {self.name} entering HALF_OPEN state")
         return self._state
 
     def record_success(self):
@@ -62,7 +62,7 @@ class CircuitBreaker:
                 self._state = CircuitState.CLOSED
                 self._fail_count = 0
                 self._success_count = 0
-                logger.info("[CIRCUIT BREAKER] %s closed after recovery", self.name)
+                logger.info(f"[CIRCUIT BREAKER] {self.name} closed after recovery")
         elif self._state == CircuitState.CLOSED:
             self._fail_count = max(0, self._fail_count - 1)
 
@@ -73,7 +73,7 @@ class CircuitBreaker:
 
         if self._state == CircuitState.HALF_OPEN:
             self._state = CircuitState.OPEN
-            logger.error("[CIRCUIT BREAKER] %s re-opened due to failure", self.name)
+            logger.error(f"[CIRCUIT BREAKER] {self.name} re-opened due to failure")
         elif self._state == CircuitState.CLOSED and self._fail_count >= self.fail_threshold:
             self._state = CircuitState.OPEN
             logger.error(

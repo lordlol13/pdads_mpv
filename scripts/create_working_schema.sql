@@ -109,7 +109,8 @@ CREATE TABLE IF NOT EXISTS interactions (
     liked BOOLEAN,
     viewed BOOLEAN,
     saved BOOLEAN,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(user_id, ai_news_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_interactions_user_id ON interactions(user_id);

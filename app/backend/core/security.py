@@ -30,12 +30,25 @@ def hash_password(password: str, salt: str | None = None) -> str:
 
 
 def verify_password(password: str, password_hash: str) -> bool:
+    # FIX: Validate inputs are strings - prevent AttributeError on .split()
+    if not isinstance(password_hash, str):
+        return False
+    if not isinstance(password, str):
+        return False
+    
     try:
         salt_value, stored_digest = password_hash.split("$", 1)
-    except ValueError:
+    except (ValueError, AttributeError):
+        # ValueError: split returns single element (no "$")
+        # AttributeError: password_hash not a string (defensive)
         return False
-    calculated_hash = hash_password(password, salt_value)
-    return hmac.compare_digest(calculated_hash, password_hash)
+    
+    try:
+        calculated_hash = hash_password(password, salt_value)
+        return hmac.compare_digest(calculated_hash, password_hash)
+    except (AttributeError, TypeError):
+        # Prevent crashes if hash_password receives unexpected types
+        return False
 
 
 def create_access_token(payload: dict[str, Any], secret_key: str, algorithm: str, expires_minutes: int) -> str:

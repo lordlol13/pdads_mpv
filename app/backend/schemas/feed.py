@@ -37,15 +37,14 @@ class FeedItem(BaseModel):
 
 class InteractionCreateRequest(BaseModel):
     user_id: int = Field(gt=0)
-    ai_news_id: int = Field(gt=0)
+    ai_news_id: int = Field(default=0)
     liked: bool | None = None
     viewed: bool | None = None
     watch_time: int | None = Field(default=None, ge=0)
 
 
 class InteractionResponse(BaseModel):
-    id: int
-    status: str
+    liked: bool
 
 
 class SavedToggleRequest(BaseModel):

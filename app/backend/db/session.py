@@ -51,54 +51,27 @@ def _validate_database_url(url: str | None) -> bool:
     valid_prefixes = ("postgresql+", "postgres://", "mysql+", "mysql://")
     return any(url.lower().startswith(p) for p in valid_prefixes)
 
-engine = None
-SessionLocal = None
 _engine_initialized = False
 
-if not _validate_database_url(settings.DATABASE_URL):
-    logger.error("[STARTUP] DATABASE_URL missing or invalid — running in degraded mode (no DB)")
-    engine = None
-    SessionLocal = None
-    _engine_initialized = True  # Skip initialization
-
-async def init_engine() -> None:
-    """Initialize database engine with retry - call from async context."""
-    global engine, SessionLocal, _engine_initialized
-    if _engine_initialized:
-        return
+# Initialize engine and sessionmaker eagerly at import time to avoid
+# Celery worker startup races where SessionLocal would be None.
+try:
     if not _validate_database_url(settings.DATABASE_URL):
-        _engine_initialized = True
-        return
-
+        raise RuntimeError("Invalid DATABASE_URL")
     print(f"[STARTUP] Creating DB engine with pool_recycle=300s using {settings.DATABASE_URL[:60]}...")
-
-    max_attempts = 5
-    for attempt in range(1, max_attempts + 1):
-        try:
-            engine = create_async_engine(settings.DATABASE_URL, **pool_kwargs)
-            # Test connection
-            async with engine.connect() as conn:
-                await conn.execute(text("SELECT 1"))
-            SessionLocal = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
-            _engine_initialized = True
-            logger.info("[STARTUP] Database engine created successfully on attempt %s", attempt)
-            return
-        except Exception as e:
-            delay = min(2 ** (attempt - 1), 16)  # 1, 2, 4, 8, 16
-            logger.warning("[STARTUP] DB engine creation failed (attempt %s/%s): %s — retrying in %ss",
-                         attempt, max_attempts, e, delay)
-            if attempt < max_attempts:
-                await asyncio.sleep(delay)
-            else:
-                logger.error("[STARTUP] DB engine creation failed after %s attempts — running in degraded mode", max_attempts)
-                engine = None
-                SessionLocal = None
-                _engine_initialized = True
+    engine = create_async_engine(settings.DATABASE_URL, **pool_kwargs)
+    SessionLocal = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
+    _engine_initialized = True
+    logger.info("[STARTUP] Database engine and SessionLocal created at import time")
+except Exception as e:
+    logger.exception(f"[STARTUP] Failed to initialize DB engine/session at import time: {e}")
+    # Fail fast — SessionLocal must never be None in a running system.
+    raise
 
 
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
-    """Get database session — raises RuntimeError if DB is unavailable (degraded mode)."""
-    if SessionLocal is None:
-        raise RuntimeError("Database unavailable — system is in degraded mode")
+    """Get database session — raises RuntimeError if DB is unavailable."""
+    if 'SessionLocal' not in globals() or SessionLocal is None:
+        raise RuntimeError("SessionLocal is not initialized")
     async with SessionLocal() as session:
         yield session

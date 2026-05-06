@@ -163,6 +163,8 @@ async def login(payload: AuthLoginRequest, session: AsyncSession = Depends(get_d
     try:
         logger.info(f"[AUTH] Login attempt: {payload.identifier}")
         user = await authenticate_user(session, payload.identifier, payload.password)
+        if user is None:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
         logger.info(f"[AUTH] User authenticated: id={user.get('id')}")
         token = issue_access_token(user)
         logger.info(f"[AUTH] Token issued for user: {user.get('id')}")
@@ -170,6 +172,10 @@ async def login(payload: AuthLoginRequest, session: AsyncSession = Depends(get_d
     except HTTPException:
         # Re-raise HTTPException (401, 403) as-is for proper client handling
         raise
+    except AttributeError as e:
+        # FIX: Log AttributeError separately - indicates type mismatch in password flow
+        logger.error(f"[AUTH] AttributeError in login for {payload.identifier}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Authentication service error")
     except Exception as e:
         logger.exception(f"[AUTH] Login failed for {payload.identifier}: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Authentication service error")

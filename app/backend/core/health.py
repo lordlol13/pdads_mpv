@@ -28,7 +28,7 @@ def _log_task_error(task: asyncio.Task) -> None:
     try:
         exc = task.exception()
         if exc:
-            logger.error("[WEBHOOK ERROR] %s", exc)
+            logger.error(f"[WEBHOOK ERROR] {exc}")
     except Exception:
         logger.exception("[WEBHOOK ERROR] failed to retrieve exception")
 
@@ -60,7 +60,7 @@ async def _send_degraded_alert(reasons: list[str], timestamp: str) -> None:
             )
     except Exception as e:
         # FAIL-SAFE: Ignore webhook failures, never break main app
-        logger.debug("[ALERT] Webhook send failed (ignored): %s", e)
+        logger.debug(f"[ALERT] Webhook send failed (ignored): {e}")
 
 # PRODUCTION: Global degraded mode tracking
 _system_degraded = False

@@ -49,7 +49,7 @@ async def run_parser_async(
       which will persist items to the DB using `create_raw_news`.
     """
     logger.info("[INGESTION] started")
-    logger.info("[DB] using: %s", settings.DATABASE_URL)
+    logger.info(f"[DB] using: {settings.DATABASE_URL}")
 
     site_sources = site_sources or [
         "https://daryo.uz",
@@ -148,7 +148,7 @@ async def run_parser_async(
                     resp.raise_for_status()
                     return resp.content.decode("utf-8", errors="ignore")
                 except Exception as exc:
-                    logger.warning("[PARSER] Failed to fetch %s: %s", url, exc)
+                    logger.warning(f"[PARSER] Failed to fetch {url}: {exc}")
                     return None
 
             total_saved = 0
@@ -157,12 +157,12 @@ async def run_parser_async(
 
             for rss_url in rss_sources:
                 try:
-                    logger.info("[PARSER] Processing RSS: %s", rss_url)
+                    logger.info(f"[PARSER] Processing RSS: {rss_url}")
                     count = await ingest_rss_feed(session, rss_url, limit=per_rss_limit)
                     total_saved += count
-                    logger.info("[PARSER] RSS %s saved: %s articles", rss_url, count)
+                    logger.info(f"[PARSER] RSS {rss_url} saved: {count} articles")
                 except Exception as exc:
-                    logger.exception("[PARSER] RSS failed %s: %s", rss_url, exc)
+                    logger.exception(f"[PARSER] RSS failed {rss_url}: {exc}")
                     try:
                         await session.rollback()
                     except Exception:
@@ -170,25 +170,25 @@ async def run_parser_async(
                     errors.append(f"rss:{rss_url}:{exc}")
 
             for source in site_sources:
-                logger.info("[PARSER] Processing site: %s", source)
+                logger.info(f"[PARSER] Processing site: {source}")
                 links = await _collect_site_links(source, per_site_limit)
-                logger.info("[PARSER] Site %s found %s links", source, len(links))
-                logger.info("[INGESTION] fetched items count=%s", len(links))
+                logger.info(f"[PARSER] Site {source} found {len(links)} links")
+                logger.info(f"[INGESTION] fetched items count={len(links)}")
 
                 if not links:
-                    logger.warning("[DEBUG] EMPTY_LINKS source=%s", source)
+                    logger.warning(f"[DEBUG] EMPTY_LINKS source={source}")
 
                 for url in links[:per_site_limit]:
                     try:
                         item, reason = await process_article(session, url, _fetch)
                         if not item:
-                            logger.debug("[PARSER] Skipped %s: %s", url, reason)
+                            logger.debug(f"[PARSER] Skipped {url}: {reason}")
                             continue
 
                         title = clean_text(item.get("title") or "")
                         raw_text = clean_text(item.get("content") or "")
                         items_found += 1
-                        logger.info("[INGESTION] processing url=%s", item.get("source_url") or item.get("url") or url)
+                        logger.info(f"[INGESTION] processing url={item.get('source_url') or item.get('url') or url}")
 
                         payload = {
                             "title": title,
@@ -203,11 +203,11 @@ async def run_parser_async(
                         result = await create_raw_news(session, payload)
                         if result and result.get("id"):
                             total_saved += 1
-                            logger.info("[PARSER] Saved raw_news id=%s: %s", result["id"], url)
+                            logger.info(f"[PARSER] Saved raw_news id={result['id']}: {url}")
                         else:
-                            logger.warning("[PARSER] Duplicate or failed: %s", url)
+                            logger.warning(f"[PARSER] Duplicate or failed: {url}")
                     except Exception as exc:
-                        logger.exception("[PARSER] Error processing %s: %s", url, exc)
+                        logger.exception(f"[PARSER] Error processing {url}: {exc}")
                         try:
                             await session.rollback()
                         except Exception:
@@ -220,11 +220,11 @@ async def run_parser_async(
             except Exception:
                 logger.warning("[PARSER] Failed to update last_parsed_at")
 
-            logger.info("[PARSER] saved %s", total_saved)
-            logger.info("[PARSER] Total saved: %s, errors: %s", total_saved, len(errors))
+            logger.info(f"[PARSER] saved {total_saved}")
+            logger.info(f"[PARSER] Total saved: {total_saved}, errors: {len(errors)}")
             return {"status": "ok", "saved": total_saved, "items_found": items_found, "errors": errors[:10]}
         except Exception as exc:
-            logger.exception("[PARSER] Fatal error: %s", exc)
+            logger.exception(f"[PARSER] Fatal error: {exc}")
             return {"status": "error", "error": str(exc)}
 
 

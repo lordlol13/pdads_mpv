@@ -1,28 +1,32 @@
 # ============================================
-# PD.ADS MVP - Полный запуск всех сервисов
-# Для Windows PowerShell
+# PD.ADS MVP - Full startup of all services
+# Windows PowerShell
 # ============================================
 
 $ErrorActionPreference = "Stop"
-$PROJECT_ROOT = Split-Path -Parent $MyInvocation.MyCommandPath
+if ($MyInvocation.MyCommandPath) {
+    $PROJECT_ROOT = Split-Path -Parent $MyInvocation.MyCommandPath
+} else {
+    $PROJECT_ROOT = Get-Location
+}
 $VENV_PATH = "$PROJECT_ROOT\.venv\Scripts\Activate.ps1"
 
-Write-Host "🚀 Запуск PD.ADS MVP Pipeline...`n" -ForegroundColor Green
+Write-Host "Starting PD.ADS MVP Pipeline..." -ForegroundColor Green
 
-# Активируем виртуальное окружение
-Write-Host "📦 Активируем виртуальное окружение..." -ForegroundColor Yellow
+# Activate virtual environment
+Write-Host "Activating virtual environment..." -ForegroundColor Yellow
 & $VENV_PATH
 
 # ============================================
-# ЭТАП 1: Docker контейнеры (PostgreSQL + Redis)
+# STAGE 1: Docker containers (PostgreSQL + Redis)
 # ============================================
-Write-Host "`n🐳 ЭТАП 1: Проверяем Docker контейнеры..." -ForegroundColor Cyan
+Write-Host "`nStage 1: Checking Docker containers..." -ForegroundColor Cyan
 
 $POSTGRES_RUNNING = docker ps --filter "name=pdads-postgres" --format "{{.State}}" 2>$null
 $REDIS_RUNNING = docker ps --filter "name=pdads-redis" --format "{{.State}}" 2>$null
 
 if ($POSTGRES_RUNNING -ne "running") {
-    Write-Host "▶️  Запускаем PostgreSQL контейнер..." -ForegroundColor Green
+    Write-Host "Starting PostgreSQL container..." -ForegroundColor Green
     docker run -d `
         --name pdads-postgres `
         -e POSTGRES_USER=postgres `
@@ -33,85 +37,89 @@ if ($POSTGRES_RUNNING -ne "running") {
         postgres:15
     Start-Sleep -Seconds 3
 } else {
-    Write-Host "✅ PostgreSQL уже запущен" -ForegroundColor Green
+    Write-Host "PostgreSQL already running" -ForegroundColor Green
 }
 
 if ($REDIS_RUNNING -ne "running") {
-    Write-Host "▶️  Запускаем Redis контейнер..." -ForegroundColor Green
+    Write-Host "Starting Redis container..." -ForegroundColor Green
     docker run -d `
         --name pdads-redis `
         -p 6379:6379 `
         redis:7
     Start-Sleep -Seconds 2
 } else {
-    Write-Host "✅ Redis уже запущен" -ForegroundColor Green
+    Write-Host "Redis already running" -ForegroundColor Green
 }
 
 # ============================================
-# ЭТАП 2: Миграции БД
+# STAGE 2: DB migrations
 # ============================================
-Write-Host "`n🗄️  ЭТАП 2: Запускаем миграции БД..." -ForegroundColor Cyan
+Write-Host "`nStage 2: Running DB migrations..." -ForegroundColor Cyan
 Set-Location $PROJECT_ROOT
 python -m alembic upgrade head
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "❌ Ошибка миграции!" -ForegroundColor Red
+    Write-Host "Migration error!" -ForegroundColor Red
     exit 1
 }
-Write-Host "✅ Миграции завершены" -ForegroundColor Green
+Write-Host "Migrations completed" -ForegroundColor Green
 
 # ============================================
-# ЭТАП 3: Backend (uvicorn)
+# STAGE 3: Backend (uvicorn)
 # ============================================
-Write-Host "`n⚙️  ЭТАП 3: Запускаем Backend сервер..." -ForegroundColor Cyan
-Write-Host "💡 Backend будет доступен на http://localhost:8000" -ForegroundColor Yellow
-Write-Host "📖 API документация: http://localhost:8000/docs" -ForegroundColor Yellow
-Start-Process powershell -ArgumentList `
-    "-NoExit",`
-    "-Command",`
-    "cd '$PROJECT_ROOT'; & '$VENV_PATH'; python -m uvicorn app.backend.main:app --host 127.0.0.1 --port 8000 --reload"
+Write-Host "`nStage 3: Starting Backend server..." -ForegroundColor Cyan
+Write-Host "Backend available at http://localhost:8000" -ForegroundColor Yellow
+Write-Host "API docs: http://localhost:8000/docs" -ForegroundColor Yellow
+$backendProc = Start-Process powershell -ArgumentList @(
+    "-NoExit",
+    "-Command",
+    "cd '$PROJECT_ROOT'; . '$VENV_PATH'; python -m uvicorn app.backend.main:app --host 127.0.0.1 --port 8000 --reload"
+) -PassThru
 
 Start-Sleep -Seconds 3
 
 # ============================================
-# ЭТАП 4: Celery Worker
+# STAGE 4: Celery Worker
 # ============================================
-Write-Host "`n👷 ЭТАП 4: Запускаем Celery Worker..." -ForegroundColor Cyan
-Write-Host "🔄 Worker будет обрабатывать асинхронные задачи" -ForegroundColor Yellow
-Start-Process powershell -ArgumentList `
-    "-NoExit",`
-    "-Command",`
-    "cd '$PROJECT_ROOT'; & '$VENV_PATH'; python -m celery -A app.backend.core.celery_app:celery_app worker --loglevel=info --pool=solo"
+Write-Host "`nStage 4: Starting Celery Worker..." -ForegroundColor Cyan
+Write-Host "Worker will process async tasks" -ForegroundColor Yellow
+$workerProc = Start-Process powershell -ArgumentList @(
+    "-NoExit",
+    "-Command",
+    "cd '$PROJECT_ROOT'; . '$VENV_PATH'; python -m celery -A app.backend.core.celery_app:celery_app worker --loglevel=info --pool=solo"
+) -PassThru
 
 Start-Sleep -Seconds 2
 
 # ============================================
-# ЭТАП 5: Celery Beat (Scheduler)
+# STAGE 5: Celery Beat (Scheduler)
 # ============================================
-Write-Host "`n⏰ ЭТАП 5: Запускаем Celery Beat (Scheduler)..." -ForegroundColor Cyan
-Write-Host "📅 Beat будет запускать периодические задачи (ингестию новостей, cleanup)..." -ForegroundColor Yellow
-Start-Process powershell -ArgumentList `
-    "-NoExit",`
-    "-Command",`
-    "cd '$PROJECT_ROOT'; & '$VENV_PATH'; python -m celery -A app.backend.core.celery_app:celery_app beat --loglevel=info"
+Write-Host "`nStage 5: Starting Celery Beat (Scheduler)..." -ForegroundColor Cyan
+Write-Host "Beat will run periodic tasks (news ingestion, cleanup)..." -ForegroundColor Yellow
+$beatProc = Start-Process powershell -ArgumentList @(
+    "-NoExit",
+    "-Command",
+    "cd '$PROJECT_ROOT'; . '$VENV_PATH'; python -m celery -A app.backend.core.celery_app:celery_app beat --loglevel=info"
+) -PassThru
 
 Start-Sleep -Seconds 2
 
 # ============================================
-# ЭТАП 6: Frontend (Vite)  
+# STAGE 6: Frontend (Vite)  
 # ============================================
-Write-Host "`n🎨 ЭТАП 6: Запускаем Frontend dev server..." -ForegroundColor Cyan
-Write-Host "💡 Frontend будет доступен на http://localhost:5173" -ForegroundColor Yellow
-Start-Process powershell -ArgumentList `
-    "-NoExit",`
-    "-Command",`
+Write-Host "`nStage 6: Starting Frontend dev server..." -ForegroundColor Cyan
+Write-Host "Frontend available at http://localhost:5173" -ForegroundColor Yellow
+$frontendProc = Start-Process powershell -ArgumentList @(
+    "-NoExit",
+    "-Command",
     "cd '$PROJECT_ROOT\app\frontend'; npm run dev"
+) -PassThru
 
-Write-Host "`n`n✅ ВСЕ СЕРВИСЫ ЗАПУЩЕНЫ!`n" -ForegroundColor Green
-Write-Host "📍 Backend:  http://localhost:8000" -ForegroundColor Magenta
-Write-Host "📍 Frontend: http://localhost:5173" -ForegroundColor Magenta
-Write-Host "📍 Redis:    localhost:6379" -ForegroundColor Magenta
-Write-Host "📍 PostgreSQL: localhost:5432" -ForegroundColor Magenta
-Write-Host "`n💡 Откроются автоматически новые окна PowerShell для каждого сервиса.`n" -ForegroundColor Yellow
-Write-Host "🛑 Для остановки всех сервисов используй: stop-all-windows.ps1`n" -ForegroundColor Red
+Write-Host "`n`nAll services started!`n" -ForegroundColor Green
+Write-Host "Backend:  http://localhost:8000" -ForegroundColor Magenta
+Write-Host "Frontend: http://localhost:5173" -ForegroundColor Magenta
+Write-Host "Redis:    localhost:6379" -ForegroundColor Magenta
+Write-Host "PostgreSQL: localhost:5432" -ForegroundColor Magenta
+Write-Host "`nNew PowerShell windows opened for each service.`n" -ForegroundColor Yellow
+Write-Host "To stop all services use: stop-all-windows.ps1`n" -ForegroundColor Red
 
 Pause
