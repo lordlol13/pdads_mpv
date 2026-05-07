@@ -96,99 +96,87 @@ async def load_user_interactions(
     """
     if not ai_news_ids:
         return {}
-    
-    query = """
-    WITH latest_user_interactions AS (
-        SELECT *
-        FROM (
+
+    unique_ids = [int(news_id) for news_id in dict.fromkeys(ai_news_ids) if int(news_id or 0) > 0]
+    if not unique_ids:
+        return {}
+
+    interactions_query = (
+        text(
+            """
             SELECT
-                i.*,
-                ROW_NUMBER() OVER (
-                    PARTITION BY i.user_id, i.ai_news_id
-                    ORDER BY i.created_at DESC, i.id DESC
-                ) AS rn
-            FROM interactions i
-            WHERE i.user_id = :user_id
-        ) ranked
-        WHERE rn = 1
-    ),
-    latest_likes AS (
-        SELECT ai_news_id, COUNT(*) AS like_count
-        FROM (
-            SELECT
-                i.user_id,
-                i.ai_news_id,
-                i.liked,
-                ROW_NUMBER() OVER (
-                    PARTITION BY i.user_id, i.ai_news_id
-                    ORDER BY i.created_at DESC, i.id DESC
-                ) AS rn
-            FROM interactions i
-            WHERE i.ai_news_id IN :ids
-        ) ranked
-        WHERE rn = 1 AND COALESCE(liked, FALSE) = TRUE
-        GROUP BY ai_news_id
-    ),
-    liked_topics AS (
-        SELECT DISTINCT LOWER(TRIM(an.category)) AS category
-        FROM latest_user_interactions lui
-        JOIN ai_news an ON an.id = lui.ai_news_id
-        WHERE COALESCE(lui.liked, FALSE) = TRUE
-          AND an.category IS NOT NULL
-          AND LENGTH(TRIM(an.category)) > 0
-    ),
-    comment_counts AS (
-        SELECT ai_news_id, COUNT(*) AS comment_count
-        FROM feed_comments
-        WHERE ai_news_id IN :ids
-        GROUP BY ai_news_id
-    ),
-    skipped_items AS (
-        SELECT DISTINCT ai_news_id
-        FROM user_events
-        WHERE user_id = :user_id
-          AND ai_news_id IN :ids
-          AND event_type = 'skip'
+                ai_news_id,
+                MAX(CASE WHEN liked IS TRUE THEN 1 WHEN liked IS FALSE THEN -1 ELSE 0 END) AS like_state,
+                BOOL_OR(COALESCE(viewed, FALSE)) AS viewed,
+                MAX(COALESCE(watch_time, 0)) AS watch_time
+            FROM interactions
+            WHERE user_id = :user_id
+              AND ai_news_id IN :ai_news_ids
+            GROUP BY ai_news_id
+            """
+        ).bindparams(bindparam("ai_news_ids", expanding=True))
     )
-    SELECT
-        an.id AS ai_news_id,
-        COALESCE(lui.liked, FALSE) AS liked,
-        COALESCE(lui.viewed, FALSE) AS viewed,
-        COALESCE(sn.id IS NOT NULL, FALSE) AS saved,
-        COALESCE(ll.like_count, 0) AS like_count,
-        COALESCE(cc.comment_count, 0) AS comment_count,
-        COALESCE(lt.category IS NOT NULL, FALSE) AS topic_liked,
-        COALESCE(si.ai_news_id IS NOT NULL, FALSE) AS skipped,
-        lui.created_at
-    FROM ai_news an
-    LEFT JOIN latest_user_interactions lui
-        ON lui.ai_news_id = an.id
-    LEFT JOIN saved_news sn
-        ON sn.user_id = :user_id
-       AND sn.ai_news_id = an.id
-    LEFT JOIN latest_likes ll
-        ON ll.ai_news_id = an.id
-    LEFT JOIN comment_counts cc
-        ON cc.ai_news_id = an.id
-    LEFT JOIN liked_topics lt
-        ON lt.category = LOWER(TRIM(an.category))
-    LEFT JOIN skipped_items si
-        ON si.ai_news_id = an.id
-    WHERE an.id IN :ids
-    """
-    
-    result = await session.execute(
-        text(query).bindparams(bindparam("ids", expanding=True)),
-        {"user_id": user_id, "ids": ai_news_ids}
+    saved_query = (
+        text(
+            """
+            SELECT ai_news_id
+            FROM saved_news
+            WHERE user_id = :user_id
+              AND ai_news_id IN :ai_news_ids
+            """
+        ).bindparams(bindparam("ai_news_ids", expanding=True))
     )
-    
-    interactions = {}
-    for row in result.mappings().all():
-        ai_news_id = int(row["ai_news_id"])
-        interactions[ai_news_id] = {
-            **dict(row),
-            "liked": bool(row.get("liked")),
-            "viewed": bool(row.get("viewed")),
+    comments_query = (
+        text(
+            """
+            SELECT ai_news_id, COUNT(*) AS comment_count
+            FROM feed_comments
+            WHERE ai_news_id IN :ai_news_ids
+            GROUP BY ai_news_id
+            """
+        ).bindparams(bindparam("ai_news_ids", expanding=True))
+    )
+
+    interactions_result = await session.execute(interactions_query, {"user_id": user_id, "ai_news_ids": unique_ids})
+    saved_result = await session.execute(saved_query, {"user_id": user_id, "ai_news_ids": unique_ids})
+    comments_result = await session.execute(comments_query, {"ai_news_ids": unique_ids})
+
+    saved_ids = {int(row[0]) for row in saved_result.fetchall()}
+    comment_counts = {int(row[0]): int(row[1] or 0) for row in comments_result.fetchall()}
+
+    interactions: dict[int, dict[str, Any]] = {}
+    for row in interactions_result.mappings().all():
+        news_id = int(row["ai_news_id"])
+        like_state = int(row.get("like_state") or 0)
+        viewed = bool(row.get("viewed"))
+        liked = like_state > 0
+        skipped = like_state < 0 and not viewed
+        interactions[news_id] = {
+            "liked": liked,
+            "saved": news_id in saved_ids,
+            "viewed": viewed,
+            "watch_time": int(row.get("watch_time") or 0),
+            "like_count": 1 if liked else 0,
+            "comment_count": comment_counts.get(news_id, 0),
+            "topic_liked": liked,
+            "skipped": skipped,
+            "disliked": like_state < 0,
         }
-    
+
+    for news_id in unique_ids:
+        interactions.setdefault(
+            news_id,
+            {
+                "liked": False,
+                "saved": news_id in saved_ids,
+                "viewed": False,
+                "watch_time": 0,
+                "like_count": 0,
+                "comment_count": comment_counts.get(news_id, 0),
+                "topic_liked": False,
+                "skipped": False,
+                "disliked": False,
+            },
+        )
+
     return interactions

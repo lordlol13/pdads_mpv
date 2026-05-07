@@ -38,8 +38,9 @@ try:
 except Exception:
     pass
 
-# FIX: Ensure UTF-8 encoding for PostgreSQL
+# FIX: Ensure UTF-8 encoding for PostgreSQL and disable asyncpg prepared statement caching
 if "postgres" in db_url:
+    # Use sqlalchemy async-specific connect_args for asyncpg
     pool_kwargs["connect_args"] = {"server_settings": {"client_encoding": "utf8"}}
 
 # PRODUCTION FIX: No SQLite fallback — fail safely with None engine

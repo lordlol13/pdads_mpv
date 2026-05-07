@@ -23,7 +23,7 @@ celery_app = Celery(
 )
 
 # FIX START - Set beat_schedule immediately after app creation (before autodiscover)
-# FIX 1,5,6: Updated schedule with batch processing, recovery, and ingestion
+# FIX 1,5,6: Updated schedule with generation, recovery, and ingestion
 celery_app.conf.update(
     beat_schedule={
         # Main ingestion task - fetch articles from APIs
@@ -31,9 +31,9 @@ celery_app.conf.update(
             "task": "brain.scheduled_ingestion",
             "schedule": 60.0,  # Every 60 seconds
         },
-        # FIX 1: Batch processing - pick 50 pending raw_news, process them with locks
-        "scheduled-batch-process": {
-            "task": "brain.scheduled_batch_process",
+        # Main generation task - convert raw_news into ai_news
+        "scheduled-process-all": {
+            "task": "brain.process_all_task",
             "schedule": 30.0,  # Every 30 seconds
         },
         # FIX 6: Job recovery - reset stuck processing jobs

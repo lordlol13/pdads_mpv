@@ -328,10 +328,12 @@ async def create_raw_news(session: AsyncSession, payload: dict[str, Any]) -> dic
 
 
 async def insert_test_raw_news(session: AsyncSession) -> None:
+    content_hash = build_content_hash("TEST NEWS", "test text", "test-url")
     await session.execute(
         text("""
-        INSERT INTO raw_news (title, source_url, raw_text, created_at)
-        VALUES ('TEST NEWS', 'test-url-' || random()::text, 'test text', NOW())
-        """)
+        INSERT INTO raw_news (title, source_url, raw_text, created_at, process_status, error_message, attempt_count, content_hash)
+        VALUES ('TEST NEWS', 'test-url-' || random()::text, 'test text', NOW(), 'pending', NULL, 0, :content_hash)
+        """),
+        {"content_hash": content_hash},
     )
     await session.commit()

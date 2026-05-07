@@ -2,6 +2,7 @@
 
 from typing import Any
 from datetime import datetime
+from datetime import datetime, timezone
 
 from app.backend.core.logging import ContextLogger
 from app.backend.services.recommender_service import compute_score
@@ -74,6 +75,7 @@ def compute_rank_score(
     user_profile: dict[str, Any] | None = None,
     user_embedding: list[float] | None = None,
     is_cold_start: bool = False,
+    session_context: dict | None = None,
 ) -> float:
     """
     Compute ranking score for an item.
@@ -142,7 +144,10 @@ def compute_rank_score(
     if is_cold_start:
         created_at = item.get("created_at")
         if isinstance(created_at, datetime):
-            age_hours = (datetime.utcnow() - created_at).total_seconds() / 3600
+            now = datetime.now(timezone.utc)
+            if created_at.tzinfo is None:
+                created_at = created_at.replace(tzinfo=timezone.utc)
+            age_hours = (now - created_at).total_seconds() / 3600
             if age_hours < 6:
                 score += 2.0
             elif age_hours < 24:
@@ -160,21 +165,155 @@ def compute_rank_score(
     if item.get("topic_liked"):
         score += 5.0
     if item.get("liked"):
-        score += 8.0
+        score += 10.0
     if item.get("disliked") or item.get("skipped"):
-        score -= 5.0
+        score -= 6.0
     if item.get("saved"):
         score += 0.75
     if item.get("viewed"):
         score += 2.0
+
+    # Popularity boost (Task 7)
+    try:
+        like_count = int(item.get("like_count") or 0)
+        if like_count > 0:
+            from math import log1p
+            score += float(log1p(like_count)) * 1.5
+    except Exception:
+        pass
     
     # Task 1: Topic-based interaction scoring
-    user_topics = _extract_topics_from_interests(user_profile.get("interests") if user_profile else None)
-    category = item.get("category")
-    if user_topics and category:
-        category_lower = str(category).lower().strip()
-        if category_lower in user_topics:
-            score += 2.0
+    # Preference boost: user_profile may be produced by profile_store
+    try:
+        topics_profile = (user_profile or {}).get("topics") or {}
+        sources_profile = (user_profile or {}).get("sources") or {}
+        keywords_profile = (user_profile or {}).get("keywords") or {}
+    except Exception:
+        topics_profile = {}
+        sources_profile = {}
+        keywords_profile = {}
+
+    now = datetime.now(timezone.utc)
+    def _hours_since(iso_ts: str | None) -> float:
+        if not iso_ts:
+            return 0.0
+        try:
+            dt = datetime.fromisoformat(iso_ts)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return max(0.0, (now - dt).total_seconds() / 3600.0)
+        except Exception:
+            return 0.0
+
+    category = (item.get("category") or "").lower().strip()
+    if category and category in topics_profile:
+        entry = topics_profile.get(category) or {}
+        count = float(entry.get("count") or 0)
+        hours = _hours_since(entry.get("last_seen"))
+        decay = 0.95 ** hours if hours > 0 else 1.0
+        score += count * 1.5 * decay
+
+    # Source boost with decay
+    source_url = str(item.get("source_url") or "").strip().lower()
+    if source_url:
+        try:
+            from urllib.parse import urlparse
+            host = urlparse(source_url).hostname or source_url
+        except Exception:
+            host = source_url
+        if host and host in sources_profile:
+            entry = sources_profile.get(host) or {}
+            count = float(entry.get("count") or 0)
+            hours = _hours_since(entry.get("last_seen"))
+            decay = 0.95 ** hours if hours > 0 else 1.0
+            score += count * 0.5 * decay * 4.0  # scaled so typical source counts give ~2 points
+
+    # Keyword overlap boost with decay-weighted counts
+    try:
+        item_text = str(item.get("final_text") or "")
+        tokens = set(w.lower().strip(".,!?;:\"'()") for w in item_text.split() if len(w) > 3)
+        overlap_weight = 0.0
+        for kw, kv in keywords_profile.items():
+            if kw in tokens:
+                cnt = float((kv or {}).get("count") or 0)
+                hours = _hours_since((kv or {}).get("last_seen"))
+                decay = 0.95 ** hours if hours > 0 else 1.0
+                overlap_weight += cnt * decay
+        if overlap_weight > 0:
+            added = min(4.0, 2.0 + 0.25 * overlap_weight)
+            score += added
+    except Exception:
+        pass
+    
+    # SESSION MOMENTUM: boost topics seen multiple times in current session
+    session_context = session_context or {}
+    session_topics = session_context.get("topics", {})
+    item_topic = (item.get("category") or "").lower()
+    if item_topic and session_topics.get(item_topic, 0) >= 2:
+        score += 5.0
+
+    # MICRO-TREND BOOST: amplify if same topic has 3+ recent interactions
+    if item_topic and session_topics.get(item_topic, 0) >= 3:
+        score += 3.0
+
+    # ANTI-BOREDOM: penalize if topic appears 4+ times in session (prevent saturation)
+    if item_topic and session_topics.get(item_topic, 0) >= 4:
+        score -= 3.0
+    
+    # ============================================
+    # NEXT-TOPIC PREDICTION: Forecast user intent
+    # ============================================
+    last_interactions = session_context.get("last_interactions", [])
+    
+    # NEXT-TOPIC PREDICTION: If topic repeats in last 3 interactions, user wants it
+    if last_interactions and item_topic:
+        topic_count_in_history = sum(1 for inter in last_interactions if inter.get("topic") == item_topic)
+        if topic_count_in_history >= 2:
+            score += 6.0
+    
+    # INTERACTION PATTERN: Quick consecutive likes signal strong interest
+    if last_interactions:
+        likes_in_history = [inter for inter in last_interactions if inter.get("liked")]
+        if len(likes_in_history) >= 2:
+            # User liked 2+ items recently; boost similar content
+            liked_topics = {inter.get("topic") for inter in likes_in_history}
+            if item_topic in liked_topics:
+                score += 4.0
+    
+    # ============================================
+    # DWELL TIME ANALYSIS: Real behavioral signal
+    # ============================================
+    dwell_time = item.get("watch_time") or 0
+    
+    if dwell_time > 6:
+        # Deep engagement: user spent significant time
+        score += 8.0
+    elif dwell_time > 3:
+        # Moderate engagement
+        score += 4.0
+    elif 0 < dwell_time < 1:
+        # Accidental click or scroll-through
+        score -= 5.0
+    
+    # DWELL-TIME + LIKE SYNERGY: Validate genuine interest
+    if item.get("liked") and dwell_time > 3:
+        # Real interest: took time to read, then liked
+        score += 5.0
+    elif item.get("liked") and dwell_time < 1:
+        # Suspicious: liked without reading (reduce impact)
+        score -= 3.0
+    
+    # SESSION DWELL PATTERN: If user spends time on same topic repeatedly
+    if last_interactions and item_topic:
+        dwell_topics = {}
+        for inter in last_interactions:
+            topic = inter.get("topic")
+            watch_time = inter.get("watch_time") or 0
+            if watch_time > 3 and topic:
+                dwell_topics[topic] = dwell_topics.get(topic, 0) + 1
+        
+        if dwell_topics.get(item_topic, 0) >= 2:
+            score += 6.0
     
     # Task 5: Diversity penalty - repeated topics
     if item.get("_topic_count", 0) >= 3:
@@ -188,6 +327,7 @@ def rank_items(
     user_profile: dict[str, Any] | None = None,
     user_embedding: list[float] | None = None,
     is_cold_start: bool = False,
+    session_context: dict | None = None,
 ) -> list[dict[str, Any]]:
     """
     Rank candidates by score.
@@ -200,7 +340,7 @@ def rank_items(
     topic_counts = {}
     
     for item in candidates:
-        score = compute_rank_score(item, user_profile, user_embedding, is_cold_start)
+        score = compute_rank_score(item, user_profile, user_embedding, is_cold_start, session_context=session_context)
         item["rank_score"] = score
         
         # Task 5: Track topic count
@@ -210,7 +350,7 @@ def rank_items(
     
     # Re-score with topic count info
     for item in candidates:
-        score = compute_rank_score(item, user_profile, user_embedding, is_cold_start)
+        score = compute_rank_score(item, user_profile, user_embedding, is_cold_start, session_context=session_context)
         item["rank_score"] = score
     
     # Sort by score (desc) then by recency (desc)

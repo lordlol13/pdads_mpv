@@ -1,5 +1,6 @@
 import asyncio
 import html
+import os
 from datetime import datetime, timedelta, timezone
 import json
 import re
@@ -20,6 +21,12 @@ from app.backend.services.resilience_service import (
 logger = ContextLogger(__name__)
 _GEMINI_BACKOFF_UNTIL: datetime | None = None
 _GEMINI_DEFAULT_BACKOFF_SECONDS = 180
+
+# Simple in-process circuit breaker for LLM providers
+_LLM_FAILURE_COUNT = 0
+_LLM_CIRCUIT_OPEN_UNTIL: datetime | None = None
+_LLM_CIRCUIT_THRESHOLD = int(os.getenv("LLM_CIRCUIT_THRESHOLD", "3"))
+_LLM_CIRCUIT_RESET_SECONDS = int(os.getenv("LLM_CIRCUIT_RESET_SECONDS", "300"))
 
 # Per-event-loop semaphore to limit concurrent external LLM requests
 _LLM_SEMAPHORE: asyncio.Semaphore | None = None
@@ -111,12 +118,19 @@ def is_valid_news(text: str) -> bool:
     if not text or not isinstance(text, str):
         return False
 
-    # Check for broken encoding (Mojibake)
-    if "Ð" in text or "â" in text or "Ã" in text or "Â" in text:
-        return False
+    # Check for severe broken encoding (Mojibake) - only check for obvious patterns
+    # Don't reject valid UTF-8 sequences that might contain Cyrillic
+    severe_mojibake = [
+        "Ã¢€œ", "Ã¢€\x9d", "â€™", "â€"  # Common mojibake patterns
+    ]
+    for pattern in severe_mojibake:
+        if pattern in text:
+            logger.debug(f"[VALID_NEWS] Failed: mojibake pattern found: {pattern}")
+            return False
 
     # Check for HTML tags
     if "<" in text and ">" in text:
+        logger.debug("[VALID_NEWS] Failed: HTML tags found")
         return False
 
     # Check for forbidden phrases
@@ -136,19 +150,23 @@ def is_valid_news(text: str) -> bool:
     ]
     for phrase in forbidden_phrases:
         if phrase.lower() in text.lower():
+            logger.debug(f"[VALID_NEWS] Failed: forbidden phrase found: {phrase}")
             return False
 
-    # FIX START - Check minimum word count (min 120 words for Uzbek news)
+    # FIX START - Check minimum word count (min 80 words for Uzbek news)
     words = text.split()
-    if len(words) < 120:
+    if len(words) < 80:
+        logger.debug(f"[VALID_NEWS] Failed: too few words ({len(words)} < 80)")
         return False
     # FIX END
 
     # Check for excessive English (should be mostly Uzbek)
     english_words = len([w for w in words if re.match(r'^[a-zA-Z]+$', w)])
     if english_words > len(words) * 0.5:  # More than 50% English
+        logger.debug(f"[VALID_NEWS] Failed: too much English ({english_words}/{len(words)} words)")
         return False
 
+    logger.debug(f"[VALID_NEWS] SUCCESS: {len(words)} words, {english_words} English")
     return True
 
 
@@ -213,9 +231,22 @@ def validate_ai_response(data: dict) -> tuple[bool, str]:
 
 
 def is_not_uzbek(text: str) -> bool:
-    bad = ["the", "and", "is", "of", "this", "that", "with", "from"]
+    """Check if text is mostly NOT Uzbek (i.e., mostly English).
+    
+    Only reject if MOST words are English stop words.
+    """
+    if not text:
+        return True
+    
+    bad = ["the", "and", "is", "of", "this", "that", "with", "from", "a", "an", "or", "but"]
     lowered = (text or "").lower()
-    return any(word in lowered for word in bad)
+    words = lowered.split()
+    
+    # Only reject if more than 50% of words are English stop words
+    english_count = sum(1 for word in words if any(bad_word == word.strip('.,!?;:') for bad_word in bad))
+    english_ratio = english_count / len(words) if words else 0
+    
+    return english_ratio > 0.5  # More than 50% English = not Uzbek
 
 
 def _apply_char_limit(text: str) -> str:
@@ -1015,7 +1046,7 @@ def _persona_profile_for_prompt(
 
 def _build_editorial_system_prompt(*, language_hint: str, min_words: int, max_words: int) -> str:
     return (
-        "You are a professional journalist.\n\n"
+        "You are a professional journalist providing JSON-formatted news content.\n\n"
         "Write ONLY in Uzbek language.\n"
         "Always translate input into Uzbek.\n"
         "No English or Russian words allowed.\n"
@@ -1026,6 +1057,7 @@ def _build_editorial_system_prompt(*, language_hint: str, min_words: int, max_wo
         "- Do not mix languages\n"
         f"- Minimum {max(120, int(min_words or 120))} words\n"
         "- Clear, human-readable style\n"
+        "- Return JSON response with 'final_title' and 'final_text' fields\n"
     )
 
 
@@ -1060,7 +1092,7 @@ def _build_editorial_user_payload(
         },
         "user_profile": persona,
         "requirements": {
-            "language": "russian_only",
+            "language": "uzbek_only",
             "length": "150-250_words",  # FIX - Changed from 200-250
             "min_words": 120,  # FIX - Minimum validation threshold
             "paragraphs": "2-4_paragraphs",  # FIX - Allow up to 4 paragraphs
@@ -1412,93 +1444,108 @@ async def generate_news(
             geo=user_geo or region,
         )
 
+    # FAST MODE / DEV: quick path handled earlier
+    # Per-provider timeout (seconds)
+    provider_timeout = int(os.getenv("LLM_PROVIDER_TIMEOUT", "30"))
+
+    # Track failures locally to potentially trip circuit breaker
+    global _LLM_FAILURE_COUNT, _LLM_CIRCUIT_OPEN_UNTIL
+
     try:
-        openai_payload = await _generate_with_openai(
-            title=title,
-            raw_text=raw_text,
-            category=category,
-            target_persona=target_persona,
-            region=region,
-            profession=profession,
-            user_geo=user_geo,
-            rewrite_round=rewrite_round,
+        openai_payload = await asyncio.wait_for(
+            _generate_with_openai(
+                title=title,
+                raw_text=raw_text,
+                category=category,
+                target_persona=target_persona,
+                region=region,
+                profession=profession,
+                user_geo=user_geo,
+                rewrite_round=rewrite_round,
+            ),
+            timeout=provider_timeout,
         )
         if openai_payload is not None:
             is_valid, error_msg = validate_ai_response(openai_payload)
             if is_valid:
                 composed = _compose_from_payload(openai_payload)
                 if composed is not None:
+                    # reset failure counter on success
+                    _LLM_FAILURE_COUNT = 0
                     return composed
             logger.warning(f"[GENERATE] OpenAI validation failed: {error_msg}")
         else:
             logger.warning("[GENERATE] OpenAI unavailable")
+    except asyncio.TimeoutError:
+        logger.warning(f"[GENERATE] OpenAI timeout after {provider_timeout} seconds")
+        _LLM_FAILURE_COUNT += 1
     except Exception:
         logger.exception("[GENERATE] OpenAI provider failed")
+        _LLM_FAILURE_COUNT += 1
 
     try:
-        deepseek_result = await _generate_with_deepseek(
-            title=title,
-            raw_text=raw_text,
-            category=category,
-            target_persona=target_persona,
-            region=region,
-            profession=profession,
-            user_geo=user_geo,
-            rewrite_round=rewrite_round,
+        deepseek_result = await asyncio.wait_for(
+            _generate_with_deepseek(
+                title=title,
+                raw_text=raw_text,
+                category=category,
+                target_persona=target_persona,
+                region=region,
+                profession=profession,
+                user_geo=user_geo,
+                rewrite_round=rewrite_round,
+            ),
+            timeout=provider_timeout,
         )
         if deepseek_result is not None:
+            _LLM_FAILURE_COUNT = 0
             return deepseek_result
         logger.warning("[GENERATE] DeepSeek unavailable")
+    except asyncio.TimeoutError:
+        logger.warning(f"[GENERATE] DeepSeek timeout after {provider_timeout} seconds")
+        _LLM_FAILURE_COUNT += 1
     except Exception:
         logger.exception("[GENERATE] DeepSeek provider failed")
+        _LLM_FAILURE_COUNT += 1
 
     try:
-        gemini_payload = await _generate_with_gemini(
-            title=title,
-            raw_text=raw_text,
-            category=category,
-            target_persona=target_persona,
-            region=region,
-            profession=profession,
-            user_geo=user_geo,
-            rewrite_round=rewrite_round,
+        gemini_payload = await asyncio.wait_for(
+            _generate_with_gemini(
+                title=title,
+                raw_text=raw_text,
+                category=category,
+                target_persona=target_persona,
+                region=region,
+                profession=profession,
+                user_geo=user_geo,
+                rewrite_round=rewrite_round,
+            ),
+            timeout=provider_timeout,
         )
         if gemini_payload is not None:
             is_valid, error_msg = validate_ai_response(gemini_payload)
             if is_valid:
                 composed = _compose_from_payload(gemini_payload)
                 if composed is not None:
+                    _LLM_FAILURE_COUNT = 0
                     return composed
             logger.warning(f"[GENERATE] Gemini validation failed: {error_msg}")
         else:
             logger.warning("[GENERATE] Gemini unavailable")
+    except asyncio.TimeoutError:
+        logger.warning(f"[GENERATE] Gemini timeout after {provider_timeout} seconds")
+        _LLM_FAILURE_COUNT += 1
     except Exception:
         logger.exception("[GENERATE] Gemini provider failed")
+        _LLM_FAILURE_COUNT += 1
+
+    # If we saw repeated failures, trip circuit breaker
+    if _LLM_FAILURE_COUNT >= _LLM_CIRCUIT_THRESHOLD:
+        _LLM_CIRCUIT_OPEN_UNTIL = datetime.utcnow() + timedelta(seconds=_LLM_CIRCUIT_RESET_SECONDS)
+        logger.warning(f"[GENERATE] LLM circuit breaker tripped until {_LLM_CIRCUIT_OPEN_UNTIL}")
 
     logger.error("[GENERATE] All providers failed")
-    
-    # FIX 2: GUARANTEE fallback - never return None, always return dict
-    logger.warning("[GENERATE] Returning forced fallback payload")
-    fallback_text = (raw_text or "")[:500].strip()
-    if not fallback_text:
-        fallback_text = (title or "")[:200]
-    
-    if not fallback_text:
-        fallback_text = "Unable to generate news at this time."
-    
-    fallback: GeneratedNews = {
-        "final_title": title or "News",
-        "final_text": fallback_text,
-        "ai_score": 0.1,
-        "category": category or "general",
-        "target_persona": target_persona,
-        "deepseek_score": 0.0,
-        "gemini_score": 0.0,
-        "combined_score": 0.1,
-    }
-    
-    logger.info("[GENERATE] Returning fallback payload")
-    return fallback
+    return None
 
 
 async def _generate_with_openai(

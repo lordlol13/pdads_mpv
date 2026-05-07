@@ -108,38 +108,7 @@ NON_IMAGE_FILE_SUFFIXES = (
     ".map",
 )
 
-CURATED_TOPIC_FALLBACK_IMAGES: dict[str, list[str]] = {
-    "esports": [
-        "https://images.unsplash.com/photo-1542751371-adc38448a05e?auto=format&fit=crop&w=1600&q=80",
-        "https://images.unsplash.com/photo-1511512578047-dfb367046420?auto=format&fit=crop&w=1600&q=80",
-        "https://images.unsplash.com/photo-1560253023-3ec5d502959f?auto=format&fit=crop&w=1600&q=80",
-        "https://images.unsplash.com/photo-1511882150382-421056c89033?auto=format&fit=crop&w=1600&q=80",
-    ],
-    "f1": [
-        "https://images.unsplash.com/photo-1503376780353-7e6692767b70?auto=format&fit=crop&w=1600&q=80",
-        "https://images.unsplash.com/photo-1556804335-2fa563e93aae?auto=format&fit=crop&w=1600&q=80",
-        "https://images.unsplash.com/photo-1489515217757-5fd1be406fef?auto=format&fit=crop&w=1600&q=80",
-        "https://images.unsplash.com/photo-1471478331149-c72f17e33c73?auto=format&fit=crop&w=1600&q=80",
-    ],
-    "ai": [
-        "https://images.unsplash.com/photo-1677442136019-21780ecad995?auto=format&fit=crop&w=1600&q=80",
-        "https://images.unsplash.com/photo-1485827404703-89b55fcc595e?auto=format&fit=crop&w=1600&q=80",
-        "https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=1600&q=80",
-        "https://images.unsplash.com/photo-1526374965328-7f61d4dc18c5?auto=format&fit=crop&w=1600&q=80",
-    ],
-    "sports": [
-        "https://images.unsplash.com/photo-1461896836934-ffe607ba8211?auto=format&fit=crop&w=1600&q=80",
-        "https://images.unsplash.com/photo-1574629810360-7efbbe195018?auto=format&fit=crop&w=1600&q=80",
-        "https://images.unsplash.com/photo-1494173853739-c21f58b16055?auto=format&fit=crop&w=1600&q=80",
-        "https://images.unsplash.com/photo-1461897104016-0b3b00cc81ee?auto=format&fit=crop&w=1600&q=80",
-    ],
-    "general": [
-        "https://images.unsplash.com/photo-1495020689067-958852a7765e?auto=format&fit=crop&w=1600&q=80",
-        "https://images.unsplash.com/photo-1504711434969-e33886168f5c?auto=format&fit=crop&w=1600&q=80",
-        "https://images.unsplash.com/photo-1488190211105-8b0e65b80b4e?auto=format&fit=crop&w=1600&q=80",
-        "https://images.unsplash.com/photo-1454165804606-c3d57bc86b40?auto=format&fit=crop&w=1600&q=80",
-    ],
-}
+CURATED_TOPIC_FALLBACK_IMAGES: dict[str, list[str]] = {}
 
 TOPIC_FALLBACK_ALIASES: dict[str, str] = {
     "team spirit": "esports",
@@ -772,19 +741,7 @@ def _collect_unique_urls(values: list[str], limit: int) -> list[str]:
 
 
 def _fallback_image_urls(topic: str, start_sig: int, count: int) -> list[str]:
-    bucket = _choose_fallback_bucket(topic)
-    pool = CURATED_TOPIC_FALLBACK_IMAGES.get(bucket) or CURATED_TOPIC_FALLBACK_IMAGES["general"]
-    if not pool:
-        fallback_topic = re.sub(r"\s+", "-", topic.strip().lower()) or "news"
-        return [
-            f"https://picsum.photos/seed/{fallback_topic}-{idx}/1600/900"
-            for idx in range(start_sig, start_sig + count)
-        ]
-
-    result: list[str] = []
-    for offset in range(count):
-        result.append(pool[(start_sig + offset) % len(pool)])
-    return result
+    return []
 
 
 async def fetch_media_urls(
@@ -989,13 +946,9 @@ async def fetch_media_urls(
     urls = _collect_unique_urls(primary_candidates, limit)
 
     if len(urls) < min_required:
-        urls.extend(_fallback_image_urls(topic, start_sig=len(urls), count=max(0, limit - len(urls))))
         urls = _collect_unique_urls(urls, limit)
 
-    if urls:
-        return urls[:limit]
-
-    return _fallback_image_urls(topic, start_sig=0, count=limit)
+    return urls[:limit]
 
 
 def _video_template_urls() -> list[str]:

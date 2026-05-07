@@ -503,12 +503,18 @@ export function BackendMainFeed({ currentUser, onLogout }: BackendMainFeedProps)
                       className={`aspect-[9/16] rounded-3xl overflow-hidden relative group cursor-pointer border text-left ${theme === 'dark' ? 'bg-zinc-900 border-white/5' : 'bg-white border-zinc-200'}`}
                       onClick={() => scrollToItem(post.ai_news_id)}
                     >
-                      <img
-                        src={post.image_urls?.[0] || post.video_urls?.[0] || 'https://images.unsplash.com/photo-1495020689067-958852a7765e?auto=format&fit=crop&q=80&w=1400'}
-                        alt={previewText(post)}
-                        className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"
-                        referrerPolicy="no-referrer"
-                      />
+                      {post.image_urls?.[0] || post.video_urls?.[0] ? (
+                        <img
+                          src={post.image_urls?.[0] || post.video_urls?.[0]}
+                          alt={previewText(post)}
+                          className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"
+                          referrerPolicy="no-referrer"
+                        />
+                      ) : (
+                        <div className="flex h-full w-full items-center justify-center bg-zinc-900 text-xs uppercase tracking-[0.25em] text-zinc-500">
+                          No image
+                        </div>
+                      )}
                       <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end p-4">
                         <p className="text-xs font-medium line-clamp-2 text-white">{previewText(post)}</p>
                       </div>
