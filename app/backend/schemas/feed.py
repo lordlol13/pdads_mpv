@@ -10,7 +10,7 @@ from app.backend.schemas.coercion import coerce_json_string_list
 class FeedItem(BaseModel):
     user_feed_id: int
     user_id: int
-    ai_news_id: int
+    ai_news_id: int | None = None
     raw_news_id: int | None = None
     target_persona: str | None = None
     final_title: str | None = None

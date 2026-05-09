@@ -380,7 +380,7 @@ async def _set_status(
     error_message: Optional[str] = None,
     attempt_count: Optional[int] = None,
 ) -> None:
-    allowed_statuses = {"pending", "new", "failed", "generated", "classified"}
+    allowed_statuses = {"pending", "new", "failed", "generated", "classified", "completed", "processed"}
     if status not in allowed_statuses:
         status = "pending"
 
@@ -432,6 +432,20 @@ async def _claim_raw_news_for_processing(
     raw_news_id: int,
 ) -> bool:
     max_attempts = int(os.getenv("PIPELINE_MAX_ATTEMPTS", str(getattr(settings, 'PIPELINE_MAX_ATTEMPTS', 3))))
+    
+    # DIAG: Check current state BEFORE attempting claim
+    diag_query = "SELECT id, process_status, attempt_count, processing_started_at FROM raw_news WHERE id = :raw_news_id"
+    diag_result = await session.execute(text(diag_query), {"raw_news_id": raw_news_id})
+    diag_row = diag_result.mappings().first()
+    if diag_row:
+        logger.warning(
+            "[CLAIM DIAG] PRE-CLAIM raw_news_id=%s status=%s attempt_count=%s processing_started_at=%s max_attempts=%s",
+            raw_news_id, diag_row['process_status'], diag_row['attempt_count'], diag_row['processing_started_at'], max_attempts
+        )
+    else:
+        logger.warning("[CLAIM DIAG] raw_news_id=%s NOT FOUND in DB", raw_news_id)
+        return False
+    
     query = """
     UPDATE raw_news
     SET error_message = NULL,
@@ -441,9 +455,9 @@ async def _claim_raw_news_for_processing(
     WHERE id = :raw_news_id
       AND (
           process_status IS NULL
-          OR process_status IN ('pending', 'new', 'failed')
+                    OR process_status IN ('pending', 'new')
+                    OR (process_status = 'failed' AND COALESCE(attempt_count, 0) < :max_attempts)
       )
-      AND COALESCE(attempt_count, 0) < :max_attempts
     """
     now = datetime.utcnow()
     result = await session.execute(
@@ -454,7 +468,25 @@ async def _claim_raw_news_for_processing(
             "now": now,
         },
     )
-    return bool(result.rowcount)
+    
+    claimed = bool(result.rowcount)
+    if not claimed:
+        # DIAG: Check why claim failed - log the exact WHERE conditions
+        diag_result2 = await session.execute(text(diag_query), {"raw_news_id": raw_news_id})
+        diag_row2 = diag_result2.mappings().first()
+        if diag_row2:
+            logger.warning(
+                "[CLAIM FAILED] raw_news_id=%s status=%s attempt_count=%s (need <3) check: status_match=%s attempt_match=%s",
+                raw_news_id,
+                diag_row2['process_status'],
+                diag_row2['attempt_count'],
+                diag_row2['process_status'] in (None, 'pending', 'new', 'failed'),
+                diag_row2['attempt_count'] is not None and diag_row2['attempt_count'] < max_attempts
+            )
+    else:
+        logger.info("[CLAIM SUCCESS] raw_news_id=%s claimed for processing", raw_news_id)
+    
+    return claimed
 
 
 async def _recover_stale_processing_rows(session: AsyncSession, ttl_minutes: int) -> int:
@@ -465,7 +497,8 @@ async def _recover_stale_processing_rows(session: AsyncSession, ttl_minutes: int
         UPDATE raw_news
         SET process_status = 'pending',
             error_message = NULL,
-            processing_started_at = NULL
+                        processing_started_at = NULL,
+                        attempt_count = 0
         WHERE process_status = 'processing'
           AND COALESCE(processing_started_at, created_at) < datetime('now', :ttl_expr)
         """
@@ -475,7 +508,8 @@ async def _recover_stale_processing_rows(session: AsyncSession, ttl_minutes: int
         UPDATE raw_news
         SET process_status = 'pending',
             error_message = NULL,
-            processing_started_at = NULL
+                        processing_started_at = NULL,
+                        attempt_count = 0
         WHERE process_status = 'processing'
           AND COALESCE(processing_started_at, created_at) < NOW() - make_interval(mins => :ttl_minutes)
         """
@@ -1382,6 +1416,7 @@ async def _process_raw_news_async(
                     # FIX: Log successful insert
                     logger.info("GENERATED ai_news for raw_news_id=%s", raw_news_id)
                     logger.info("[PIPELINE] INSERT ai_news raw_news_id=%s ai_news_id=%s", raw_news_id, ai_news_id)
+                    logger.info("VALIDATION PASS raw_news_id=%s ai_news_saved=%s", raw_news_id, ai_news_id)
                     # Populate user_feed with this ai_news for all matching users
                     try:
                         ai_score = float(generated.get("ai_score", generated.get("combined_score", 0.0)))
@@ -1409,16 +1444,16 @@ async def _process_raw_news_async(
 
                 except Exception as e:
                     logger.exception("[PIPELINE] generation error raw_news_id=%s: %s", raw_news_id, e)
-                    # FIX: Fail-safe - reset status to pending on exception
+                    # FIX: Mark failed on exception so the row is not stuck in processing.
                     try:
                         await _set_status(
                             session=session,
                             raw_news_id=raw_news_id,
-                            status="pending",
+                            status="failed",
                             error_message=str(e)[:500],
                         )
                         await session.commit()
-                        logger.info("[PIPELINE] fail-safe: reset raw_news_id=%s to pending after exception", raw_news_id)
+                        logger.info("[PIPELINE] fail-safe: marked raw_news_id=%s failed after exception", raw_news_id)
                     except Exception as reset_e:
                         logger.exception("[PIPELINE] fail-safe reset failed: %s", reset_e)
                     await session.rollback()
@@ -1446,13 +1481,13 @@ async def _process_raw_news_async(
                     await _set_status(
                         session=session,
                         raw_news_id=raw_news_id,
-                        status="completed",
-                        error_message=None,
+                        status="failed",
+                        error_message="invalid_content",
                     )
                     await session.commit()
-                    logger.info("[PIPELINE] STATUS UPDATED raw_news_id=%s status=completed reason=invalid_content", raw_news_id)
+                    logger.info("[PIPELINE] STATUS UPDATED raw_news_id=%s status=failed reason=invalid_content", raw_news_id)
                     return {
-                        "status": "skipped",
+                        "status": "failed",
                         "reason": "invalid_content",
                         "raw_news_id": raw_news_id,
                         "ai_news_ids": ai_news_ids,
@@ -1463,20 +1498,34 @@ async def _process_raw_news_async(
                     await _set_status(
                         session=session,
                         raw_news_id=raw_news_id,
-                        status="completed",
-                        error_message=None,
+                        status="failed",
+                        error_message="ai_generation_failed",
                     )
                     await session.commit()
-                    logger.info("[PIPELINE] STATUS UPDATED raw_news_id=%s status=completed reason=ai_generation_failed", raw_news_id)
+                    logger.info("[PIPELINE] STATUS UPDATED raw_news_id=%s status=failed reason=ai_generation_failed", raw_news_id)
                     return {
-                        "status": "skipped",
+                        "status": "failed",
                         "reason": "ai_generation_failed",
                         "raw_news_id": raw_news_id,
                         "ai_news_ids": ai_news_ids,
                         "personas": [str(item.get("label") or item.get("topic") or "general") for item in unique_personas],
                     }
 
-                raise RuntimeError("NO NEWS SAVED")
+                await _set_status(
+                    session=session,
+                    raw_news_id=raw_news_id,
+                    status="failed",
+                    error_message="no_news_saved",
+                )
+                await session.commit()
+                logger.info("[PIPELINE] STATUS UPDATED raw_news_id=%s status=failed reason=no_news_saved", raw_news_id)
+                return {
+                    "status": "failed",
+                    "reason": "no_news_saved",
+                    "raw_news_id": raw_news_id,
+                    "ai_news_ids": ai_news_ids,
+                    "personas": [str(item.get("label") or item.get("topic") or "general") for item in unique_personas],
+                }
             # --- FIX END ---
 
             await _set_status(
@@ -1499,17 +1548,16 @@ async def _process_raw_news_async(
             await session.rollback()
             logger.error("[PIPELINE] ERROR raw_news_id=%s: %s", raw_news_id, e)
             try:
-                # FIX: Fail-safe - reset to pending instead of failed to allow retry
-                # Use a fresh session to avoid transaction state issues
+                # FIX: Mark failed on outer exception and leave the row releasable on the next recovery pass.
                 async with _get_sessionmaker()() as fresh_session:
                     await _set_status(
                         session=fresh_session,
                         raw_news_id=raw_news_id,
-                        status="pending",
+                        status="failed",
                         error_message=str(e)[:2000],
                     )
                     await fresh_session.commit()
-                logger.info("[PIPELINE] fail-safe: reset raw_news_id=%s to pending after exception", raw_news_id)
+                logger.info("[PIPELINE] fail-safe: marked raw_news_id=%s failed after exception", raw_news_id)
             except Exception as reset_e:
                 logger.exception("[PIPELINE] fail-safe reset failed for raw_news_id=%s: %s", raw_news_id, reset_e)
             raise

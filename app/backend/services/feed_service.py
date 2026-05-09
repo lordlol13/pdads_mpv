@@ -587,17 +587,17 @@ async def create_comment(session: AsyncSession, user_id: int, ai_news_id: int, p
         """
     )
 
-    async with session.begin():
-        result = await session.execute(
-            insert_q,
-            {
-                "ai_news_id": ai_news_id,
-                "user_id": user_id,
-                "parent_comment_id": parent_comment_id,
-                "content": content,
-            },
-        )
-        row = result.mappings().first()
+    result = await session.execute(
+        insert_q,
+        {
+            "ai_news_id": ai_news_id,
+            "user_id": user_id,
+            "parent_comment_id": parent_comment_id,
+            "content": content,
+        },
+    )
+    row = result.mappings().first()
+    await session.commit()
 
     if not row:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="failed_to_create_comment")
@@ -802,13 +802,178 @@ async def toggle_saved_news(session: AsyncSession, user_id: int, ai_news_id: int
     if ex.first():
         # remove
         del_q = text("DELETE FROM saved_news WHERE user_id = :user_id AND ai_news_id = :ai_news_id")
-        async with session.begin():
-            await session.execute(del_q, {"user_id": user_id, "ai_news_id": ai_news_id})
+        await session.execute(del_q, {"user_id": user_id, "ai_news_id": ai_news_id})
+        await session.commit()
         return False
     else:
         ins_q = text(
             "INSERT INTO saved_news (user_id, ai_news_id, created_at) VALUES (:user_id, :ai_news_id, CURRENT_TIMESTAMP)"
         )
-        async with session.begin():
-            await session.execute(ins_q, {"user_id": user_id, "ai_news_id": ai_news_id})
+        await session.execute(ins_q, {"user_id": user_id, "ai_news_id": ai_news_id})
+        await session.commit()
         return True
+
+
+async def get_global_feed(session: AsyncSession, user_id: int, limit: int = DEFAULT_LIMIT) -> list[dict[str, Any]]:
+    """
+    Get global trending feed (top ai_news by ai_score, no personalization).
+    
+    Returns highest-rated ai_news from last 48h regardless of user preferences.
+    """
+    limit = max(1, int(limit or DEFAULT_LIMIT))
+    
+    try:
+        cutoff = datetime.utcnow() - timedelta(hours=48)
+        
+        query = """
+        SELECT
+            id,
+            raw_news_id,
+            final_title,
+            final_text,
+            source_url,
+            image_urls,
+            video_urls,
+            category,
+            ai_score,
+            is_ai,
+            vector_status,
+            language,
+            region,
+            created_at
+        FROM ai_news
+        WHERE created_at >= :cutoff
+          AND final_title IS NOT NULL
+          AND final_text IS NOT NULL
+          AND ai_score > 0.5
+        ORDER BY ai_score DESC, created_at DESC
+        LIMIT :limit
+        """
+        
+        result = await session.execute(
+            text(query),
+            {"cutoff": cutoff, "limit": limit}
+        )
+        
+        rows = result.mappings().fetchall()
+        candidates = [dict(row) for row in rows]
+        
+        # Load user interactions for display (liked, saved status)
+        candidate_ids = [c.get("id") for c in candidates]
+        interactions = await load_user_interactions(session, user_id, candidate_ids)
+        
+        # Merge interactions
+        for candidate in candidates:
+            ai_news_id = candidate.get("id")
+            candidate["user_feed_id"] = int(ai_news_id or 0)
+            candidate["user_id"] = user_id
+            candidate["ai_news_id"] = ai_news_id
+            candidate["liked"] = False
+            candidate["saved"] = False
+            candidate["viewed"] = False
+            candidate["is_viewed"] = False
+            candidate["like_count"] = 0
+            candidate["comment_count"] = 0
+            
+            if ai_news_id in interactions:
+                interaction = interactions[ai_news_id]
+                candidate.update({
+                    "liked": bool(interaction.get("liked")),
+                    "saved": bool(interaction.get("saved")),
+                    "viewed": bool(interaction.get("viewed")),
+                    "is_viewed": bool(interaction.get("viewed")),
+                    "like_count": int(interaction.get("like_count") or 0),
+                    "comment_count": int(interaction.get("comment_count") or 0),
+                })
+        
+        logger.info(
+            "global_feed_generated",
+            extra={"user_id": user_id, "items": len(candidates)}
+        )
+        
+        return candidates
+        
+    except Exception as e:
+        logger.exception(
+            "global_feed_generation_failed",
+            extra={"user_id": user_id, "error": str(e)}
+        )
+        return []
+
+
+async def get_fresh_feed(session: AsyncSession, user_id: int, limit: int = DEFAULT_LIMIT) -> list[dict[str, Any]]:
+    """
+    Get fresh/recent parsed news feed (raw_news items awaiting AI generation).
+    
+    Returns recent raw_news that don't have ai_news yet, to show what's being processed.
+    """
+    limit = max(1, int(limit or DEFAULT_LIMIT))
+    
+    try:
+        cutoff = datetime.utcnow() - timedelta(days=7)  # Last 7 days
+        
+        query = """
+        SELECT
+            rn.id,
+            rn.source_url,
+            rn.title,
+            rn.content_text,
+            rn.source_domain,
+            rn.language,
+            rn.region,
+            rn.created_at,
+            COUNT(an.id) OVER () as ai_count
+        FROM raw_news rn
+        LEFT JOIN ai_news an ON an.raw_news_id = rn.id
+        WHERE rn.created_at >= :cutoff
+          AND rn.title IS NOT NULL
+          AND an.id IS NULL  -- Only raw_news without ai_news
+        ORDER BY rn.created_at DESC
+        LIMIT :limit
+        """
+        
+        result = await session.execute(
+            text(query),
+            {"cutoff": cutoff, "limit": limit}
+        )
+        
+        rows = result.mappings().fetchall()
+        items = []
+        
+        for row in rows:
+            item = dict(row)
+            # Transform raw_news format to feed item format
+            item["raw_news_id"] = item.pop("id", None)
+            item["final_title"] = item.pop("title", "")
+            item["final_text"] = item.pop("content_text", "")
+            item["user_feed_id"] = 0
+            item["user_id"] = user_id
+            item["ai_news_id"] = None
+            item["category"] = "pending"
+            item["ai_score"] = 0.0
+            item["is_ai"] = False
+            item["vector_status"] = "pending"
+            item["liked"] = False
+            item["saved"] = False
+            item["viewed"] = False
+            item["is_viewed"] = False
+            item["like_count"] = 0
+            item["comment_count"] = 0
+            item["image_urls"] = None
+            item["video_urls"] = None
+            
+            items.append(item)
+        
+        logger.info(
+            "fresh_feed_generated",
+            extra={"user_id": user_id, "items": len(items)}
+        )
+        
+        return items
+        
+    except Exception as e:
+        logger.exception(
+            "fresh_feed_generation_failed",
+            extra={"user_id": user_id, "error": str(e)}
+        )
+        return []

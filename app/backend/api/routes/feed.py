@@ -16,6 +16,8 @@ from app.backend.services.feed_service import (
     create_comment,
     get_comments_tree,
     get_user_feed,
+    get_global_feed,
+    get_fresh_feed,
     record_interaction as record_user_interaction,
     toggle_comment_like,
     toggle_saved_news,
@@ -177,3 +179,37 @@ async def toggle_comment_like_route(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     return CommentLikeToggleResponse(**result)
+
+
+@router.get("/global", response_model=list[FeedItem])
+async def global_feed(
+    request: Request,
+    limit: int = Query(default=50, ge=1, le=200),
+    current_user: dict = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+):
+    """Get global/trending feed - top rated news regardless of user preferences."""
+    try:
+        user_id = _current_user_id(current_user)
+        items = await get_global_feed(session, user_id, limit)
+        return [FeedItem(**item) for item in items]
+    except Exception as exc:
+        logger.exception(f"GET /api/feed/global crashed: {exc.__class__.__name__}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error") from exc
+
+
+@router.get("/fresh", response_model=list[FeedItem])
+async def fresh_feed(
+    request: Request,
+    limit: int = Query(default=50, ge=1, le=200),
+    current_user: dict = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+):
+    """Get fresh/recent parsed news - raw news items awaiting AI generation."""
+    try:
+        user_id = _current_user_id(current_user)
+        items = await get_fresh_feed(session, user_id, limit)
+        return [FeedItem(**item) for item in items]
+    except Exception as exc:
+        logger.exception(f"GET /api/feed/fresh crashed: {exc.__class__.__name__}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error") from exc

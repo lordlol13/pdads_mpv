@@ -94,6 +94,28 @@ UZBEK_LATIN_MARKERS = {
     "mag'lub",
 }
 
+UZBEK_COMMON_WORDS = {
+    "va",
+    "ham",
+    "uchun",
+    "bilan",
+    "bo'yicha",
+    "bu",
+    "yangi",
+    "hamda",
+    "deb",
+    "etadi",
+    "bo'ldi",
+    "qildi",
+    "loyiha",
+    "hudud",
+    "davlat",
+    "yoshlar",
+}
+
+UZBEK_CYRILLIC_SPECIFIC = set("қғҳўҚҒҲЎ")
+APOSTROPHES = "'’`ʻʼʹʽˈ＇"
+
 
 class GeneratedNews(TypedDict):
     final_title: str
@@ -108,6 +130,66 @@ class GeneratedNews(TypedDict):
 
 def _word_count(text: str) -> int:
     return len([w for w in text.split() if w.strip()])
+
+
+def _normalize_apostrophes(value: str) -> str:
+    if not value:
+        return ""
+    normalized = value
+    for ch in APOSTROPHES:
+        normalized = normalized.replace(ch, "'")
+    return normalized
+
+
+def _compute_language_scores(text: str) -> tuple[float, float, float, dict[str, int]]:
+    normalized = _normalize_apostrophes(text or "")
+
+    cyrillic_chars = re.findall(r"[\u0400-\u04FF]", normalized)
+    cyrillic_total = len(cyrillic_chars)
+    cyrillic_uz = sum(1 for ch in cyrillic_chars if ch in UZBEK_CYRILLIC_SPECIFIC)
+    cyrillic_ru = max(0, cyrillic_total - cyrillic_uz)
+
+    latin_words = re.findall(r"\b[a-zA-Z'\-]+\b", normalized.lower())
+    uzbek_latin_pattern = re.compile(r"(?:o'|g'|sh|ch|ng|yo|ya|yu)")
+    uzbek_latin_hits = sum(1 for w in latin_words if uzbek_latin_pattern.search(w))
+    uzbek_marker_hits = sum(1 for token in UZBEK_LATIN_MARKERS if token in normalized.lower())
+    uzbek_common_hits = sum(1 for w in latin_words if w in UZBEK_COMMON_WORDS)
+
+    english_word_hits = sum(1 for w in latin_words if w in ENGLISH_TEXT_STOPWORDS)
+    english_sentence_hits = 0
+    for sentence in re.split(r"(?<=[.!?])\s+", normalized):
+        sentence_words = re.findall(r"\b[a-zA-Z']+\b", sentence.lower())
+        if len(sentence_words) < 6:
+            continue
+        stop_hits = sum(1 for w in sentence_words if w in ENGLISH_TEXT_STOPWORDS)
+        if (stop_hits / max(1, len(sentence_words))) >= 0.22:
+            english_sentence_hits += 1
+
+    # Weighted scoring: accept Uzbek and Uzbek+Russian mixed text, reject only clearly English-dominant text.
+    uzbek_score = (
+        (cyrillic_uz * 1.7)
+        + (uzbek_latin_hits * 7.0)
+        + (uzbek_marker_hits * 10.0)
+        + (uzbek_common_hits * 3.0)
+    )
+    mixed_score = uzbek_score + (cyrillic_ru * 0.75)
+    english_score = (english_word_hits * 10.0) + (english_sentence_hits * 20.0)
+
+    total = max(1.0, mixed_score + english_score)
+    english_ratio = english_score / total
+    uzbek_ratio = mixed_score / total
+
+    stats = {
+        "cyrillic_total": cyrillic_total,
+        "cyrillic_uz": cyrillic_uz,
+        "cyrillic_ru": cyrillic_ru,
+        "uzbek_latin_hits": uzbek_latin_hits,
+        "uzbek_marker_hits": uzbek_marker_hits,
+        "uzbek_common_hits": uzbek_common_hits,
+        "english_word_hits": english_word_hits,
+        "english_sentence_hits": english_sentence_hits,
+    }
+    return english_ratio, uzbek_ratio, mixed_score, stats
 
 
 def is_valid_news(text: str) -> bool:
@@ -153,20 +235,28 @@ def is_valid_news(text: str) -> bool:
             logger.debug(f"[VALID_NEWS] Failed: forbidden phrase found: {phrase}")
             return False
 
-    # FIX START - Check minimum word count (min 80 words for Uzbek news)
+    # Check minimum word count for generated news bodies.
     words = text.split()
-    if len(words) < 80:
-        logger.debug(f"[VALID_NEWS] Failed: too few words ({len(words)} < 80)")
-        return False
-    # FIX END
-
-    # Check for excessive English (should be mostly Uzbek)
-    english_words = len([w for w in words if re.match(r'^[a-zA-Z]+$', w)])
-    if english_words > len(words) * 0.5:  # More than 50% English
-        logger.debug(f"[VALID_NEWS] Failed: too much English ({english_words}/{len(words)} words)")
+    if len(words) < 50:
+        logger.debug(f"[VALID_NEWS] Failed: too few words ({len(words)} < 50)")
         return False
 
-    logger.debug(f"[VALID_NEWS] SUCCESS: {len(words)} words, {english_words} English")
+    english_ratio, uzbek_ratio, mixed_score, stats = _compute_language_scores(text)
+
+    # Reject only when English is clearly dominant. Uzbek-only and Uzbek+Russian mixed texts should pass.
+    english_clearly_dominant = english_ratio >= 0.62 and english_ratio > (uzbek_ratio + 0.12)
+    if english_clearly_dominant:
+        logger.warning(
+            f"VALIDATION FAIL english_ratio={round(english_ratio, 4)} "
+            f"uzbek_ratio={round(uzbek_ratio, 4)} sample={(text or '')[:180]}"
+        )
+        logger.debug(f"[VALID_NEWS] language_stats={stats} mixed_score={round(mixed_score, 4)}")
+        return False
+
+    logger.debug(
+        f"[VALID_NEWS] SUCCESS words={len(words)} english_ratio={round(english_ratio, 4)} "
+        f"uzbek_ratio={round(uzbek_ratio, 4)} stats={stats}"
+    )
     return True
 
 
@@ -1805,7 +1895,8 @@ def clean_text(text: str | None) -> str:
     if not text:
         return ""
     txt = html.unescape(str(text))
-    txt = re.sub(r"<.*?>", "", txt)
+    txt = _normalize_apostrophes(txt)
+    txt = re.sub(r"<[^>]+>", "", txt)
     txt = txt.replace("\xa0", " ")
     txt = re.sub(r"\s+", " ", txt)
     return txt.strip()

@@ -65,6 +65,11 @@ NEWS_IMAGE_BLOCKLIST_TERMS = (
     "blank",
 )
 
+MEDIA_URL_BLACKLIST = {
+    "https://kun.uz/assets/6f64f80/img/business-bg.png",
+    "https://kun.uz/assets/6f64f80/img/business-bg-img.png",
+}
+
 GENERIC_STOCK_IMAGE_TERMS = (
     "mountain",
     "nature",
@@ -290,6 +295,13 @@ def _build_media_topic(topic: str) -> str:
     return value or "news"
 
 
+def _is_blacklisted_media_url(url: str | None) -> bool:
+    candidate = str(url or "").strip().lower()
+    if not candidate:
+        return False
+    return candidate in MEDIA_URL_BLACKLIST
+
+
 def _normalize_candidate_url(raw_url: str | None, base_url: str | None = None) -> str | None:
     value = str(raw_url or "").strip()
     if not value:
@@ -326,6 +338,9 @@ def _normalize_candidate_url(raw_url: str | None, base_url: str | None = None) -
 def _looks_like_news_photo(url: str) -> bool:
     candidate = str(url or "").strip().lower()
     if not candidate:
+        return False
+
+    if _is_blacklisted_media_url(candidate):
         return False
 
     parsed = urlparse(candidate)
@@ -697,6 +712,9 @@ def _collect_unique_urls(values: list[str], limit: int) -> list[str]:
         if not candidate:
             continue
 
+        if _is_blacklisted_media_url(candidate):
+            continue
+
         dedupe_key = _canonical_image_key(candidate)
         visual_key = _visual_image_key(candidate)
         if not dedupe_key or dedupe_key in seen_keys:
@@ -724,6 +742,9 @@ def _collect_unique_urls(values: list[str], limit: int) -> list[str]:
     for value in values:
         candidate = str(value or "").strip()
         if not candidate:
+            continue
+
+        if _is_blacklisted_media_url(candidate):
             continue
         dedupe_key = _canonical_image_key(candidate)
         visual_key = _visual_image_key(candidate)

@@ -1,4 +1,5 @@
 import json
+import csv
 from typing import Any
 
 
@@ -12,10 +13,16 @@ def coerce_json_string_list(value: Any) -> list[str] | None:
         stripped = value.strip()
         if not stripped:
             return []
+        if stripped.startswith("{") and stripped.endswith("}"):
+            inner = stripped[1:-1].strip()
+            if not inner:
+                return []
+            reader = csv.reader([inner], skipinitialspace=True)
+            return [item.strip().strip('"') for item in next(reader, []) if item and item.strip()]
         try:
             parsed = json.loads(stripped)
         except json.JSONDecodeError:
-            return []
+            return [part.strip().strip('"') for part in stripped.split(",") if part.strip()]
         if isinstance(parsed, list):
             return [str(x) for x in parsed]
         return []

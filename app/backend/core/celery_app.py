@@ -67,6 +67,15 @@ celery_app.autodiscover_tasks(
     force=True,
 )
 
+# FIX: Explicitly import pipeline_tasks to ensure tasks are registered
+# (autodiscover_tasks looks for 'tasks.py' but our tasks are in 'pipeline_tasks.py')
+try:
+    import brain.tasks.pipeline_tasks  # noqa: F401
+    import app.backend.tasks.parser_task  # noqa: F401
+    logger.info("[CELERY] Explicitly imported task modules for registration")
+except Exception as import_err:
+    logger.error(f"[CELERY] Failed to import task modules: {import_err}")
+
 # NOTE: Avoid explicit top-level imports of task modules here.
 # Importing task modules at import time may trigger circular imports
 # (for example between `brain.tasks` and `recommender`). Rely on
